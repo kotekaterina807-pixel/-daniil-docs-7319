@@ -1,0 +1,816 @@
+"""Сервер интерфейса: окно программы — это страница в отдельном окне Edge (режим приложения),
+а вся работа (озвучка, подбор кадров, монтаж) идёт здесь, в Python.
+Слушает только 127.0.0.1, запросы с изменениями требуют секретный токен."""
+import io
+import json
+import mimetypes
+import os
+import secrets
+import shutil
+import socket
+import subprocess
+import sys
+import threading
+import time
+import traceback
+import urllib.parse
+import zipfile
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parent
+sys.path.insert(0, str(ROOT))
+
+from pipeline import config, runner, tts  # noqa: E402
+
+UI_DIR = ROOT / "ui"
+PORT_FILE = ROOT / ".ui_port"
+TOKEN_FILE = ROOT / ".ui_token"
+PORTS = list(range(8765, 8785))
+_NO_WINDOW = 0x08000000 if os.name == "nt" else 0
+
+# Файлы и папки пользователя — обновление их не трогает
+KEEP = {"config.json", "output", "footage", "music", "voice_samples", ".venv", ".ui_profile",
+        ".ui_port", ".ui_token", "error_log.txt"}
+
+SAMPLE_TEXT = ("В декабре тысяча девятисотого года с маяка на крошечном острове исчезли три смотрителя. "
+               "Их так и не нашли. Ни тел, ни лодки, ни записки.")
+
+
+def _open_path(p):
+    p = str(p)
+    if os.name == "nt":
+        os.startfile(p)
+    elif sys.platform == "darwin":
+        subprocess.Popen(["open", p])
+    else:
+        subprocess.Popen(["xdg-open", p], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+
+
+def _h(text):
+    import hashlib
+    return hashlib.md5(text.encode("utf-8")).hexdigest()[:8]
+
+
+def _fmt(sec):
+    sec = int(max(0, sec))
+    h, r = divmod(sec, 3600)
+    m, s = divmod(r, 60)
+    return f"{h}:{m:02}:{s:02}" if h else f"{m}:{s:02}"
+
+
+# ---------------- фоновая работа ----------------
+class Job:
+    def __init__(self):
+        self.lock = threading.Lock()
+        self.log = []
+        self.reset("")
+
+    def reset(self, kind):
+        self.kind = kind
+        self.running = False
+        self.frac = None
+        self.stage = ""
+        self.t0 = None
+        self.t_end = None
+        self.eta = None
+        self.frac_start = 0.0
+        self.frac_t0 = 0.0
+        self.error = None
+        self.result = None
+        self.stop = False
+        self.project = None          # папка проекта, который сейчас собирается
+        self.hist = []               # (время, доля) — для оценки оставшегося времени
+        self.eta_t = None
+        self.done_id = 0 if not hasattr(self, "done_id") else self.done_id
+
+    def add_log(self, msg):
+        with self.lock:
+            for line in str(msg).splitlines() or [""]:
+                self.log.append(line)
+            if len(self.log) > 5000:
+                del self.log[:1000]
+                self.log_offset = getattr(self, "log_offset", 0) + 1000
+
+    def progress(self, frac, stage):
+        frac = max(0.0, min(1.0, frac))
+        if self.frac is None:
+            self.frac_start, self.frac_t0 = frac, time.time() - self.t0
+        self.frac, self.stage = frac, stage
+        now = time.time()
+        self.hist.append((now, frac))
+        if len(self.hist) > 2000:
+            del self.hist[:500]
+
+    def status(self):
+        if not self.t0:
+            return {"running": False, "kind": self.kind, "error": self.error, "done_id": self.done_id,
+                    "result": self.result}
+        now = self.t_end or time.time()
+        elapsed = now - self.t0
+        eta_text, eta_sec = "", None
+        if self.running and self.frac is not None and self.frac > 0.02 and elapsed > 12 and self.hist:
+            # скорость по последним 3 минутам (этапы идут с разной скоростью) + по всей сборке
+            t_now, f_now = self.hist[-1]
+            old = next(((t, f) for t, f in self.hist if t >= t_now - 180), self.hist[0])
+            rate_win = (f_now - old[1]) / max(1.0, t_now - old[0]) if t_now - old[0] > 20 else 0
+            rate_all = (f_now - self.frac_start) / max(1.0, elapsed - self.frac_t0)
+            rate = 0.6 * rate_win + 0.4 * rate_all if rate_win > 0 else rate_all
+            if rate > 0:
+                raw = (1 - f_now) / rate - (now - t_now)
+                raw = max(0.0, raw)
+                if self.eta is None:
+                    self.eta, self.eta_t = raw, now
+                else:
+                    dt = max(0.0, now - (self.eta_t or now))
+                    self.eta = max(0.0, self.eta - dt)                # время идёт — оценка уменьшается
+                    k = min(1.0, dt / 25.0)                           # плавно подтягиваемся к новой оценке
+                    self.eta += (raw - self.eta) * k
+                    self.eta_t = now
+                eta_sec = round(self.eta)
+                eta_text = _fmt(self.eta)
+        return {"running": self.running, "kind": self.kind, "frac": self.frac, "stage": self.stage,
+                "elapsed": _fmt(elapsed), "elapsed_sec": round(elapsed), "eta": eta_text, "eta_sec": eta_sec,
+                "error": self.error, "done_id": self.done_id, "result": self.result, "project": self.project}
+
+
+JOB = Job()
+STATE = {"last_seen": time.time(), "selfcheck": None, "restart": False, "browser": None, "bye": 0.0}
+
+
+def run_job(kind, fn):
+    with JOB.lock:
+        if JOB.running:
+            return False
+        JOB.reset(kind)
+        JOB.running = True
+        JOB.t0 = time.time()
+
+    def wrapper():
+        try:
+            JOB.result = fn()
+        except Exception as e:
+            JOB.error = str(e)
+            JOB.add_log(f"ОШИБКА: {e}")
+            try:
+                with open(ROOT / "error_log.txt", "a", encoding="utf-8") as fh:
+                    fh.write(time.strftime("%Y-%m-%d %H:%M:%S ") + traceback.format_exc() + "\n")
+            except OSError:
+                pass
+        finally:
+            JOB.running = False
+            JOB.t_end = time.time()
+            JOB.done_id += 1
+    threading.Thread(target=wrapper, daemon=True).start()
+    return True
+
+
+# ---------------- проекты ----------------
+def _project_info(d: Path):
+    data = runner._load_json(d / "script.json", {}) if (d / "script.json").exists() else {}
+    videos = [p for p in d.glob("*.mp4") if p.name != "video_only.mp4" and not p.name.endswith(".part.mp4")]
+    video = max(videos, key=lambda p: p.stat().st_mtime) if videos else None
+    dur = 0.0
+    nar = d / "narration.wav"
+    if nar.exists():
+        try:
+            dur = tts.wav_duration(nar)
+        except Exception:
+            dur = 0.0
+    thumb = d / "thumbnail_1.jpg"
+    return {
+        "id": d.name,
+        "title": data.get("title") or d.name,
+        "created": time.strftime("%d.%m.%Y %H:%M", time.localtime(d.stat().st_mtime)),
+        "mtime": d.stat().st_mtime,
+        "ready": bool(video),
+        "video": video.name if video else "",
+        "size_mb": round(video.stat().st_size / 1024 ** 2) if video else 0,
+        "duration": _fmt(dur) if dur else "",
+        "thumb": thumb.name if thumb.exists() else "",
+        "language": data.get("language", "ru"),
+        "has_description": (d / "description.txt").exists(),
+    }
+
+
+def list_projects():
+    if not config.OUTPUT_DIR.exists():
+        return []
+    out = []
+    for d in config.OUTPUT_DIR.iterdir():
+        if d.is_dir() and not d.name.startswith("_") and (d / "script.json").exists():
+            try:
+                out.append(_project_info(d))
+            except OSError:
+                continue
+    for it in out:
+        it["building"] = bool(JOB.running and JOB.kind == "build" and JOB.project == it["id"])
+        if it["building"]:
+            it["ready"] = False
+            it["progress"] = round((JOB.frac or 0) * 100)
+    out.sort(key=lambda x: -x["mtime"])
+    return out
+
+
+def _project_dir(pid):
+    d = (config.OUTPUT_DIR / str(pid)).resolve()
+    if d.parent != config.OUTPUT_DIR.resolve() or not d.is_dir():
+        raise ValueError("Проект не найден")
+    return d
+
+
+# ---------------- обновление ----------------
+def _version_of(text):
+    import re
+    m = re.search(r'VERSION\s*=\s*"([^"]+)"', text)
+    return m.group(1) if m else ""
+
+
+def apply_update(zip_bytes, log):
+    """Ставит новую версию из архива: заменяет файлы программы, ключи/проекты/футажи/музыку не трогает."""
+    zf = zipfile.ZipFile(io.BytesIO(zip_bytes))
+    names = [n for n in zf.namelist() if not n.endswith("/")]
+    marker = next((n for n in names if n.endswith("pipeline/config.py")), None)
+    if not marker:
+        raise ValueError("Это не архив программы (нет pipeline/config.py).")
+    prefix = marker[: -len("pipeline/config.py")]
+    new_version = _version_of(zf.read(marker).decode("utf-8", "replace"))
+    old_req = (ROOT / "requirements.txt").read_text(encoding="utf-8") if (ROOT / "requirements.txt").exists() else ""
+    count = 0
+    for n in names:
+        if not n.startswith(prefix):
+            continue
+        rel = n[len(prefix):]
+        if not rel or rel.split("/")[0] in KEEP or "__pycache__" in rel:
+            continue
+        target = (ROOT / rel).resolve()
+        if ROOT.resolve() not in target.parents:
+            continue
+        target.parent.mkdir(parents=True, exist_ok=True)
+        tmp = target.with_name(target.name + ".new")
+        tmp.write_bytes(zf.read(n))
+        os.replace(tmp, target)
+        count += 1
+    log(f"Обновлено файлов: {count}. Новая версия: {new_version or 'неизвестна'}.")
+    new_req = (ROOT / "requirements.txt").read_text(encoding="utf-8") if (ROOT / "requirements.txt").exists() else ""
+    if new_req != old_req:
+        log("Ставлю новые компоненты (pip)...")
+        p = subprocess.run([sys.executable.replace("pythonw.exe", "python.exe"), "-m", "pip", "install", "-r",
+                            str(ROOT / "requirements.txt")], capture_output=True, text=True,
+                           creationflags=_NO_WINDOW)
+        log("Компоненты установлены." if p.returncode == 0 else f"pip: {p.stderr[-400:]}")
+    make_shortcut(quiet=True)
+    return new_version
+
+
+def schedule_restart():
+    """Перезапуск сервера на том же порту — окно само переподключится."""
+    STATE["restart"] = True
+
+    def go():
+        time.sleep(0.8)
+        exe = sys.executable
+        subprocess.Popen([exe, str(ROOT / "app.py"), "--no-window"], cwd=str(ROOT),
+                         creationflags=_NO_WINDOW)
+        os._exit(0)
+    threading.Thread(target=go, daemon=True).start()
+
+
+def make_shortcut(quiet=False):
+    """Ярлык «DocuStudio» на рабочем столе с иконкой программы (Windows)."""
+    if os.name != "nt":
+        return False
+    pyw = ROOT / ".venv" / "Scripts" / "pythonw.exe"
+    target = pyw if pyw.exists() else Path(sys.executable)
+    ps = (
+        "$d=[Environment]::GetFolderPath('Desktop');"
+        "$s=(New-Object -ComObject WScript.Shell).CreateShortcut((Join-Path $d 'DocuStudio.lnk'));"
+        f"$s.TargetPath='{target}';$s.Arguments='\"{ROOT / 'app.py'}\"';"
+        f"$s.WorkingDirectory='{ROOT}';$s.IconLocation='{ROOT / 'app.ico'},0';"
+        "$s.Description='DocuStudio — документальные видео';$s.Save()"
+    )
+    p = subprocess.run(["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", ps],
+                       capture_output=True, text=True, creationflags=_NO_WINDOW)
+    return p.returncode == 0
+
+
+# ---------------- HTTP ----------------
+PUBLIC_KEYS = ["yandex_api_key", "yandex_folder_id", "yandex_voice", "yandex_speed", "pixabay_key", "pexels_key",
+               "tts_provider", "edge_voice", "anthropic_key", "openai_key", "elevenlabs_key", "elevenlabs_voice_id",
+               "music_volume", "shot_seconds", "show_labels", "theme", "sound_done", "open_folder_after",
+               "default_niche", "update_repo", "language"]
+
+
+class Handler(BaseHTTPRequestHandler):
+    server_version = "DocuStudio"
+
+    def log_message(self, *a):
+        pass
+
+    # --- ответы ---
+    def _send(self, code, body, ctype="application/json; charset=utf-8", extra=None):
+        if isinstance(body, (dict, list)):
+            body = json.dumps(body, ensure_ascii=False).encode("utf-8")
+        elif isinstance(body, str):
+            body = body.encode("utf-8")
+        self.send_response(code)
+        self.send_header("Content-Type", ctype)
+        self.send_header("Content-Length", str(len(body)))
+        self.send_header("Cache-Control", "no-store")
+        for k, v in (extra or {}).items():
+            self.send_header(k, v)
+        self.end_headers()
+        if self.command != "HEAD":
+            self.wfile.write(body)
+
+    def _file(self, path: Path):
+        if not path.exists() or not path.is_file():
+            return self._send(404, {"error": "нет файла"})
+        ctype = mimetypes.guess_type(str(path))[0] or "application/octet-stream"
+        if ctype.startswith("text/") or ctype in ("application/javascript",):
+            ctype += "; charset=utf-8"
+        size = path.stat().st_size
+        rng = self.headers.get("Range")
+        start, end, code = 0, size - 1, 200
+        if rng and rng.startswith("bytes="):                    # перемотка аудио/видео
+            a, _, b = rng[6:].split(",")[0].partition("-")
+            try:
+                start = int(a) if a else max(0, size - int(b or 0))
+                end = min(size - 1, int(b)) if (a and b) else size - 1
+            except ValueError:
+                start, end = 0, size - 1
+            end = min(end, start + 8 * 1024 * 1024 - 1)          # видео отдаём кусками по 8 МБ
+            code = 206
+        self.send_response(code)
+        self.send_header("Content-Type", ctype)
+        self.send_header("Content-Length", str(max(0, end - start + 1)))
+        self.send_header("Accept-Ranges", "bytes")
+        self.send_header("Cache-Control", "no-store")
+        if code == 206:
+            self.send_header("Content-Range", f"bytes {start}-{end}/{size}")
+        self.end_headers()
+        if self.command == "HEAD":
+            return
+        try:
+            with open(path, "rb") as f:
+                f.seek(start)
+                left = end - start + 1
+                while left > 0:
+                    chunk = f.read(min(1 << 20, left))
+                    if not chunk:
+                        break
+                    self.wfile.write(chunk)
+                    left -= len(chunk)
+        except (BrokenPipeError, ConnectionResetError, ConnectionAbortedError):
+            pass
+
+    def _authorized(self, q):
+        return self.headers.get("X-Token") == TOKEN or q.get("t", [""])[0] == TOKEN
+
+    # --- GET ---
+    def do_GET(self):
+        u = urllib.parse.urlparse(self.path)
+        q = urllib.parse.parse_qs(u.query)
+        p = u.path
+        try:
+            if p in ("/", "/index.html"):
+                return self._file(UI_DIR / "index.html")
+            if p.startswith("/ui/"):
+                f = (UI_DIR / p[4:]).resolve()
+                if UI_DIR.resolve() not in f.parents:
+                    return self._send(404, {})
+                return self._file(f)
+            if p == "/favicon.ico":
+                return self._file(ROOT / "app.ico")
+            if not self._authorized(q):
+                return self._send(403, {"error": "нет доступа"})
+            STATE["last_seen"] = time.time()
+            if p == "/api/state":
+                since = int(q.get("since", ["0"])[0] or 0)
+                off = getattr(JOB, "log_offset", 0)
+                with JOB.lock:
+                    lines = JOB.log[max(0, since - off):]
+                    total = off + len(JOB.log)
+                return self._send(200, {"job": JOB.status(), "log": lines, "log_next": total,
+                                        "selfcheck": STATE["selfcheck"]})
+            if p == "/api/init":
+                cfg = config.load_config()
+                niches = [{"id": str(v.name), "name": k} for k, v in config.list_niches().items()]
+                return self._send(200, {
+                    "version": config.VERSION,
+                    "cfg": {k: cfg.get(k, "") for k in PUBLIC_KEYS},
+                    "niches": niches,
+                    "voices": [{"id": v, "name": t} for v, t in tts.RU_VOICES],
+                    "platform": os.name,
+                })
+            if p == "/api/projects":
+                return self._send(200, list_projects())
+            if p == "/api/project_file":
+                d = _project_dir(q.get("id", [""])[0])
+                name = Path(q.get("name", [""])[0]).name
+                return self._file(d / name)
+            if p == "/api/voices":
+                provider = q.get("provider", ["yandex"])[0]
+                text = q.get("text", [SAMPLE_TEXT])[0] or SAMPLE_TEXT
+                h = _h(text)
+                vdir = ROOT / "voice_samples" / provider
+                if provider == "edge":
+                    items = [{"voice": v, "name": n, "gender": g, "roles": [], "model": "edge", "doc": True}
+                             for v, n, g in tts.EDGE_VOICES]
+                else:
+                    items = [{"voice": v, "name": n, "gender": g, "model": m, "doc": doc,
+                              "roles": [{"id": r, "name": tts.ROLE_RU.get(r, r), "value": tts.voice_value(v, r)}
+                                        for r in roles]} for v, n, g, roles, m, doc in tts.YANDEX_VOICES]
+                for it in items:
+                    vals = [r["value"] for r in it["roles"]] or [it["voice"]]
+                    it["samples"] = [x for x in vals if (vdir / f"{x.replace(':', '_')}_{h}.mp3").exists()]
+                return self._send(200, {"items": items, "default_text": SAMPLE_TEXT})
+            if p == "/api/voice_audio":
+                provider = Path(q.get("provider", ["yandex"])[0]).name
+                value = q.get("value", [""])[0].replace(":", "_")
+                h = Path(q.get("h", [""])[0]).name
+                return self._file(ROOT / "voice_samples" / provider / f"{Path(value).name}_{h}.mp3")
+            if p == "/api/music":
+                files = []
+                if config.MUSIC_DIR.exists():
+                    for f in sorted(config.MUSIC_DIR.rglob("*")):
+                        if f.suffix.lower() in (".mp3", ".wav", ".m4a", ".ogg", ".flac"):
+                            files.append({"name": f.name, "rel": str(f.relative_to(config.MUSIC_DIR)).replace("\\", "/"),
+                                          "folder": f.parent.name if f.parent != config.MUSIC_DIR else "",
+                                          "size_mb": round(f.stat().st_size / 1024 ** 2, 1)})
+                return self._send(200, files)
+            if p == "/api/music_audio":
+                rel = q.get("rel", [""])[0]
+                f = (config.MUSIC_DIR / rel).resolve()
+                if config.MUSIC_DIR.resolve() not in f.parents:
+                    return self._send(404, {})
+                return self._file(f)
+            return self._send(404, {"error": "нет такого адреса"})
+        except Exception as e:
+            return self._send(500, {"error": str(e)})
+
+    # --- POST ---
+    def _body(self):
+        n = int(self.headers.get("Content-Length") or 0)
+        return self.rfile.read(n) if n else b""
+
+    def do_POST(self):
+        u = urllib.parse.urlparse(self.path)
+        q = urllib.parse.parse_qs(u.query)
+        if u.path == "/api/bye" and q.get("t", [""])[0] == TOKEN:     # окно закрывается
+            STATE["bye"] = time.time()
+            return self._send(200, {"ok": True})
+        if self.headers.get("X-Token") != TOKEN:
+            return self._send(403, {"error": "нет доступа"})
+        STATE["last_seen"] = time.time()
+        p = u.path
+        try:
+            raw = self._body()
+            if p == "/api/update_zip":
+                return self._update_zip(raw)
+            data = json.loads(raw.decode("utf-8") or "{}") if raw else {}
+            return self._route(p, data)
+        except Exception as e:
+            return self._send(500, {"error": str(e)})
+
+    def _route(self, p, data):
+        if p == "/api/heartbeat":
+            return self._send(200, {"ok": True})
+        if p == "/api/save":
+            return self._send(200, save_settings(data.get("values") or {}))
+        if p == "/api/build_text":
+            return self._build_text(data)
+        if p == "/api/rebuild":
+            d = _project_dir(data.get("id"))
+
+            def job():
+                JOB.project = d.name
+                sj = runner._load_json(d / "script.json", {})
+                npath = sj.get("niche_file")
+                if not (npath and Path(npath).exists()):
+                    npath = _niche_path(data.get("niche"))
+                runner.step_build(config.load_config(), config.load_niche(npath), d, JOB.add_log,
+                                  lambda: JOB.stop, JOB.progress)
+                return {"project": d.name}
+            ok = run_job("build", job)
+            return self._send(200 if ok else 409, {"ok": ok, "error": None if ok else "Уже идёт работа"})
+        if p == "/api/stop":
+            JOB.stop = True
+            JOB.add_log("Остановка после текущего шага... Сделанное сохранится — повторная сборка продолжит.")
+            return self._send(200, {"ok": True})
+        if p == "/api/selfcheck":
+            def job():
+                from pipeline import selfcheck
+                JOB.add_log("Проверка подключений...")
+                res = selfcheck.run_all(config.load_config(), JOB.add_log)
+                STATE["selfcheck"] = [{"name": n, "ok": ok, "msg": m, "critical": c} for n, ok, m, c in res]
+                for r in STATE["selfcheck"]:
+                    JOB.add_log(("  ✔ " if r["ok"] else "  ✘ ") + r["name"] + (f" — {r['msg']}" if r["msg"] else ""))
+                return {"selfcheck": STATE["selfcheck"]}
+            ok = run_job("selfcheck", job)
+            return self._send(200 if ok else 409, {"ok": ok, "error": None if ok else "Уже идёт работа"})
+        if p == "/api/voice_sample":
+            provider = "edge" if data.get("provider") == "edge" else "yandex"
+            value = str(data.get("value") or "")
+            text = (data.get("text") or SAMPLE_TEXT).strip()[:400]
+            h = _h(text)
+            out = ROOT / "voice_samples" / provider / f"{value.replace(':', '_')}_{h}.mp3"
+            if not out.exists():
+                try:
+                    tts.make_sample(config.load_config(), provider, value, text, out)
+                except Exception as e:
+                    return self._send(200, {"ok": False, "error": str(e)})
+            return self._send(200, {"ok": True, "h": h})
+        if p == "/api/voice_samples":
+            provider = "edge" if data.get("provider") == "edge" else "yandex"
+            text = (data.get("text") or SAMPLE_TEXT).strip()[:400]
+
+            def job():
+                cfg = config.load_config()
+                if provider == "yandex" and not cfg.get("yandex_api_key"):
+                    raise RuntimeError("Не указан API-ключ Yandex — вставьте его в «Параметры → Сервисы и ключи».")
+                JOB.add_log("Озвучиваю пример всеми голосами...")
+                made, errors = tts.voice_samples(cfg, text, ROOT / "voice_samples", JOB.add_log, provider)
+                if not made:
+                    raise RuntimeError(errors[0] if errors else "Ни один голос не озвучил пример")
+                return {"made": len(made), "errors": errors}
+            ok = run_job("voices", job)
+            return self._send(200 if ok else 409, {"ok": ok, "error": None if ok else "Уже идёт работа"})
+        if p == "/api/open":
+            return self._open(data)
+        if p == "/api/delete_project":
+            d = _project_dir(data.get("id"))
+            if JOB.running:
+                return self._send(409, {"error": "Дождитесь окончания сборки"})
+            shutil.rmtree(d, ignore_errors=True)
+            return self._send(200, {"ok": True})
+        if p == "/api/text_file":
+            d = _project_dir(data.get("id"))
+            name = Path(data.get("name", "")).name
+            f = d / name
+            return self._send(200, {"text": f.read_text(encoding="utf-8-sig") if f.exists() else ""})
+        if p == "/api/check_update":
+            return self._check_update()
+        if p == "/api/update_online":
+            return self._update_online()
+        if p == "/api/shortcut":
+            ok = make_shortcut()
+            return self._send(200, {"ok": ok})
+        if p == "/api/import_music":
+            return self._send(400, {"error": "используйте папку music"})
+        return self._send(404, {"error": "нет такого действия"})
+
+    def _build_text(self, data):
+        text = data.get("text") or ""
+        if not text.strip():
+            return self._send(400, {"error": "Файл сценария пустой"})
+        inbox = config.OUTPUT_DIR / "_scripts"
+        inbox.mkdir(parents=True, exist_ok=True)
+        name = Path(data.get("name") or "script.txt").name
+        if not name.lower().endswith(".txt"):
+            name += ".txt"
+        path = inbox / f"{time.strftime('%Y%m%d_%H%M%S')}_{name}"
+        path.write_text(text.replace("\r\n", "\n"), encoding="utf-8-sig")
+        npath = _niche_path(data.get("niche"))
+
+        def job():
+            project = runner.project_from_text(path, npath, JOB.add_log)
+            JOB.project = project.name
+            runner.step_build(config.load_config(), config.load_niche(npath), project, JOB.add_log,
+                              lambda: JOB.stop, JOB.progress)
+            if config.load_config().get("open_folder_after"):
+                try:
+                    _open_path(project)
+                except Exception:
+                    pass
+            return {"project": project.name}
+        ok = run_job("build", job)
+        return self._send(200 if ok else 409, {"ok": ok, "error": None if ok else "Уже идёт работа"})
+
+    def _open(self, data):
+        what = data.get("what")
+        from pipeline import library
+        places = {"output": config.OUTPUT_DIR, "footage": library.FOOTAGE_DIR, "music": config.MUSIC_DIR,
+                  "voices": ROOT / "voice_samples", "app": ROOT}
+        if what in places:
+            places[what].mkdir(parents=True, exist_ok=True)
+            _open_path(places[what])
+            return self._send(200, {"ok": True})
+        d = _project_dir(data.get("id"))
+        if what == "project":
+            _open_path(d)
+        elif what == "video":
+            info = _project_info(d)
+            if not info["video"]:
+                return self._send(404, {"error": "Видео ещё не собрано"})
+            _open_path(d / info["video"])
+        elif what == "script":
+            _open_path(d / "script.txt")
+        else:
+            return self._send(400, {"error": "неизвестно что открыть"})
+        return self._send(200, {"ok": True})
+
+    def _update_zip(self, raw):
+        if JOB.running:
+            return self._send(409, {"error": "Дождитесь окончания сборки, потом обновляйте."})
+        logs = []
+        ver = apply_update(raw, lambda m: (logs.append(m), JOB.add_log(m)))
+        self._send(200, {"ok": True, "version": ver, "log": logs})
+        schedule_restart()
+
+    def _check_update(self):
+        repo = (config.load_config().get("update_repo") or "").strip().strip("/")
+        if not repo:
+            return self._send(200, {"ok": False, "error": "Не указан адрес обновлений"})
+        import requests
+        r = requests.get(f"https://raw.githubusercontent.com/{repo}/main/pipeline/config.py", timeout=20)
+        if r.status_code != 200:
+            return self._send(200, {"ok": False, "error": f"Сервер обновлений ответил {r.status_code}"})
+        latest = _version_of(r.text)
+        return self._send(200, {"ok": True, "latest": latest, "current": config.VERSION,
+                                "newer": bool(latest) and latest != config.VERSION})
+
+    def _update_online(self):
+        if JOB.running:
+            return self._send(409, {"error": "Дождитесь окончания сборки, потом обновляйте."})
+        repo = (config.load_config().get("update_repo") or "").strip().strip("/")
+        if not repo:
+            return self._send(400, {"error": "Не указан адрес обновлений"})
+        import requests
+        r = requests.get(f"https://codeload.github.com/{repo}/zip/refs/heads/main", timeout=120)
+        if r.status_code != 200:
+            return self._send(502, {"error": f"Не удалось скачать обновление ({r.status_code})"})
+        return self._update_zip(r.content)
+
+
+def _niche_path(niche_id):
+    niches = config.list_niches()
+    for name, path in niches.items():
+        if path.name == niche_id or name == niche_id:
+            return path
+    cfg = config.load_config()
+    for name, path in niches.items():
+        if path.name == cfg.get("default_niche"):
+            return path
+    return next(iter(niches.values()))
+
+
+def save_settings(values):
+    """Сохраняет параметры. Возвращает предупреждения (например, перепутаны ключ и ID каталога)."""
+    cfg = config.load_config()
+    notes = []
+    key = str(values.get("yandex_api_key", cfg.get("yandex_api_key", ""))).strip()
+    folder = config.clean_folder_id(str(values.get("yandex_folder_id", cfg.get("yandex_folder_id", ""))))
+    if key.startswith("b1g") and folder.startswith("AQV"):
+        key, folder = folder, key
+        notes.append("Ключ Yandex и ID каталога были перепутаны местами — исправлено.")
+    if key.startswith(("b1g", "aje")):
+        notes.append("В поле «API-ключ Yandex» вставлен не ключ (ключ начинается на AQVN…).")
+    values["yandex_api_key"], values["yandex_folder_id"] = key, folder
+    for k, v in values.items():
+        if k not in PUBLIC_KEYS:
+            continue
+        if isinstance(v, str):
+            v = v.strip().replace("\n", "").replace("\r", "")
+            if k.endswith("_key") or k.endswith("_id"):
+                v = v.replace(" ", "")
+        if k in ("music_volume", "shot_seconds"):
+            try:
+                v = float(str(v).replace(",", "."))
+            except ValueError:
+                notes.append(f"Поле {k} должно быть числом — не сохранено.")
+                continue
+        cfg[k] = v
+    path = config.save_config(cfg)
+    return {"ok": True, "notes": notes, "path": str(path)}
+
+
+# ---------------- запуск ----------------
+def _load_token():
+    try:
+        t = TOKEN_FILE.read_text().strip()
+        if len(t) >= 20:
+            return t
+    except OSError:
+        pass
+    t = secrets.token_urlsafe(24)
+    try:
+        TOKEN_FILE.write_text(t)
+    except OSError:
+        pass
+    return t
+
+
+TOKEN = _load_token()
+
+
+def _bind():
+    preferred = []
+    try:
+        preferred.append(int(PORT_FILE.read_text().strip()))
+    except (OSError, ValueError):
+        pass
+    for attempt in range(25):                       # после перезапуска порт освобождается не сразу
+        for port in preferred + PORTS:
+            try:
+                srv = ThreadingHTTPServer(("127.0.0.1", port), Handler)
+                srv.daemon_threads = True
+                PORT_FILE.write_text(str(port))
+                return srv, port
+            except OSError:
+                continue
+        time.sleep(0.4)
+    srv = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+    port = srv.server_address[1]
+    PORT_FILE.write_text(str(port))
+    return srv, port
+
+
+def _alive(port):
+    import urllib.request
+    try:
+        with urllib.request.urlopen(f"http://127.0.0.1:{port}/api/state?t={TOKEN}", timeout=2) as r:
+            return r.status == 200
+    except Exception:
+        return False
+
+
+def _find_browser():
+    cands = []
+    for env in ("PROGRAMFILES(X86)", "PROGRAMFILES", "LOCALAPPDATA"):
+        base = os.environ.get(env)
+        if base:
+            cands += [Path(base) / "Microsoft/Edge/Application/msedge.exe",
+                      Path(base) / "Google/Chrome/Application/chrome.exe"]
+    for c in cands:
+        if c.exists():
+            return str(c)
+    for name in ("microsoft-edge", "google-chrome", "chromium", "chromium-browser"):
+        p = shutil.which(name)
+        if p:
+            return p
+    return None
+
+
+def open_window(url):
+    exe = _find_browser()
+    if exe:
+        prof = ROOT / ".ui_profile"
+        proc = subprocess.Popen([exe, f"--app={url}", f"--user-data-dir={prof}", "--window-size=1280,860",
+                                 "--no-first-run", "--no-default-browser-check", "--disable-features=Translate"],
+                                creationflags=_NO_WINDOW)
+        STATE["browser"] = (proc, time.time())
+        return True
+    import webbrowser
+    webbrowser.open(url)
+    return False
+
+
+def _watchdog(srv):
+    """Закрывает сервер, когда окно закрыто и ничего не собирается."""
+    while True:
+        time.sleep(3)
+        if JOB.running or STATE["restart"]:
+            continue
+        idle = time.time() - STATE["last_seen"]
+        br = STATE.get("browser")
+        closed = False
+        if br:
+            proc, t_start = br
+            if proc.poll() is not None and time.time() - t_start > 8:
+                closed = idle > 6                     # окно закрыто (страница перестала опрашивать)
+        bye = STATE.get("bye") or 0
+        if bye and STATE["last_seen"] < bye and time.time() - bye > 6:
+            closed = True                             # страница закрыта и не открылась снова
+        if closed or idle > 900:
+            srv.shutdown()
+            os._exit(0)
+
+
+def main(argv):
+    if sys.stdout is None:                          # запуск без консоли (pythonw)
+        sys.stdout = open(os.devnull, "w")
+    if sys.stderr is None:
+        sys.stderr = open(os.devnull, "w")
+    no_window = "--no-window" in argv
+    try:
+        old = int(PORT_FILE.read_text().strip())
+    except (OSError, ValueError):
+        old = None
+    if old and not no_window and _alive(old):        # программа уже запущена — просто показываем окно
+        open_window(f"http://127.0.0.1:{old}/?t={TOKEN}")
+        return
+    config.ensure_dirs()
+    srv, port = _bind()
+    url = f"http://127.0.0.1:{port}/?t={TOKEN}"
+    print(f"DocuStudio: {url}", flush=True)
+    if not no_window and "--headless" not in argv:
+        open_window(url)
+    STATE["last_seen"] = time.time()
+    if "--headless" not in argv:
+        threading.Thread(target=_watchdog, args=(srv,), daemon=True).start()
+    srv.serve_forever()
+
+
+if __name__ == "__main__":
+    main(sys.argv[1:])

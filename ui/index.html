@@ -1,0 +1,341 @@
+<!doctype html>
+<html lang="ru" data-theme="light">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>DocuStudio</title>
+<link rel="icon" type="image/png" href="/ui/icon.png">
+<link rel="stylesheet" href="/ui/app.css">
+<script>
+  // тема до отрисовки — без вспышки белым
+  try { var th = localStorage.getItem("ds-theme"); if (th) document.documentElement.dataset.theme = th; } catch (e) {}
+</script>
+</head>
+<body>
+<div class="app">
+  <!-- ===== боковое меню ===== -->
+  <aside class="sidebar">
+    <div class="brand">
+      <img src="/ui/icon.png" alt="" class="brand-icon">
+      <div>
+        <div class="brand-name">DocuStudio</div>
+        <div class="brand-ver" id="ver">—</div>
+      </div>
+    </div>
+    <nav class="nav">
+      <button class="nav-item active" data-page="home"><svg viewBox="0 0 24 24"><path d="M3 10.5 12 3l9 7.5V20a1 1 0 0 1-1 1h-5v-6H9v6H4a1 1 0 0 1-1-1z"/></svg><span>Главная</span></button>
+      <button class="nav-item" data-page="projects"><svg viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="14" rx="2.5"/><path d="m10 8.5 5 2.5-5 2.5z" class="fill"/><path d="M7 21h10"/></svg><span>Проекты</span></button>
+      <button class="nav-item" data-page="voices"><svg viewBox="0 0 24 24"><rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5 11a7 7 0 0 0 14 0M12 18v3"/></svg><span>Голоса</span></button>
+      <button class="nav-item" data-page="music"><svg viewBox="0 0 24 24"><path d="M9 18V5l11-2v13"/><circle cx="6" cy="18" r="3"/><circle cx="17" cy="16" r="3"/></svg><span>Музыка</span></button>
+    </nav>
+    <div class="sidebar-bottom">
+      <div class="mini-job" id="miniJob" hidden>
+        <div class="mini-job-title"><span class="dot pulse"></span><span id="miniJobText">Сборка…</span></div>
+        <div class="bar small"><div class="bar-fill" id="miniBar"></div></div>
+      </div>
+      <button class="nav-item" data-page="settings"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="3.2"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1A1.7 1.7 0 0 0 4.6 9a1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"/></svg><span>Параметры</span></button>
+    </div>
+  </aside>
+
+  <!-- ===== основная часть ===== -->
+  <main class="main">
+    <header class="topbar">
+      <div>
+        <h1 id="pageTitle">Главная</h1>
+        <div class="subtitle" id="pageSub">Документальные видео из вашего сценария</div>
+      </div>
+      <div class="top-actions">
+        <button class="icon-btn" id="themeBtn" title="Тёмная / светлая тема" aria-label="Сменить тему">
+          <svg class="moon" viewBox="0 0 24 24"><path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8z"/></svg>
+          <svg class="sun" viewBox="0 0 24 24"><circle cx="12" cy="12" r="4.5"/><path d="M12 1.5v2.5M12 20v2.5M4.6 4.6l1.8 1.8M17.6 17.6l1.8 1.8M1.5 12H4M20 12h2.5M4.6 19.4l1.8-1.8M17.6 6.4l1.8-1.8"/></svg>
+        </button>
+      </div>
+    </header>
+
+    <!-- ГЛАВНАЯ -->
+    <section class="page active" id="page-home">
+      <div class="grid-home">
+        <div class="col">
+          <div class="card hero">
+            <div class="card-head">
+              <div>
+                <h2>Новое видео</h2>
+                <p class="muted">Сценарий пишет Claude в чате и присылает файлом .txt</p>
+              </div>
+            </div>
+            <label class="dropzone" id="dropzone">
+              <input type="file" id="scriptFile" accept=".txt,text/plain" hidden>
+              <div class="dz-icon"><svg viewBox="0 0 24 24"><path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z"/><path d="M14 3v5h5M12 17v-6M9.5 13.5 12 11l2.5 2.5"/></svg></div>
+              <div class="dz-text" id="dzText"><b>Перетащите файл сценария сюда</b><span>или нажмите, чтобы выбрать .txt</span></div>
+            </label>
+            <div class="row gap">
+              <div class="field grow">
+                <label>Ниша</label>
+                <div class="select-wrap"><select id="nicheSel"></select></div>
+              </div>
+              <button class="btn primary big" id="buildBtn" disabled>
+                <svg viewBox="0 0 24 24"><path d="m7 4 13 8-13 8z" class="fill"/></svg>Собрать видео
+              </button>
+            </div>
+          </div>
+
+          <div class="card job" id="jobCard" hidden>
+            <div class="card-head">
+              <div>
+                <h2 id="jobTitle">Сборка видео</h2>
+                <p class="muted" id="jobStage">Подготовка…</p>
+              </div>
+              <button class="btn ghost danger" id="stopBtn"><svg viewBox="0 0 24 24"><rect x="6" y="6" width="12" height="12" rx="2" class="fill"/></svg>Стоп</button>
+            </div>
+            <div class="bar"><div class="bar-fill" id="jobBar"></div></div>
+            <div class="job-meta">
+              <span class="pct" id="jobPct">0%</span>
+              <span>прошло <b id="jobElapsed">0:00</b></span>
+              <span>осталось <b id="jobEta">считаю…</b></span>
+            </div>
+          </div>
+
+          <div class="card">
+            <div class="card-head">
+              <h3>Журнал</h3>
+              <button class="btn ghost small" id="logToggle">Показать</button>
+            </div>
+            <pre class="log" id="logBox" hidden></pre>
+          </div>
+        </div>
+
+        <div class="col">
+          <div class="card voice-card">
+            <div class="card-head">
+              <h3>Голос диктора</h3>
+              <button class="btn ghost small" data-goto="voices">Сменить</button>
+            </div>
+            <div class="vc-row">
+              <button class="playbtn big" id="homePlay" title="Прослушать"></button>
+              <div><div class="vc-name" id="homeVoice">—</div><div class="muted small" id="homeProv"></div></div>
+            </div>
+          </div>
+          <div class="card">
+            <div class="card-head">
+              <h3>Подключения</h3>
+              <button class="btn ghost small" id="checkBtn2">Проверить</button>
+            </div>
+            <div class="checks" id="checksHome"><p class="muted small">Нажмите «Проверить», чтобы убедиться, что ключи и сервисы работают.</p></div>
+          </div>
+          <div class="card">
+            <div class="card-head">
+              <h3>Последние проекты</h3>
+              <button class="btn ghost small" data-goto="projects">Все</button>
+            </div>
+            <div id="recent" class="recent"></div>
+          </div>
+          <div class="card quick">
+            <button class="tile" data-open="output"><svg viewBox="0 0 24 24"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></svg>Папка проектов</button>
+            <button class="tile" data-open="footage"><svg viewBox="0 0 24 24"><rect x="3" y="5" width="18" height="14" rx="2"/><path d="M7 5v14M17 5v14M3 9.5h4M3 14.5h4M17 9.5h4M17 14.5h4"/></svg>Мои футажи</button>
+            <button class="tile" data-goto="music"><svg viewBox="0 0 24 24"><path d="M9 18V5l11-2v13"/><circle cx="6" cy="18" r="3"/><circle cx="17" cy="16" r="3"/></svg>Музыка</button>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ПРОЕКТЫ -->
+    <section class="page" id="page-projects">
+      <div class="toolbar">
+        <div class="search"><svg viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg><input id="projSearch" placeholder="Поиск по названию"></div>
+        <div class="filters" id="projFilter" style="margin:0">
+          <button class="chipbtn on" data-f="all">Все <span class="n"></span></button>
+          <button class="chipbtn" data-f="ready">Готовые <span class="n"></span></button>
+          <button class="chipbtn" data-f="work">В работе <span class="n"></span></button>
+        </div>
+        <button class="btn ghost" data-open="output">Открыть папку</button>
+      </div>
+      <div class="projects" id="projects"></div>
+    </section>
+
+    <!-- ГОЛОСА -->
+    <section class="page" id="page-voices">
+      <div class="voice-top">
+        <div class="seg big" id="provSeg">
+          <button data-v="yandex">Yandex SpeechKit</button>
+          <button data-v="edge">Edge · бесплатно</button>
+        </div>
+        <div class="prov-state" id="provState"></div>
+      </div>
+      <div class="card">
+        <div class="card-head">
+          <div>
+            <h2 id="provTitle">Голоса Yandex</h2>
+            <p class="muted" id="provHint"></p>
+          </div>
+          <button class="btn ghost" id="samplesBtn">Озвучить все</button>
+        </div>
+        <div class="field">
+          <label>Фраза для прослушивания</label>
+          <div class="row gap">
+            <input class="input grow" id="sampleText" maxlength="400">
+            <button class="btn ghost small" id="sampleReset" title="Вернуть фразу по умолчанию">По умолчанию</button>
+          </div>
+        </div>
+        <div class="filters" id="voiceFilter">
+          <button class="chipbtn on" data-f="doc">Для документалок</button>
+          <button class="chipbtn" data-f="m">Мужские</button>
+          <button class="chipbtn" data-f="f">Женские</button>
+          <button class="chipbtn" data-f="all">Все</button>
+        </div>
+        <div class="voice-list" id="voices"></div>
+        <div class="speed-box" id="speedBox">
+          <div class="field grow">
+            <label>Скорость речи: <b id="speedVal"></b> <span class="muted">· по умолчанию 1.00× · у голосов LiveTTS скорость не меняется</span></label>
+            <div class="range-ticks"><input type="range" min="0.8" max="1.2" step="0.05" id="speed"><span class="tick" style="left:50%"></span></div>
+            <div class="range-labels"><span>медленнее</span><span>обычная</span><span>быстрее</span></div>
+          </div>
+          <button class="btn ghost small" id="speedReset">Сбросить</button>
+        </div>
+      </div>
+    </section>
+
+    <!-- МУЗЫКА -->
+    <section class="page" id="page-music">
+      <div class="card">
+        <div class="card-head">
+          <div>
+            <h2>Фоновая музыка</h2>
+            <p class="muted">Положите mp3 в папку music (или music\mysteries, music\military — для своей ниши). Трек выбирается случайно.</p>
+          </div>
+          <button class="btn ghost" data-open="music">Открыть папку</button>
+        </div>
+        <div class="field">
+          <label>Громкость музыки под голосом <span class="muted" id="volVal"></span></label>
+          <input type="range" min="0" max="0.4" step="0.01" id="musicVol">
+        </div>
+        <div class="music-list" id="music"></div>
+      </div>
+    </section>
+
+    <!-- ПАРАМЕТРЫ -->
+    <section class="page" id="page-settings">
+      <div class="tabs" id="setTabs">
+        <button class="tab active" data-tab="general">Общие</button>
+        <button class="tab" data-tab="edit">Монтаж</button>
+        <button class="tab" data-tab="keys">Сервисы и ключи</button>
+        <button class="tab" data-tab="update">Обновления</button>
+        <button class="tab" data-tab="about">О программе</button>
+        <span class="tab-ink" id="tabInk"></span>
+      </div>
+
+      <div class="tabpane active" id="tab-general">
+        <div class="card settings">
+          <div class="set-row">
+            <div><b>Оформление</b><p class="muted small">Светлая, тёмная или как в Windows</p></div>
+            <div class="seg" id="themeSeg">
+              <button data-v="light">Светлая</button><button data-v="dark">Тёмная</button><button data-v="system">Как в системе</button>
+            </div>
+          </div>
+          <div class="set-row">
+            <div><b>Звук, когда видео готово</b><p class="muted small">Короткий сигнал по окончании сборки</p></div>
+            <label class="switch"><input type="checkbox" data-key="sound_done"><span></span></label>
+          </div>
+          <div class="set-row">
+            <div><b>Открывать папку после сборки</b><p class="muted small">Иначе видео — во вкладке «Проекты»</p></div>
+            <label class="switch"><input type="checkbox" data-key="open_folder_after"><span></span></label>
+          </div>
+          <div class="set-row">
+            <div><b>Ниша по умолчанию</b></div>
+            <div class="select-wrap"><select id="defNiche" data-key="default_niche"></select></div>
+          </div>
+          <div class="set-row">
+            <div><b>Ярлык на рабочем столе</b><p class="muted small">Создать или обновить ярлык DocuStudio</p></div>
+            <button class="btn ghost" id="shortcutBtn">Создать ярлык</button>
+          </div>
+        </div>
+      </div>
+
+      <div class="tabpane" id="tab-edit">
+        <div class="card settings">
+          <div class="set-row col-on-narrow">
+            <div><b>Смена кадра</b><p class="muted small">Средняя длина одного кадра. 1,8 с ≈ 90 кадров на 3 минуты</p></div>
+            <div class="range-wrap"><input type="range" min="1.5" max="5" step="0.1" data-key="shot_seconds" id="shotSec"><span class="range-val" id="shotVal"></span></div>
+          </div>
+          <div class="set-row">
+            <div><b>Всплывающие надписи</b><p class="muted small">Места, даты и имена людей внизу кадра</p></div>
+            <label class="switch"><input type="checkbox" data-key="show_labels"><span></span></label>
+          </div>
+          <div class="set-row">
+            <div><b>Озвучка</b><p class="muted small">yandex — основной вариант</p></div>
+            <div class="select-wrap"><select data-key="tts_provider">
+              <option value="yandex">Yandex SpeechKit</option><option value="elevenlabs">ElevenLabs</option>
+              <option value="openai">OpenAI</option><option value="edge">Edge (бесплатно)</option></select></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="tabpane" id="tab-keys">
+        <div class="card settings">
+          <h3 class="sec">Основные</h3>
+          <div class="key-row" data-k="yandex_api_key" data-label="API-ключ Yandex Cloud" data-secret="1" data-hint="AQVN… — для озвучки и проверки кадров"></div>
+          <div class="key-row" data-k="yandex_folder_id" data-label="ID каталога Yandex Cloud" data-hint="b1g…"></div>
+          <div class="key-row" data-k="pixabay_key" data-label="Ключ Pixabay" data-secret="1" data-hint="видео и фото"></div>
+          <h3 class="sec">Дополнительно</h3>
+          <div class="key-row" data-k="pexels_key" data-label="Ключ Pexels" data-secret="1"></div>
+          <div class="key-row" data-k="elevenlabs_key" data-label="Ключ ElevenLabs" data-secret="1"></div>
+          <div class="key-row" data-k="elevenlabs_voice_id" data-label="ID голоса ElevenLabs"></div>
+          <div class="key-row" data-k="openai_key" data-label="Ключ OpenAI" data-secret="1"></div>
+          <div class="key-row" data-k="anthropic_key" data-label="Ключ Claude" data-secret="1"></div>
+          <div class="row gap mt">
+            <button class="btn primary" id="checkBtn">Проверить подключения</button>
+          </div>
+          <div class="checks mt" id="checksKeys"></div>
+          <p class="note"><svg viewBox="0 0 24 24"><rect x="5" y="11" width="14" height="10" rx="2"/><path d="M8 11V8a4 4 0 0 1 8 0v3"/></svg>Ключи хранятся только на этом компьютере, в файле config.json в папке программы. Не пересылайте этот файл.</p>
+        </div>
+      </div>
+
+      <div class="tabpane" id="tab-update">
+        <div class="card settings">
+          <div class="set-row">
+            <div><b>Установлена версия</b><p class="muted small" id="verText"></p></div>
+          </div>
+          <div class="set-row col-on-narrow">
+            <div><b>Обновить из архива</b><p class="muted small">Выберите video_generator.zip, присланный в чате. Ключи, проекты, футажи и музыка сохранятся. Программа перезапустится сама.</p></div>
+            <label class="btn primary"><input type="file" id="updFile" accept=".zip" hidden>Выбрать архив…</label>
+          </div>
+          <div class="set-row col-on-narrow">
+            <div><b>Обновление из интернета</b><p class="muted small">Адрес репозитория GitHub (владелец/название) — после настройки обновление в одну кнопку</p></div>
+            <div class="row gap">
+              <input class="input" data-key="update_repo" placeholder="например: ivan/docustudio" style="width:240px">
+              <button class="btn ghost" id="updCheck">Проверить</button>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div class="tabpane" id="tab-about">
+        <div class="card settings about">
+          <img src="/ui/icon.png" alt="" class="about-icon">
+          <div>
+            <h2>DocuStudio</h2>
+            <p class="muted" id="aboutVer"></p>
+            <p class="muted small">Озвучка, подбор видео по смыслу, монтаж с переходами и надписями, субтитры, описание и обложки.</p>
+            <div class="row gap mt">
+              <button class="btn ghost" data-open="app">Папка программы</button>
+              <button class="btn ghost" data-open="output">Папка проектов</button>
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
+  </main>
+</div>
+
+<div class="toasts" id="toasts"></div>
+<div class="modal-back" id="modalBack" hidden>
+  <div class="modal" id="modal">
+    <h2 id="modalTitle"></h2>
+    <div id="modalBody"></div>
+    <div class="modal-actions" id="modalActions"></div>
+  </div>
+</div>
+<div class="drop-overlay" id="dropOverlay"><div>Отпустите файл сценария</div></div>
+
+<script src="/ui/app.js"></script>
+</body>
+</html>

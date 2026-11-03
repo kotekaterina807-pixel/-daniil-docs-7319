@@ -1,0 +1,27 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#3b82f6"/>
+      <stop offset="0.55" stop-color="#1d4ed8"/>
+      <stop offset="1" stop-color="#0b1f5c"/>
+    </linearGradient>
+    <radialGradient id="glow" cx="0.3" cy="0.22" r="0.8">
+      <stop offset="0" stop-color="#ffffff" stop-opacity="0.35"/>
+      <stop offset="0.6" stop-color="#ffffff" stop-opacity="0"/>
+    </radialGradient>
+    <linearGradient id="play" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#ffffff"/>
+      <stop offset="1" stop-color="#cfe0ff"/>
+    </linearGradient>
+  </defs>
+  <rect x="8" y="8" width="240" height="240" rx="58" fill="url(#bg)"/>
+  <rect x="8" y="8" width="240" height="240" rx="58" fill="url(#glow)"/>
+  <!-- линза / объектив -->
+  <circle cx="128" cy="128" r="74" fill="none" stroke="#ffffff" stroke-opacity="0.92" stroke-width="12"/>
+  <circle cx="128" cy="128" r="52" fill="#0b1f5c" fill-opacity="0.35"/>
+  <!-- кнопка воспроизведения -->
+  <path d="M112 98 L162 128 L112 158 Z" fill="url(#play)" stroke="#ffffff" stroke-width="6" stroke-linejoin="round"/>
+  <!-- блик-искра -->
+  <circle cx="186" cy="70" r="10" fill="#7dd3fc"/>
+  <circle cx="186" cy="70" r="4" fill="#ffffff"/>
+</svg>

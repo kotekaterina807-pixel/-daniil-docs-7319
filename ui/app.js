@@ -1,0 +1,686 @@
+"use strict";
+/* DocuStudio — интерфейс. Вся работа идёт в программе на этом компьютере, страница только показывает её. */
+
+const $ = (s, el = document) => el.querySelector(s);
+const $$ = (s, el = document) => [...el.querySelectorAll(s)];
+const params = new URLSearchParams(location.search);
+let TOKEN = params.get("t") || "";
+try { if (TOKEN) sessionStorage.setItem("ds-t", TOKEN); else TOKEN = sessionStorage.getItem("ds-t") || ""; } catch (e) {}
+
+const S = { cfg: {}, niches: [], voices: [], projects: [], logNext: 0, doneId: null, file: null,
+            lastJobKind: "", restarting: false, offline: 0 };
+
+const PAGES = {
+  home: ["Главная", "Документальные видео из вашего сценария"],
+  projects: ["Проекты", "Все собранные видео: смотреть, пересобрать, взять описание для YouTube"],
+  voices: ["Голоса", "Выбор голоса диктора на слух"],
+  music: ["Музыка", "Фоновая музыка под голосом"],
+  settings: ["Параметры", "Оформление, звук, монтаж, ключи и обновления"],
+};
+
+// ---------- запросы к программе ----------
+async function api(path, body, raw) {
+  const opt = { method: body === undefined ? "GET" : "POST", headers: { "X-Token": TOKEN } };
+  if (body !== undefined) {
+    if (raw) { opt.body = body; opt.headers["Content-Type"] = "application/octet-stream"; }
+    else { opt.body = JSON.stringify(body); opt.headers["Content-Type"] = "application/json"; }
+  }
+  const r = await fetch(path, opt);
+  let data = {};
+  try { data = await r.json(); } catch (e) {}
+  if (!r.ok) throw new Error(data.error || `Ошибка ${r.status}`);
+  return data;
+}
+const fileUrl = (path) => `${path}${path.includes("?") ? "&" : "?"}t=${encodeURIComponent(TOKEN)}`;
+
+// ---------- уведомления ----------
+function toast(text, kind = "", ms = 3200) {
+  const el = document.createElement("div");
+  el.className = `toast ${kind}`;
+  el.textContent = text;
+  $("#toasts").appendChild(el);
+  setTimeout(() => { el.classList.add("out"); setTimeout(() => el.remove(), 320); }, ms);
+}
+function modal(title, bodyHtml, actions = [{ text: "Закрыть" }]) {
+  $("#modalTitle").textContent = title;
+  $("#modalBody").innerHTML = bodyHtml;
+  const box = $("#modalActions");
+  box.innerHTML = "";
+  actions.forEach((a) => {
+    const b = document.createElement("button");
+    b.className = `btn ${a.cls || "ghost"}`;
+    b.textContent = a.text;
+    b.onclick = async () => { if (a.onClick) { const keep = await a.onClick(); if (keep === true) return; } closeModal(); };
+    box.appendChild(b);
+  });
+  $("#modalBack").hidden = false;
+}
+function closeModal() {
+  $$("#modalBody video").forEach((v) => { v.pause(); v.removeAttribute("src"); v.load(); });
+  $("#modal").classList.remove("wide");
+  $("#modalBack").hidden = true;
+}
+$("#modalBack").addEventListener("mousedown", (e) => { if (e.target.id === "modalBack") closeModal(); });
+document.addEventListener("keydown", (e) => { if (e.key === "Escape") closeModal(); });
+const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+
+function chime() {
+  try {
+    const ctx = new (window.AudioContext || window.webkitAudioContext)();
+    [[880, 0], [1320, 0.16]].forEach(([f, t]) => {
+      const o = ctx.createOscillator(), g = ctx.createGain();
+      o.type = "sine"; o.frequency.value = f;
+      g.gain.setValueAtTime(0.0001, ctx.currentTime + t);
+      g.gain.exponentialRampToValueAtTime(0.18, ctx.currentTime + t + 0.02);
+      g.gain.exponentialRampToValueAtTime(0.0001, ctx.currentTime + t + 0.5);
+      o.connect(g).connect(ctx.destination); o.start(ctx.currentTime + t); o.stop(ctx.currentTime + t + 0.55);
+    });
+  } catch (e) {}
+}
+
+// ---------- плавное нажатие: волна от места клика ----------
+document.addEventListener("pointerdown", (e) => {
+  const b = e.target.closest(".btn, .tile, .icon-btn");
+  if (!b || b.disabled) return;
+  const r = b.getBoundingClientRect(), size = Math.max(r.width, r.height);
+  const s = document.createElement("span");
+  s.className = "ripple";
+  s.style.cssText = `width:${size}px;height:${size}px;left:${e.clientX - r.left - size / 2}px;top:${e.clientY - r.top - size / 2}px`;
+  b.appendChild(s);
+  setTimeout(() => s.remove(), 600);
+});
+
+// ---------- тема ----------
+const mq = window.matchMedia("(prefers-color-scheme: dark)");
+function resolveTheme(t) { return t === "system" ? (mq.matches ? "dark" : "light") : (t || "light"); }
+function applyTheme(t) {
+  document.documentElement.dataset.theme = resolveTheme(t);
+  try { localStorage.setItem("ds-theme", resolveTheme(t)); } catch (e) {}
+  $$("#themeSeg button").forEach((b) => b.classList.toggle("on", b.dataset.v === (t || "light")));
+}
+mq.addEventListener?.("change", () => { if (S.cfg.theme === "system") applyTheme("system"); });
+$("#themeBtn").onclick = () => {
+  const next = document.documentElement.dataset.theme === "dark" ? "light" : "dark";
+  S.cfg.theme = next; applyTheme(next); save({ theme: next }, true);
+};
+$$("#themeSeg button").forEach((b) => b.onclick = () => { S.cfg.theme = b.dataset.v; applyTheme(b.dataset.v); save({ theme: b.dataset.v }, true); });
+
+// ---------- навигация ----------
+function go(page) {
+  stopAudio();
+  $$(".nav-item").forEach((n) => n.classList.toggle("active", n.dataset.page === page));
+  $$(".page").forEach((p) => p.classList.toggle("active", p.id === `page-${page}`));
+  $("#pageTitle").textContent = PAGES[page][0];
+  $("#pageSub").textContent = PAGES[page][1];
+  if (page === "projects") loadProjects();
+  if (page === "voices") loadVoices();
+  if (page === "music") loadMusic();
+  if (page === "settings") moveInk();
+  $(".main").scrollTop = 0;
+}
+$$(".nav-item").forEach((n) => n.onclick = () => go(n.dataset.page));
+document.addEventListener("click", (e) => {
+  const g = e.target.closest("[data-goto]");
+  if (g) go(g.dataset.goto);
+  const o = e.target.closest("[data-open]");
+  if (o) api("/api/open", { what: o.dataset.open }).catch((err) => toast(err.message, "err"));
+});
+
+// вкладки параметров с плавной полоской
+function moveInk() {
+  const a = $("#setTabs .tab.active"), ink = $("#tabInk");
+  if (a) { ink.style.left = a.offsetLeft + "px"; ink.style.width = a.offsetWidth + "px"; }
+}
+$$("#setTabs .tab").forEach((t) => t.onclick = () => {
+  $$("#setTabs .tab").forEach((x) => x.classList.toggle("active", x === t));
+  $$(".tabpane").forEach((p) => p.classList.toggle("active", p.id === `tab-${t.dataset.tab}`));
+  moveInk();
+});
+window.addEventListener("resize", moveInk);
+
+// ---------- сохранение параметров ----------
+let saveTimer = null, pending = {};
+function save(values, quiet) {
+  Object.assign(pending, values);
+  Object.assign(S.cfg, values);
+  if ("tts_provider" in values || "yandex_voice" in values || "edge_voice" in values) {
+    setTimeout(renderVoiceCard, 0);
+    if ("tts_provider" in values) VS.provider = null;
+  }
+  clearTimeout(saveTimer);
+  saveTimer = setTimeout(async () => {
+    const v = pending; pending = {};
+    try {
+      const r = await api("/api/save", { values: v });
+      (r.notes || []).forEach((n) => toast(n, "err", 6000));
+      if (!quiet) toast("Сохранено", "ok", 1600);
+      if (r.notes && r.notes.length) await loadInit();
+    } catch (e) { toast("Не сохранилось: " + e.message, "err"); }
+  }, 350);
+}
+function rangeFill(el) {
+  const p = ((el.value - el.min) / (el.max - el.min)) * 100;
+  el.style.setProperty("--p", p + "%");
+}
+function bindSettings() {
+  $$("[data-key]").forEach((el) => {
+    const k = el.dataset.key, v = S.cfg[k];
+    if (el.type === "checkbox") el.checked = !!v && v !== "false";
+    else if (v !== undefined && v !== null) el.value = v;
+    if (el.type === "range") rangeFill(el);
+    if (el.dataset.bound) return;
+    el.dataset.bound = 1;
+    const ev = el.type === "range" ? "input" : "change";
+    el.addEventListener(ev, () => {
+      const val = el.type === "checkbox" ? el.checked : el.type === "range" ? parseFloat(el.value) : el.value;
+      if (el.type === "range") rangeFill(el);
+      if (k === "shot_seconds") $("#shotVal").textContent = `${parseFloat(el.value).toFixed(1)} с`;
+      save({ [k]: val }, el.type === "range");
+    });
+  });
+  $("#shotVal").textContent = `${parseFloat($("#shotSec").value || 1.8).toFixed(1)} с`;
+}
+
+// поля ключей: скрыть/показать, вставить
+const EYE = '<svg viewBox="0 0 24 24"><path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7S2 12 2 12z"/><circle cx="12" cy="12" r="3"/></svg>';
+const PASTE = '<svg viewBox="0 0 24 24"><rect x="8" y="3" width="8" height="4" rx="1"/><path d="M8 5H6a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7a2 2 0 0 0-2-2h-2"/></svg>';
+function renderKeys() {
+  $$(".key-row").forEach((row) => {
+    const k = row.dataset.k, secret = row.dataset.secret === "1";
+    row.innerHTML = `<div class="key-label">${esc(row.dataset.label)}${row.dataset.hint ? `<small class="muted">${esc(row.dataset.hint)}</small>` : ""}</div>
+      <div class="key-box"><input class="key-input" type="${secret ? "password" : "text"}" spellcheck="false" autocomplete="off">
+      ${secret ? `<button class="btn ghost small" data-act="eye" title="Показать">${EYE}</button>` : ""}
+      <button class="btn ghost small" data-act="paste" title="Вставить из буфера">${PASTE}Вставить</button></div>`;
+    const inp = $("input", row);
+    inp.value = S.cfg[k] || "";
+    const commit = () => {
+      const v = inp.value.replace(/\s+/g, "");
+      inp.value = v;
+      if (v !== (S.cfg[k] || "")) save({ [k]: v });
+    };
+    inp.addEventListener("change", commit);
+    inp.addEventListener("blur", commit);
+    $$("[data-act]", row).forEach((b) => b.onclick = async () => {
+      if (b.dataset.act === "eye") { inp.type = inp.type === "password" ? "text" : "password"; return; }
+      try { inp.value = (await navigator.clipboard.readText()).trim(); commit(); }
+      catch (e) { inp.focus(); toast("Нажмите Ctrl+V в поле — браузер не дал прочитать буфер", "", 4000); }
+    });
+  });
+}
+
+// ---------- загрузка сценария ----------
+const dz = $("#dropzone");
+async function setFile(f) {
+  if (!f) return;
+  if (!/\.txt$/i.test(f.name)) { toast("Нужен файл сценария .txt", "err"); return; }
+  S.file = { name: f.name, text: await f.text() };
+  dz.classList.add("has-file");
+  $("#dzText").innerHTML = `<b>${esc(f.name)}</b><span>${(f.size / 1024).toFixed(1)} КБ · нажмите, чтобы выбрать другой</span>`;
+  $("#buildBtn").disabled = false;
+}
+$("#scriptFile").addEventListener("change", (e) => setFile(e.target.files[0]));
+let dragDepth = 0;
+window.addEventListener("dragenter", (e) => { e.preventDefault(); dragDepth++; $("#dropOverlay").classList.add("on"); });
+window.addEventListener("dragleave", () => { if (--dragDepth <= 0) { dragDepth = 0; $("#dropOverlay").classList.remove("on"); } });
+window.addEventListener("dragover", (e) => e.preventDefault());
+window.addEventListener("drop", (e) => {
+  e.preventDefault(); dragDepth = 0; $("#dropOverlay").classList.remove("on");
+  const f = e.dataTransfer.files[0];
+  if (f && /\.zip$/i.test(f.name)) { updateFromZip(f); return; }
+  if (f) { go("home"); setFile(f); }
+});
+$("#buildBtn").onclick = async () => {
+  if (!S.file) return;
+  try {
+    await api("/api/build_text", { name: S.file.name, text: S.file.text, niche: $("#nicheSel").value });
+    toast("Сборка началась", "ok");
+    S.logNext = S.logNext; showJob(true);
+  } catch (e) { toast(e.message, "err"); }
+};
+$("#stopBtn").onclick = () => api("/api/stop", {}).then(() => toast("Остановлю после текущего шага")).catch(() => {});
+$("#logToggle").onclick = () => {
+  const box = $("#logBox"); box.hidden = !box.hidden;
+  $("#logToggle").textContent = box.hidden ? "Показать" : "Скрыть";
+  box.scrollTop = box.scrollHeight;
+};
+
+// ---------- состояние работы ----------
+const KIND = { build: "Сборка видео", selfcheck: "Проверка подключений", voices: "Озвучка примеров голосов" };
+function showJob(on) { $("#jobCard").hidden = !on; $("#miniJob").hidden = !on; }
+function renderChecks(list) {
+  const html = list && list.length ? list.map((c) => `<div class="check ${c.ok ? "ok" : "bad"}"><span class="ic">${c.ok ? "✓" : "!"}</span>
+      <div><div>${esc(c.name)}</div>${c.msg ? `<div class="msg">${esc(c.msg)}</div>` : ""}</div></div>`).join("")
+    : '<p class="muted small">Нажмите «Проверить», чтобы убедиться, что ключи и сервисы работают.</p>';
+  $("#checksHome").innerHTML = html; $("#checksKeys").innerHTML = list ? html : "";
+}
+async function poll() {
+  try {
+    const st = await api(`/api/state?since=${S.logNext}`);
+    if (S.restarting) { location.reload(); return; }
+    S.offline = 0;
+    if (st.log.length) {
+      const box = $("#logBox");
+      const atEnd = box.scrollHeight - box.scrollTop - box.clientHeight < 40;
+      box.textContent += st.log.join("\n") + "\n";
+      if (box.textContent.length > 300000) box.textContent = box.textContent.slice(-200000);
+      if (atEnd) box.scrollTop = box.scrollHeight;
+    }
+    S.logNext = st.log_next;
+    const j = st.job;
+    S.jobRunning = j.running;
+    if (j.running) {
+      showJob(true);
+      S.lastJobKind = j.kind;
+      $("#jobTitle").textContent = KIND[j.kind] || "Работа";
+      $("#miniJobText").textContent = j.frac != null ? `${KIND[j.kind] || "Работа"} · ${Math.round(j.frac * 100)}%` : (KIND[j.kind] || "Работа");
+      $("#jobStage").textContent = j.stage || "Подготовка…";
+      const bar = $("#jobBar"), mini = $("#miniBar");
+      if (j.frac == null) { bar.classList.add("indet"); mini.classList.add("indet"); $("#jobPct").textContent = "…"; }
+      else {
+        bar.classList.remove("indet"); mini.classList.remove("indet");
+        bar.style.width = mini.style.width = (j.frac * 100).toFixed(1) + "%";
+        $("#jobPct").textContent = Math.round(j.frac * 100) + "%";
+      }
+      S.timer = { elapsed: j.elapsed_sec || 0, eta: j.eta_sec, at: Date.now() };
+      tickTimer();
+      $("#stopBtn").hidden = j.kind !== "build";
+    } else {
+      showJob(false);
+    }
+    if (st.selfcheck) renderChecks(st.selfcheck);
+    if (S.doneId === null) S.doneId = j.done_id;
+    else if (j.done_id !== S.doneId) { S.doneId = j.done_id; onJobDone(j); }
+  } catch (e) {
+    S.offline++;
+    if (S.offline === 3 && !S.restarting) toast("Нет связи с программой. Если окно было закрыто — запустите DocuStudio снова.", "err", 6000);
+  }
+  setTimeout(poll, S.restarting ? 1000 : 800);
+}
+// таймер идёт каждую секунду плавно, между ответами программы
+function fmt(sec) {
+  sec = Math.max(0, Math.round(sec));
+  const h = Math.floor(sec / 3600), m = Math.floor((sec % 3600) / 60), s = sec % 60;
+  return h ? `${h}:${String(m).padStart(2, "0")}:${String(s).padStart(2, "0")}` : `${m}:${String(s).padStart(2, "0")}`;
+}
+function tickTimer() {
+  const t = S.timer; if (!t) return;
+  const d = (Date.now() - t.at) / 1000;
+  $("#jobElapsed").textContent = fmt(t.elapsed + d);
+  $("#jobEta").textContent = t.eta == null ? "считаю…" : `~${fmt(t.eta - d)}`;
+}
+setInterval(() => { if (!$("#jobCard").hidden) tickTimer(); }, 500);
+
+function onJobDone(j) {
+  if (j.kind === "build") {
+    loadRecent();
+    if (j.error) {
+      if (S.cfg.sound_done) chime();
+      modal("Сборка остановилась", `<p>${esc(j.error)}</p><p class="muted small">Подробности — в журнале на главной и в файле error_log.txt. Пересборка продолжит с места остановки.</p>`);
+      return;
+    }
+    if (S.cfg.sound_done) chime();
+    const pid = j.result && j.result.project;
+    modal("", `<div class="big-ok"><svg viewBox="0 0 24 24"><path d="m5 12.5 4.5 4.5L19 7.5"/></svg></div>
+      <h2>Видео готово</h2><p class="muted">Сборка заняла ${esc(j.elapsed)}. Рядом с видео — субтитры, описание для YouTube и 3 обложки.</p>`, [
+      { text: "Закрыть" },
+      { text: "Открыть папку", onClick: () => api("/api/open", { what: "project", id: pid }) },
+      { text: "Смотреть", cls: "primary", onClick: async () => {
+        const list = await api("/api/projects"); const p = list.find((x) => x.id === pid);
+        if (p && p.ready) { setTimeout(() => openPlayer(p), 50); } } },
+    ]);
+  } else if (j.kind === "selfcheck") {
+    const bad = (j.result && j.result.selfcheck || []).filter((c) => !c.ok && c.critical);
+    toast(bad.length ? `Есть проблемы: ${bad.length}` : "Все подключения работают", bad.length ? "err" : "ok", 4000);
+  } else if (j.kind === "voices") {
+    if (j.error) toast(j.error, "err", 7000);
+    else { toast(`Примеры голосов готовы: ${j.result.made}`, "ok"); loadVoices(); }
+  }
+}
+const runCheck = () => api("/api/selfcheck", {}).then(() => toast("Проверяю подключения…")).catch((e) => toast(e.message, "err"));
+$("#checkBtn").onclick = runCheck;
+$("#checkBtn2").onclick = runCheck;
+
+// ---------- проекты ----------
+const ICON = {
+  folder: '<svg viewBox="0 0 24 24"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></svg>',
+  doc: '<svg viewBox="0 0 24 24"><path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z"/><path d="M14 3v5h5M9 13h6M9 17h4"/></svg>',
+  redo: '<svg viewBox="0 0 24 24"><path d="M20 12a8 8 0 1 1-2.3-5.6M20 4v5h-5"/></svg>',
+  text: '<svg viewBox="0 0 24 24"><path d="M4 6h16M4 10h16M4 14h10M4 18h7"/></svg>',
+  trash: '<svg viewBox="0 0 24 24"><path d="M4 7h16M10 11v6M14 11v6M6 7l1 13h10l1-13M9 7V4h6v3"/></svg>',
+};
+const PLAY = '<svg viewBox="0 0 24 24"><path d="m8 5 11 7-11 7z" class="fill"/></svg>';
+async function loadProjects() {
+  try { S.projects = await api("/api/projects"); } catch (e) { S.projects = []; }
+  renderProjects();
+}
+function thumbHtml(p) {
+  return p.thumb ? `<img src="${fileUrl(`/api/project_file?id=${encodeURIComponent(p.id)}&name=${p.thumb}`)}" alt="" loading="lazy">` : "";
+}
+function renderProjects() {
+  const q = ($("#projSearch").value || "").toLowerCase();
+  const f = S.projFilter || "all";
+  const list = S.projects.filter((p) => p.title.toLowerCase().includes(q) &&
+    (f === "all" || (f === "ready" && p.ready) || (f === "work" && !p.ready)));
+  const cnt = { all: S.projects.length, ready: S.projects.filter((p) => p.ready).length, work: S.projects.filter((p) => !p.ready).length };
+  $$("#projFilter .chipbtn").forEach((b) => { b.classList.toggle("on", b.dataset.f === f); $(".n", b).textContent = cnt[b.dataset.f]; });
+  const box = $("#projects");
+  if (!list.length) {
+    box.innerHTML = `<div class="empty"><svg viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="14" rx="2.5"/><path d="m10 8.5 5 2.5-5 2.5z" class="fill"/></svg>
+      <div>${S.projects.length ? "В этом разделе пока пусто" : "Проектов пока нет — соберите первое видео на главной"}</div></div>`;
+    return;
+  }
+  box.innerHTML = list.map((p, i) => `
+    <div class="pcard" style="animation-delay:${Math.min(i, 12) * 35}ms" data-id="${esc(p.id)}">
+      <div class="pthumb" data-act="video">${thumbHtml(p)}
+        ${p.ready ? `<div class="play"><span>${PLAY}</span></div>` : ""}
+        ${p.duration ? `<span class="badge">${esc(p.duration)}</span>` : ""}</div>
+      <div class="pbody">
+        <div class="ptitle">${esc(p.title)}</div>
+        <div class="pmeta"><span class="chip ${p.ready ? "ok" : p.building ? "work" : "wait"}">${p.ready ? "Готово" : p.building ? `В работе · ${p.progress}%` : "Не собрано"}</span>
+          <span>${esc(p.created)}</span>${p.size_mb ? `<span>· ${p.size_mb} МБ</span>` : ""}</div>
+        <div class="pactions">
+          ${p.building ? '<button class="btn small" disabled>Собирается…</button>'
+            : `<button class="btn small ${p.ready ? "primary" : ""}" data-act="${p.ready ? "video" : "rebuild"}">${p.ready ? "Смотреть" : "Собрать"}</button>`}
+          <span class="spacer"></span>
+          <button class="ibtn" data-act="desc" title="Описание для YouTube" ${p.has_description ? "" : "disabled"}>${ICON.text}</button>
+          <button class="ibtn" data-act="project" title="Открыть папку">${ICON.folder}</button>
+          <button class="ibtn" data-act="script" title="Открыть сценарий">${ICON.doc}</button>
+          ${p.ready ? `<button class="ibtn" data-act="rebuild" title="Пересобрать">${ICON.redo}</button>` : ""}
+          ${p.building ? "" : `<button class="ibtn danger" data-act="delete" title="Удалить">${ICON.trash}</button>`}
+        </div>
+      </div>
+    </div>`).join("");
+}
+$("#projSearch").addEventListener("input", renderProjects);
+$("#projFilter").addEventListener("click", (e) => { const b = e.target.closest(".chipbtn"); if (b) { S.projFilter = b.dataset.f; renderProjects(); } });
+// просмотр готового видео прямо в программе
+function openPlayer(p) {
+  const src = fileUrl(`/api/project_file?id=${encodeURIComponent(p.id)}&name=${encodeURIComponent(p.video)}`);
+  modal(p.title, `<video class="player" controls autoplay preload="metadata" src="${src}"></video>`, [
+    { text: "Закрыть" },
+    { text: "Папка", onClick: () => { api("/api/open", { what: "project", id: p.id }); return true; } },
+    { text: "Открыть в проигрывателе", cls: "primary", onClick: () => api("/api/open", { what: "video", id: p.id }) },
+  ]);
+  $("#modal").classList.add("wide");
+}
+// пока идёт сборка — карточки обновляются сами
+setInterval(() => { if (S.jobRunning && $("#page-projects").classList.contains("active")) loadProjects(); }, 3000);
+$("#projects").addEventListener("click", async (e) => {
+  const b = e.target.closest("[data-act]"); if (!b || b.disabled) return;
+  const id = b.closest(".pcard").dataset.id, act = b.dataset.act;
+  const p = S.projects.find((x) => x.id === id);
+  try {
+    if (act === "video" && p && !p.ready) return;
+    if (act === "video") openPlayer(p);
+    else if (["project", "script"].includes(act)) await api("/api/open", { what: act, id });
+    else if (act === "rebuild") {
+      await api("/api/rebuild", { id }); toast("Сборка началась", "ok"); go("home");
+    } else if (act === "desc") {
+      const r = await api("/api/text_file", { id, name: "description.txt" });
+      modal("Описание для YouTube", `<textarea id="descText">${esc(r.text)}</textarea>`, [
+        { text: "Закрыть" },
+        { text: "Скопировать", cls: "primary", onClick: async () => {
+          await navigator.clipboard.writeText($("#descText").value).catch(() => { $("#descText").select(); document.execCommand("copy"); });
+          toast("Описание скопировано", "ok"); return true; } },
+      ]);
+    } else if (act === "delete") {
+      modal("Удалить проект?", `<p>«${esc(p ? p.title : id)}» — видео, озвучка и скачанные кадры будут удалены без возможности восстановить.</p>`, [
+        { text: "Отмена" },
+        { text: "Удалить", cls: "primary", onClick: async () => { await api("/api/delete_project", { id }); toast("Проект удалён"); loadProjects(); loadRecent(); } },
+      ]);
+    }
+  } catch (err) { toast(err.message, "err"); }
+});
+async function loadRecent() {
+  let list = [];
+  try { list = await api("/api/projects"); } catch (e) {}
+  S.projects = list;
+  const box = $("#recent");
+  if (!list.length) { box.innerHTML = '<p class="muted small">Здесь появятся ваши видео.</p>'; return; }
+  box.innerHTML = list.slice(0, 4).map((p) => `<div class="ritem" data-id="${esc(p.id)}">
+      ${p.thumb ? thumbHtml(p) : '<div class="ph"></div>'}
+      <div><div class="t">${esc(p.title)}</div><div class="s">${p.ready ? "Готово" : p.building ? "В работе" : "Не собрано"} · ${esc(p.created)}${p.duration ? " · " + esc(p.duration) : ""}</div></div></div>`).join("");
+}
+$("#recent").addEventListener("click", (e) => {
+  const r = e.target.closest(".ritem"); if (!r) return;
+  const p = S.projects.find((x) => x.id === r.dataset.id);
+  if (p && p.ready) openPlayer(p);
+  else go("projects");
+});
+
+// ---------- голоса ----------
+const player = new Audio();
+let playingBtn = null;
+const STOPI = '<svg viewBox="0 0 24 24"><rect x="7" y="6" width="3.5" height="12" rx="1" class="fill"/><rect x="13.5" y="6" width="3.5" height="12" rx="1" class="fill"/></svg>';
+let playingKey = null, lastPlayStart = 0;
+function stopAudio() {
+  player.pause();
+  if (playingBtn) playingBtn.innerHTML = PLAY;
+  playingBtn = null; playingKey = null;
+}
+// играет всегда только один звук: новый останавливает предыдущий
+function playUrl(url, btn, key) {
+  if (playingBtn) playingBtn.innerHTML = PLAY;
+  player.pause();
+  player.src = url;
+  player.play().catch(() => toast("Не удалось воспроизвести", "err"));
+  btn.innerHTML = STOPI; playingBtn = btn; playingKey = key || url; lastPlayStart = Date.now();
+}
+player.addEventListener("ended", () => { if (playingBtn) playingBtn.innerHTML = PLAY; playingBtn = null; playingKey = null; });
+document.addEventListener("visibilitychange", () => { if (document.hidden) stopAudio(); });
+const PROV = { yandex: "Yandex SpeechKit", edge: "Edge (бесплатно)", elevenlabs: "ElevenLabs", openai: "OpenAI" };
+const VS = { provider: null, list: [], defText: "", filter: "doc", role: {} };
+function sampleText() {
+  let t = "";
+  try { t = localStorage.getItem("ds-sample") || ""; } catch (e) {}
+  return t || VS.defText || "";
+}
+function currentVoice(provider) {
+  return provider === "edge" ? (S.cfg.edge_voice || "ru-RU-DmitryNeural") : (S.cfg.yandex_voice || "alexander");
+}
+async function fetchVoices(provider) {
+  const r = await api(`/api/voices?provider=${provider}&text=${encodeURIComponent(sampleText())}`);
+  if (!VS.defText) VS.defText = r.default_text;
+  return r.items;
+}
+// прослушать: если примера нет — программа озвучит его (1–3 секунды) и сразу включит
+async function playVoice(provider, value, btn) {
+  const key = provider + "|" + value;
+  if (!player.paused && playingKey === key) { stopAudio(); return; }      // повторное нажатие — стоп
+  if (!player.paused && playingBtn === btn) stopAudio();
+  const clickedAt = Date.now();
+  btn.classList.add("loading"); btn.disabled = true;
+  try {
+    const r = await api("/api/voice_sample", { provider, value, text: sampleText() });
+    if (!r.ok) { toast(r.error, "err", 8000); return; }
+    // пока этот пример готовился, уже заиграл другой — этот не включаем, он готов по нажатию
+    if (lastPlayStart > clickedAt || !document.body.contains(btn)) return;
+    playUrl(fileUrl(`/api/voice_audio?provider=${provider}&value=${encodeURIComponent(value)}&h=${r.h}`), btn, key);
+    const row = btn.closest(".vrow");
+    if (row) $$(`.role[data-value="${CSS.escape(value)}"]`, row).forEach((x) => { if (!$(".d", x)) x.insertAdjacentHTML("beforeend", '<span class="d"></span>'); });
+  } catch (e) { toast(e.message, "err", 8000); }
+  finally { btn.classList.remove("loading"); btn.disabled = false; }
+}
+function voiceTitle(item, value) {
+  const role = item.roles.find((r) => r.value === value);
+  return item.name + (role ? ` — ${role.name}` : "") + (item.model === "livetts" ? " (LiveTTS)" : "");
+}
+async function loadVoices() {
+  if (!VS.provider) VS.provider = S.cfg.tts_provider === "edge" ? "edge" : "yandex";
+  const prov = VS.provider;
+  $$("#provSeg button").forEach((b) => b.classList.toggle("on", b.dataset.v === prov));
+  $("#sampleText").value = sampleText();
+  try { VS.list = await fetchVoices(prov); } catch (e) { VS.list = []; toast(e.message, "err"); }
+  const used = (S.cfg.tts_provider || "yandex") === prov;
+  $("#provState").innerHTML = used ? '<span class="chip ok">Используется для озвучки видео</span>'
+    : `<button class="btn primary small" id="useProv">Озвучивать видео через ${esc(PROV[prov])}</button>`;
+  if (!used) $("#useProv").onclick = () => { save({ tts_provider: prov }); setTimeout(() => { loadVoices(); renderVoiceCard(); }, 60); };
+  $("#provTitle").textContent = prov === "edge" ? "Голоса Microsoft Edge" : "Голоса Yandex SpeechKit";
+  $("#provHint").textContent = prov === "edge"
+    ? "Бесплатно и без ключа. Нажмите ▶, чтобы послушать."
+    : "Нажмите ▶ — программа озвучит фразу выбранным голосом за пару секунд (нужен ключ Yandex). Под именем — манеры речи (амплуа).";
+  $("#voiceFilter").hidden = prov === "edge";
+  $("#speedBox").hidden = prov === "edge";
+  const cur = currentVoice(prov);
+  const curVoice = cur.split(":")[0];
+  let list = VS.list;
+  if (prov === "yandex") {
+    const f = VS.filter;
+    list = list.filter((v) => f === "all" || (f === "doc" && v.doc) || (f === "m" && v.gender === "м") || (f === "f" && v.gender === "ж") || v.voice === curVoice);
+  }
+  $("#voices").innerHTML = list.map((v) => {
+    const values = v.roles.length ? v.roles.map((r) => r.value) : [v.voice];
+    const selVal = VS.role[v.voice] || (v.voice === curVoice ? cur : values[0]);
+    const isCur = v.voice === curVoice;
+    const roles = v.roles.length > 1 ? `<div class="roles">${v.roles.map((r) => `<button class="role ${r.value === selVal ? "on" : ""}" data-value="${esc(r.value)}">${esc(r.name)}${v.samples.includes(r.value) ? '<span class="d"></span>' : ""}</button>`).join("")}</div>` : "";
+    const tags = (v.doc && prov === "yandex" ? '<span class="tag doc">для документалок</span>' : "") + (v.model === "livetts" ? '<span class="tag">LiveTTS</span>' : "");
+    return `<div class="vrow ${isCur ? "sel" : ""}" data-voice="${esc(v.voice)}" data-value="${esc(selVal)}">
+      <button class="playbtn" data-play title="Прослушать">${PLAY}</button>
+      <div class="name">${esc(v.name)}${tags}<small>${v.gender === "м" ? "мужской" : "женский"}${isCur ? " · выбран: " + esc(voiceTitle(v, cur)) : ""}</small>${roles}</div>
+      ${isCur && selVal === cur ? '<span class="chip ok">Выбран</span>' : '<button class="btn small ghost" data-pick>Выбрать</button>'}</div>`;
+  }).join("");
+  const sp = $("#speed"); sp.value = S.cfg.yandex_speed || 1.0; rangeFill(sp); $("#speedVal").textContent = `${parseFloat(sp.value).toFixed(2)}×`;
+}
+$("#provSeg").addEventListener("click", (e) => { const b = e.target.closest("button"); if (!b) return; VS.provider = b.dataset.v; VS.role = {}; loadVoices(); });
+$("#voiceFilter").addEventListener("click", (e) => {
+  const b = e.target.closest(".chipbtn"); if (!b) return;
+  VS.filter = b.dataset.f; $$("#voiceFilter .chipbtn").forEach((x) => x.classList.toggle("on", x === b)); loadVoices();
+});
+$("#voices").addEventListener("click", (e) => {
+  const row = e.target.closest(".vrow"); if (!row) return;
+  const role = e.target.closest(".role");
+  if (role) {
+    VS.role[row.dataset.voice] = role.dataset.value; row.dataset.value = role.dataset.value;
+    $$(".role", row).forEach((x) => x.classList.toggle("on", x === role));
+    playVoice(VS.provider, role.dataset.value, $("[data-play]", row));
+    return;
+  }
+  if (e.target.closest("[data-play]")) playVoice(VS.provider, row.dataset.value, e.target.closest("[data-play]"));
+  if (e.target.closest("[data-pick]")) {
+    const key = VS.provider === "edge" ? "edge_voice" : "yandex_voice";
+    const vals = { [key]: row.dataset.value };
+    if ((S.cfg.tts_provider || "yandex") !== VS.provider) vals.tts_provider = VS.provider;
+    save(vals); toast("Голос выбран", "ok", 1500);
+    setTimeout(() => { loadVoices(); renderVoiceCard(); }, 60);
+  }
+});
+$("#sampleText").addEventListener("change", (e) => {
+  try { localStorage.setItem("ds-sample", e.target.value.trim()); } catch (err) {}
+  loadVoices(); renderVoiceCard();
+});
+$("#sampleReset").onclick = () => { try { localStorage.removeItem("ds-sample"); } catch (e) {} loadVoices(); renderVoiceCard(); };
+$("#speed").addEventListener("input", (e) => { rangeFill(e.target); $("#speedVal").textContent = `${parseFloat(e.target.value).toFixed(2)}×`; });
+$("#speed").addEventListener("change", (e) => save({ yandex_speed: String(e.target.value) }));
+$("#speedReset").onclick = () => { const sp = $("#speed"); sp.value = 1.0; rangeFill(sp); $("#speedVal").textContent = "1.00×"; save({ yandex_speed: "1.0" }); };
+$("#samplesBtn").onclick = () => api("/api/voice_samples", { provider: VS.provider || "yandex", text: sampleText() })
+  .then(() => toast("Озвучиваю все голоса — прогресс на главной, можно оставаться здесь")).catch((e) => toast(e.message, "err"));
+
+// карточка «Голос диктора» на главной — меняется вместе с настройками
+async function renderVoiceCard() {
+  const prov = S.cfg.tts_provider || "yandex";
+  const btn = $("#homePlay");
+  btn.innerHTML = PLAY;
+  $("#homeProv").textContent = PROV[prov] || prov;
+  if (prov !== "yandex" && prov !== "edge") {
+    $("#homeVoice").textContent = prov === "elevenlabs" ? (S.cfg.elevenlabs_voice_id ? "голос из настроек" : "голос не указан") : "голос из настроек";
+    btn.disabled = true; btn.onclick = null; return;
+  }
+  btn.disabled = false;
+  const value = currentVoice(prov);
+  let title = value;
+  try {
+    const items = await fetchVoices(prov);
+    const it = items.find((v) => v.voice === value.split(":")[0]);
+    if (it) title = voiceTitle(it, value);
+  } catch (e) {}
+  $("#homeVoice").textContent = title;
+  btn.onclick = () => playVoice(prov, value, btn);
+}
+
+// ---------- музыка ----------
+async function loadMusic() {
+  let list = [];
+  try { list = await api("/api/music"); } catch (e) {}
+  const v = $("#musicVol"); v.value = S.cfg.music_volume ?? 0.12; rangeFill(v); $("#volVal").textContent = Math.round(v.value * 100) + "%";
+  $("#music").innerHTML = list.length ? list.map((m) => `<div class="vrow" data-rel="${esc(m.rel)}">
+      <button class="playbtn" data-play>${PLAY}</button>
+      <div class="name">${esc(m.name)}<small>${m.folder ? "ниша: " + esc(m.folder) + " · " : ""}${m.size_mb} МБ</small></div></div>`).join("")
+    : '<p class="muted small mt">В папке music пока нет треков. Видео соберётся и без музыки.</p>';
+}
+$("#music").addEventListener("click", (e) => {
+  const b = e.target.closest("[data-play]"); if (!b) return;
+  if (playingBtn === b && !player.paused) { stopAudio(); return; }
+  playUrl(fileUrl(`/api/music_audio?rel=${encodeURIComponent(b.closest(".vrow").dataset.rel)}`), b);
+});
+$("#musicVol").addEventListener("input", (e) => { rangeFill(e.target); $("#volVal").textContent = Math.round(e.target.value * 100) + "%"; });
+$("#musicVol").addEventListener("change", (e) => save({ music_volume: parseFloat(e.target.value) }));
+
+// ---------- обновления и ярлык ----------
+async function updateFromZip(f) {
+  try {
+    toast("Устанавливаю обновление…", "", 5000);
+    const r = await api("/api/update_zip", await f.arrayBuffer(), true);
+    toast(`Обновлено до версии ${r.version}. Перезапуск…`, "ok", 5000);
+    S.restarting = true;
+  } catch (e) { toast("Обновление не установлено: " + e.message, "err", 7000); }
+}
+$("#updFile").addEventListener("change", (e) => { if (e.target.files[0]) updateFromZip(e.target.files[0]); e.target.value = ""; });
+$("#updCheck").onclick = async () => {
+  try {
+    const r = await api("/api/check_update", {});
+    if (!r.ok) { toast(r.error, "err", 5000); return; }
+    if (!r.newer) { toast(`У вас последняя версия (${r.current})`, "ok"); return; }
+    modal("Есть новая версия", `<p>Установлена ${esc(r.current)}, доступна <b>${esc(r.latest)}</b>.</p>`, [
+      { text: "Позже" },
+      { text: "Обновить", cls: "primary", onClick: async () => {
+        try { const u = await api("/api/update_online", {}); toast(`Обновлено до ${u.version}. Перезапуск…`, "ok", 5000); S.restarting = true; }
+        catch (e) { toast(e.message, "err", 7000); } } },
+    ]);
+  } catch (e) { toast(e.message, "err"); }
+};
+$("#shortcutBtn").onclick = () => api("/api/shortcut", {}).then((r) => toast(r.ok ? "Ярлык DocuStudio на рабочем столе готов" : "Не удалось создать ярлык", r.ok ? "ok" : "err")).catch((e) => toast(e.message, "err"));
+
+// при запуске программа сама проверяет, есть ли новая версия на GitHub
+async function autoUpdateCheck() {
+  if (!S.cfg.update_repo || S.jobRunning) return;
+  try {
+    const r = await api("/api/check_update", {});
+    if (!r.ok || !r.newer) return;
+    modal("Доступно обновление", `<p>Установлена версия ${esc(r.current)}. Доступна <b>${esc(r.latest)}</b>.</p>
+      <p class="muted small">Ключи, проекты, футажи и музыка сохранятся. Программа перезапустится сама.</p>`, [
+      { text: "Позже" },
+      { text: "Обновить", cls: "primary", onClick: async () => {
+        try { const u = await api("/api/update_online", {}); toast(`Обновлено до ${u.version}. Перезапуск…`, "ok", 5000); S.restarting = true; }
+        catch (e) { toast("Не обновилось: " + e.message, "err", 7000); } } },
+    ]);
+  } catch (e) {}
+}
+
+// окно закрывается — программа завершится сама, если ничего не собирается
+window.addEventListener("pagehide", () => { try { navigator.sendBeacon(`/api/bye?t=${encodeURIComponent(TOKEN)}`); } catch (e) {} });
+
+// ---------- старт ----------
+async function loadInit() {
+  const d = await api("/api/init");
+  S.cfg = d.cfg; S.niches = d.niches; S.voices = d.voices;
+  $("#ver").textContent = "версия " + d.version;
+  $("#verText").textContent = d.version;
+  $("#aboutVer").textContent = "Версия " + d.version;
+  const opts = d.niches.map((n) => `<option value="${esc(n.id)}">${esc(n.name)}</option>`).join("");
+  $("#nicheSel").innerHTML = opts; $("#defNiche").innerHTML = opts;
+  $("#nicheSel").value = d.cfg.default_niche || (d.niches[0] && d.niches[0].id);
+  applyTheme(d.cfg.theme || "light");
+  bindSettings();
+  renderKeys();
+}
+(async function start() {
+  try { await loadInit(); }
+  catch (e) { toast("Программа не отвечает. Закройте окно и запустите DocuStudio снова.", "err", 10000); }
+  loadRecent();
+  renderVoiceCard();
+  poll();
+  setTimeout(autoUpdateCheck, 2500);
+  if (!S.cfg.yandex_api_key || !S.cfg.pixabay_key) {
+    setTimeout(() => toast("Сначала вставьте ключи: Параметры → Сервисы и ключи", "", 6000), 600);
+  }
+})();

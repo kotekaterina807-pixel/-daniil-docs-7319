@@ -1,0 +1,15 @@
+# данные пользователя — в репозиторий не попадают
+config.json
+output/
+voice_samples/
+footage/*
+!footage/README.txt
+music/*
+!music/README.txt
+.venv/
+.ui_port
+.ui_token
+.ui_profile/
+error_log.txt
+__pycache__/
+*.pyc
