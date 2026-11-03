@@ -108,6 +108,7 @@ $$("#themeSeg button").forEach((b) => b.onclick = () => { S.cfg.theme = b.datase
 // ---------- навигация ----------
 function go(page) {
   stopAudio();
+  if (page === "home") renderVoiceCard();
   $$(".nav-item").forEach((n) => n.classList.toggle("active", n.dataset.page === page));
   $$(".page").forEach((p) => p.classList.toggle("active", p.id === `page-${page}`));
   $("#pageTitle").textContent = PAGES[page][0];
@@ -122,6 +123,8 @@ $$(".nav-item").forEach((n) => n.onclick = () => go(n.dataset.page));
 document.addEventListener("click", (e) => {
   const g = e.target.closest("[data-goto]");
   if (g) go(g.dataset.goto);
+  const u = e.target.closest("[data-url]");
+  if (u) api("/api/open_url", { url: u.dataset.url }).catch((err) => toast(err.message, "err"));
   const o = e.target.closest("[data-open]");
   if (o) api("/api/open", { what: o.dataset.open }).catch((err) => toast(err.message, "err"));
 });
@@ -542,7 +545,7 @@ const VS = { provider: null, list: [], defText: "", filter: "doc", role: {} };
 function sampleText() {
   let t = "";
   try { t = localStorage.getItem("ds-sample") || ""; } catch (e) {}
-  return t || VS.defText || "";
+  return t || VS.defText || DEF_TEXT;
 }
 function currentVoice(provider) {
   return provider === "edge" ? (S.cfg.edge_voice || "ru-RU-DmitryNeural") : (S.cfg.yandex_voice || "alexander");
@@ -574,75 +577,83 @@ function voiceTitle(item, value) {
   const role = item.roles.find((r) => r.value === value);
   return item.name + (role ? ` — ${role.name}` : "") + (item.model === "livetts" ? " (LiveTTS)" : "");
 }
+// ---------- голоса ElevenLabs ----------
+const DEF_TEXT = "В декабре тысяча девятисотого года с маяка на крошечном острове исчезли три смотрителя. Их так и не нашли.";
+const EL = { voices: [], current: "", hasKey: false };
+function elRange(el, val, label, digits = 2) { el.value = val; rangeFill(el); $(label).textContent = parseFloat(el.value).toFixed(digits) + (label === "#elSpeedVal" ? "×" : ""); }
 async function loadVoices() {
-  if (!VS.provider) VS.provider = S.cfg.tts_provider === "edge" ? "edge" : "yandex";
-  const prov = VS.provider;
-  $$("#provSeg button").forEach((b) => b.classList.toggle("on", b.dataset.v === prov));
   $("#sampleText").value = sampleText();
-  try { VS.list = await fetchVoices(prov); } catch (e) { VS.list = []; toast(e.message, "err"); }
-  const used = (S.cfg.tts_provider || "yandex") === prov;
-  $("#provState").innerHTML = used ? '<span class="chip ok">Используется для озвучки видео</span>'
-    : `<button class="btn primary small" id="useProv">Озвучивать видео через ${esc(PROV[prov])}</button>`;
-  if (!used) $("#useProv").onclick = () => { save({ tts_provider: prov }); setTimeout(() => { loadVoices(); renderVoiceCard(); }, 60); };
-  $("#provTitle").textContent = prov === "edge" ? "Голоса Microsoft Edge" : "Голоса Yandex SpeechKit";
-  $("#provHint").textContent = prov === "edge"
-    ? "Бесплатно и без ключа. Нажмите ▶, чтобы послушать."
-    : "Нажмите ▶ — программа озвучит фразу выбранным голосом за пару секунд (нужен ключ Yandex). Под именем — манеры речи (амплуа).";
-  $("#voiceFilter").hidden = prov === "edge";
-  $("#speedBox").hidden = prov === "edge";
-  const cur = currentVoice(prov);
-  const curVoice = cur.split(":")[0];
-  let list = VS.list;
-  if (prov === "yandex") {
-    const f = VS.filter;
-    list = list.filter((v) => f === "all" || (f === "doc" && v.doc) || (f === "m" && v.gender === "м") || (f === "f" && v.gender === "ж") || v.voice === curVoice);
+  let d = { voices: [], current: "", has_key: false };
+  try { d = await api("/api/eleven", {}); } catch (e) { toast(e.message, "err"); }
+  EL.voices = d.voices; EL.current = d.current; EL.hasKey = d.has_key;
+  const box = $("#elVoices");
+  if (!d.has_key) {
+    box.innerHTML = '<div class="empty" style="padding:30px"><div>Сначала вставьте ключ ElevenLabs:<br><b>Параметры → Сервисы и ключи → Ключ ElevenLabs</b></div><button class="btn primary mt" data-goto="settings">Открыть параметры</button></div>';
+  } else if (!EL.voices.length) {
+    box.innerHTML = '<div class="empty" style="padding:30px"><div>Голосов пока нет. Добавьте голос по ID справа или нажмите «Загрузить все мои голоса».</div></div>';
+  } else {
+    box.innerHTML = EL.voices.map((v) => {
+      const cur = v.id === EL.current;
+      return `<div class="vrow ${cur ? "sel" : ""}" data-id="${esc(v.id)}">
+        <button class="playbtn" data-preview ${v.preview ? "" : "disabled"} title="Пример с сайта ElevenLabs">${PLAY}</button>
+        <div class="name">${esc(v.name)}<small>${esc(v.desc || v.category || "")}</small></div>
+        <button class="btn small ghost" data-mine title="Озвучить вашу фразу этим голосом (тратит ~${sampleText().length} символов)">${PLAY}Моя фраза</button>
+        ${cur ? '<span class="chip ok">Выбран</span>' : '<button class="btn small ghost" data-pick>Выбрать</button>'}
+        <button class="ibtn danger" data-del title="Убрать из списка">${ICON.trash}</button></div>`;
+    }).join("");
   }
-  $("#voices").innerHTML = list.map((v) => {
-    const values = v.roles.length ? v.roles.map((r) => r.value) : [v.voice];
-    const selVal = VS.role[v.voice] || (v.voice === curVoice ? cur : values[0]);
-    const isCur = v.voice === curVoice;
-    const roles = v.roles.length > 1 ? `<div class="roles">${v.roles.map((r) => `<button class="role ${r.value === selVal ? "on" : ""}" data-value="${esc(r.value)}">${esc(r.name)}${v.samples.includes(r.value) ? '<span class="d"></span>' : ""}</button>`).join("")}</div>` : "";
-    const tags = (v.doc && prov === "yandex" ? '<span class="tag doc">для документалок</span>' : "") + (v.model === "livetts" ? '<span class="tag">LiveTTS</span>' : "");
-    return `<div class="vrow ${isCur ? "sel" : ""}" data-voice="${esc(v.voice)}" data-value="${esc(selVal)}">
-      <button class="playbtn" data-play title="Прослушать">${PLAY}</button>
-      <div class="name">${esc(v.name)}${tags}<small>${v.gender === "м" ? "мужской" : "женский"}${isCur ? " · выбран: " + esc(voiceTitle(v, cur)) : ""}</small>${roles}</div>
-      ${isCur && selVal === cur ? '<span class="chip ok">Выбран</span>' : '<button class="btn small ghost" data-pick>Выбрать</button>'}</div>`;
-  }).join("");
-  const sp = $("#speed"); sp.value = S.cfg.yandex_speed || 0.85; rangeFill(sp); $("#speedVal").textContent = `${parseFloat(sp.value).toFixed(2)}×`;
+  elRange($("#elSpeed"), S.cfg.eleven_speed ?? 0.9, "#elSpeedVal");
+  elRange($("#elStab"), S.cfg.eleven_stability ?? 0.45, "#elStabVal");
+  if (d.has_key) loadUsage();
 }
-$("#provSeg").addEventListener("click", (e) => { const b = e.target.closest("button"); if (!b) return; VS.provider = b.dataset.v; VS.role = {}; loadVoices(); });
-$("#voiceFilter").addEventListener("click", (e) => {
-  const b = e.target.closest(".chipbtn"); if (!b) return;
-  VS.filter = b.dataset.f; $$("#voiceFilter .chipbtn").forEach((x) => x.classList.toggle("on", x === b)); loadVoices();
-});
-$("#voices").addEventListener("click", (e) => {
+async function loadUsage() {
+  const r = await api("/api/eleven_usage", {}).catch((e) => ({ ok: false, error: e.message }));
+  if (!r.ok) { $("#elUsage").innerHTML = `<span style="color:var(--danger)">${esc(r.error)}</span>`; return; }
+  const left = Math.max(0, (r.limit || 0) - (r.used || 0));
+  $("#elUsage").innerHTML = `Тариф: <b>${esc(r.tier)}</b> · осталось символов: <b>${left.toLocaleString("ru-RU")}</b> из ${(r.limit || 0).toLocaleString("ru-RU")}<br>Это примерно <b>${Math.floor(left / 1100)} мин</b> озвучки (3-минутное видео ≈ 3 300 символов).`;
+}
+$("#elVoices").addEventListener("click", async (e) => {
   const row = e.target.closest(".vrow"); if (!row) return;
-  const role = e.target.closest(".role");
-  if (role) {
-    VS.role[row.dataset.voice] = role.dataset.value; row.dataset.value = role.dataset.value;
-    $$(".role", row).forEach((x) => x.classList.toggle("on", x === role));
-    playVoice(VS.provider, role.dataset.value, $("[data-play]", row));
-    return;
+  const id = row.dataset.id, v = EL.voices.find((x) => x.id === id);
+  const pv = e.target.closest("[data-preview]");
+  if (pv && v && v.preview) {
+    if (playingBtn === pv && !player.paused) { stopAudio(); return; }
+    playUrl(v.preview, pv, "pv|" + id); return;
   }
-  if (e.target.closest("[data-play]")) playVoice(VS.provider, row.dataset.value, e.target.closest("[data-play]"));
+  const mine = e.target.closest("[data-mine]");
+  if (mine) { playVoice("eleven", id, mine); return; }
   if (e.target.closest("[data-pick]")) {
-    const key = VS.provider === "edge" ? "edge_voice" : "yandex_voice";
-    const vals = { [key]: row.dataset.value };
-    if ((S.cfg.tts_provider || "yandex") !== VS.provider) vals.tts_provider = VS.provider;
-    save(vals); toast("Голос выбран", "ok", 1500);
-    setTimeout(() => { loadVoices(); renderVoiceCard(); }, 60);
+    Object.assign(S.cfg, { elevenlabs_voice_id: id, tts_provider: "elevenlabs" }); EL.current = id;
+    await api("/api/save", { values: { elevenlabs_voice_id: id, tts_provider: "elevenlabs" } }).catch((err) => toast(err.message, "err"));
+    toast(`Голос «${v ? v.name : id}» выбран для озвучки видео`, "ok"); loadVoices(); renderVoiceCard(); return;
+  }
+  if (e.target.closest("[data-del]")) {
+    await api("/api/eleven_remove", { id }).catch((err) => toast(err.message, "err")); loadVoices(); renderVoiceCard();
   }
 });
-$("#sampleText").addEventListener("change", (e) => {
-  try { localStorage.setItem("ds-sample", e.target.value.trim()); } catch (err) {}
-  loadVoices(); renderVoiceCard();
-});
-$("#sampleReset").onclick = () => { try { localStorage.removeItem("ds-sample"); } catch (e) {} loadVoices(); renderVoiceCard(); };
-$("#speed").addEventListener("input", (e) => { rangeFill(e.target); $("#speedVal").textContent = `${parseFloat(e.target.value).toFixed(2)}×`; });
-$("#speed").addEventListener("change", (e) => save({ yandex_speed: String(e.target.value) }));
-$("#speedReset").onclick = () => { const sp = $("#speed"); sp.value = 0.85; rangeFill(sp); $("#speedVal").textContent = "0.85×"; save({ yandex_speed: "0.85" }); };
-$("#samplesBtn").onclick = () => api("/api/voice_samples", { provider: VS.provider || "yandex", text: sampleText() })
-  .then(() => toast("Озвучиваю все голоса — прогресс на главной, можно оставаться здесь")).catch((e) => toast(e.message, "err"));
+$("#elAddBtn").onclick = async () => {
+  const val = $("#elAddId").value.trim(); if (!val) { $("#elAddId").focus(); return; }
+  const b = $("#elAddBtn"); b.disabled = true;
+  try {
+    const r = await api("/api/eleven_add", { voice: val });
+    toast(`Голос «${r.voice.name}» добавлен`, "ok"); $("#elAddId").value = "";
+    const d = await api("/api/init"); S.cfg = d.cfg; loadVoices(); renderVoiceCard();
+  } catch (e) { toast(e.message, "err", 8000); } finally { b.disabled = false; }
+};
+$("#elAddId").addEventListener("keydown", (e) => { if (e.key === "Enter") $("#elAddBtn").click(); });
+$("#elImportBtn").onclick = async () => {
+  try { const r = await api("/api/eleven_import", {}); toast(r.added ? `Добавлено голосов: ${r.added}` : "Новых голосов в аккаунте нет", "ok"); loadVoices(); }
+  catch (e) { toast(e.message, "err", 8000); }
+};
+$("#elLibBtn").onclick = () => api("/api/open_url", { url: "https://elevenlabs.io/app/voice-library" }).catch((e) => toast(e.message, "err"));
+$("#elUsageBtn").onclick = loadUsage;
+$("#elSpeed").addEventListener("input", (e) => elRange(e.target, e.target.value, "#elSpeedVal"));
+$("#elSpeed").addEventListener("change", (e) => save({ eleven_speed: parseFloat(e.target.value) }));
+$("#elSpeedReset").onclick = () => { elRange($("#elSpeed"), 0.9, "#elSpeedVal"); save({ eleven_speed: 0.9 }); };
+$("#elStab").addEventListener("input", (e) => elRange(e.target, e.target.value, "#elStabVal"));
+$("#elStab").addEventListener("change", (e) => save({ eleven_stability: parseFloat(e.target.value) }));
+$("#sampleText").addEventListener("change", (e) => { try { localStorage.setItem("ds-sample", e.target.value.trim()); } catch (err) {} });
+$("#sampleReset").onclick = () => { try { localStorage.removeItem("ds-sample"); } catch (e) {} $("#sampleText").value = sampleText(); };
 
 // карточка «Голос диктора» на главной — меняется вместе с настройками
 async function renderVoiceCard() {
@@ -650,9 +661,17 @@ async function renderVoiceCard() {
   const btn = $("#homePlay");
   btn.innerHTML = PLAY;
   $("#homeProv").textContent = PROV[prov] || prov;
+  if (prov === "elevenlabs") {
+    let d = { voices: [], current: "" };
+    try { d = await api("/api/eleven", {}); } catch (e) {}
+    const v = d.voices.find((x) => x.id === d.current);
+    $("#homeVoice").textContent = v ? v.name : (d.current ? d.current : "голос не выбран — вкладка «Голоса»");
+    btn.disabled = !d.current;
+    btn.onclick = d.current ? () => playVoice("eleven", d.current, btn) : null;
+    return;
+  }
   if (prov !== "yandex" && prov !== "edge") {
-    $("#homeVoice").textContent = prov === "elevenlabs" ? (S.cfg.elevenlabs_voice_id ? "голос из настроек" : "голос не указан") : "голос из настроек";
-    btn.disabled = true; btn.onclick = null; return;
+    $("#homeVoice").textContent = "голос из настроек"; btn.disabled = true; btn.onclick = null; return;
   }
   btn.disabled = false;
   const value = currentVoice(prov);
@@ -765,7 +784,7 @@ async function loadInit() {
   renderVoiceCard();
   poll();
   setTimeout(autoUpdateCheck, 2500);
-  if (!S.cfg.yandex_api_key || !S.cfg.pixabay_key) {
+  if (!S.cfg.elevenlabs_key || !S.cfg.pixabay_key) {
     setTimeout(() => toast("Сначала вставьте ключи: Параметры → Сервисы и ключи", "", 6000), 600);
   }
 })();

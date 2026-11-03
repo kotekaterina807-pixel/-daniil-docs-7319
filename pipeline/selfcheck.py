@@ -123,9 +123,50 @@ def _wikimedia():
         return (name, False, f"недоступен ({type(e).__name__}) — архивные фото брать не получится", False)
 
 
+def _eleven(cfg):
+    name = "Озвучка ElevenLabs"
+    if not str(cfg.get("elevenlabs_key", "")).strip():
+        return (name, False, "не указан ключ ElevenLabs", True)
+    try:
+        sub = tts.el_subscription(cfg)
+    except Exception as e:
+        return (name, False, str(e)[:300], True)
+    left = max(0, int(sub["limit"] or 0) - int(sub["used"] or 0))
+    msg = f"ключ работает, тариф {sub['tier']}, осталось символов: {left:,}".replace(",", " ")
+    if not str(cfg.get("elevenlabs_voice_id", "")).strip():
+        return (name, False, msg + " — но голос не выбран (вкладка «Голоса»)", True)
+    return (name, True, msg + f" (~{left // 1100} мин озвучки)", True)
+
+
+def _claude(cfg):
+    name = "Проверка кадров — Claude"
+    if not str(cfg.get("anthropic_key", "")).strip():
+        return (name, False, "не указан ключ Claude — кадры будут выбираться через листы в чат", False)
+    im = Image.new("RGB", (64, 64), (40, 90, 160))
+    buf = io.BytesIO()
+    im.save(buf, "JPEG")
+    content = [{"type": "image", "b64": base64.b64encode(buf.getvalue()).decode()},
+               {"type": "text", "text": 'Какого цвета эта картинка? Верни СТРОГО JSON: {"color": "одно слово"}'}]
+    try:
+        ans = llm.chat(dict(cfg, llm_provider="claude"), "", content, 50, "vision", lambda m: None).strip()
+        return (name, bool(ans), f"Claude отвечает («{ans[:40]}»)" if ans else "пустой ответ", True)
+    except Exception as e:
+        return (name, False, str(e)[:300], True)
+
+
 def run_all(cfg, log=print):
-    checks = [_ffmpeg, _gpu, _disk, lambda: _yandex_tts(cfg), lambda: _yandex_vision(cfg),
-              lambda: _pixabay(cfg), _wikimedia]
+    checks = [_ffmpeg, _gpu, _disk]
+    prov = cfg.get("tts_provider", "elevenlabs")
+    if prov == "elevenlabs":
+        checks.append(lambda: _eleven(cfg))
+    elif prov == "yandex":
+        checks.append(lambda: _yandex_tts(cfg))
+    mode = cfg.get("visual_check", "claude")
+    if mode == "claude":
+        checks.append(lambda: _claude(cfg))
+    elif mode == "auto":
+        checks.append(lambda: _yandex_vision(cfg))
+    checks += [lambda: _pixabay(cfg), _wikimedia]
     out = []
     for fn in checks:
         try:

@@ -67,22 +67,103 @@ def _openai(cfg, text, out_mp3, instructions, log):
                 body, out_mp3, log)
 
 
-def _elevenlabs(cfg, text, out_mp3, prev_text, next_text, log):
-    key = cfg.get("elevenlabs_key", "").strip()
-    voice = cfg.get("elevenlabs_voice_id", "").strip()
-    if not key or not voice:
-        raise TTSError("Не указан ключ ElevenLabs или ID голоса в настройках.")
+EL_API = "https://api.elevenlabs.io/v1"
+
+
+def _el_key(cfg):
+    key = str(cfg.get("elevenlabs_key", "")).strip()
+    if not key:
+        raise TTSError("Не указан ключ ElevenLabs — вставьте его в «Параметры → Сервисы и ключи».")
+    return key
+
+
+def el_error(r):
+    """Понятный текст ошибки ElevenLabs."""
+    t = r.text[:400]
+    low = t.lower()
+    if r.status_code == 401 and "unusual_activity" in low:
+        return ("ElevenLabs отключил бесплатный тариф для этого подключения (VPN/прокси). "
+                "Нужен платный тариф ElevenLabs — на нём это ограничение не действует.")
+    if r.status_code == 401:
+        return "ElevenLabs не принял ключ — скопируйте его заново в Profile → API Keys."
+    if "quota_exceeded" in low or r.status_code == 402:
+        return "На тарифе ElevenLabs закончились символы — пополните тариф или дождитесь нового месяца."
+    if "voice_not_found" in low or r.status_code == 404:
+        return "Голос не найден — проверьте ID голоса (Voice ID) или добавьте голос в «My Voices» на сайте."
+    return f"ElevenLabs: ошибка {r.status_code}: {t[:250]}"
+
+
+def _el_speed(cfg):
+    try:
+        return max(0.7, min(1.2, float(str(cfg.get("eleven_speed", "0.9")).replace(",", "."))))
+    except ValueError:
+        return 0.9
+
+
+def _elevenlabs(cfg, text, out_mp3, prev_text, next_text, log, voice=None):
+    key = _el_key(cfg)
+    voice = (voice or str(cfg.get("elevenlabs_voice_id", ""))).strip()
+    if not voice:
+        raise TTSError("Не выбран голос ElevenLabs — выберите его на вкладке «Голоса».")
     body = {
         "text": text,
         "model_id": cfg.get("elevenlabs_model", "eleven_multilingual_v2"),
-        "voice_settings": {"stability": 0.5, "similarity_boost": 0.75, "style": 0.15},
+        "voice_settings": {"stability": float(cfg.get("eleven_stability", 0.45)),
+                           "similarity_boost": 0.8, "style": float(cfg.get("eleven_style", 0.2)),
+                           "use_speaker_boost": True, "speed": _el_speed(cfg)},
     }
     if prev_text:
         body["previous_text"] = prev_text[-300:]
     if next_text:
         body["next_text"] = next_text[:300]
-    _post_audio(f"https://api.elevenlabs.io/v1/text-to-speech/{voice}?output_format=mp3_44100_128",
-                {"xi-api-key": key, "Content-Type": "application/json"}, body, out_mp3, log)
+    url = f"{EL_API}/text-to-speech/{voice}?output_format=mp3_44100_128"
+    for attempt in range(5):
+        try:
+            r = requests.post(url, headers={"xi-api-key": key, "Content-Type": "application/json"},
+                              json=body, timeout=180)
+        except requests.RequestException as e:
+            log(f"  ElevenLabs: нет связи ({e}), повтор...")
+            time.sleep(5)
+            continue
+        if r.status_code == 200 and r.content:
+            Path(out_mp3).write_bytes(r.content)
+            return
+        if r.status_code in (429, 500, 502, 503, 504):
+            time.sleep(8 * (attempt + 1))
+            continue
+        raise TTSError(el_error(r))
+    raise TTSError("ElevenLabs не отвечает — проверьте, что VPN включён.")
+
+
+def _el_get(cfg, path, params=None):
+    try:
+        r = requests.get(EL_API + path, headers={"xi-api-key": _el_key(cfg)}, params=params, timeout=30)
+    except requests.RequestException as e:
+        raise TTSError(f"Нет связи с ElevenLabs ({type(e).__name__}) — проверьте, что VPN включён.")
+    if r.status_code != 200:
+        raise TTSError(el_error(r))
+    return r.json()
+
+
+def _el_voice_row(v):
+    lab = v.get("labels") or {}
+    desc = ", ".join(x for x in (lab.get("gender"), lab.get("age"), lab.get("accent"),
+                                 lab.get("description") or lab.get("descriptive"), lab.get("use_case")) if x)
+    return {"id": v.get("voice_id"), "name": v.get("name") or v.get("voice_id"), "desc": desc,
+            "preview": v.get("preview_url") or "", "category": v.get("category", "")}
+
+
+def el_voice_info(cfg, voice_id):
+    return _el_voice_row(_el_get(cfg, f"/voices/{voice_id.strip()}"))
+
+
+def el_account_voices(cfg):
+    return [_el_voice_row(v) for v in _el_get(cfg, "/voices").get("voices", [])]
+
+
+def el_subscription(cfg):
+    d = _el_get(cfg, "/user/subscription")
+    return {"tier": d.get("tier", ""), "used": d.get("character_count", 0), "limit": d.get("character_limit", 0)}
 
 
 # Голоса Yandex SpeechKit: язык -> (код языка, голос по умолчанию для других языков)
@@ -273,7 +354,9 @@ def make_sample(cfg, provider, value, text, out_mp3):
     out_mp3.parent.mkdir(parents=True, exist_ok=True)
     tmp = out_mp3.with_suffix(".part.mp3")
     try:
-        if provider == "edge":
+        if provider == "eleven":
+            _elevenlabs(cfg, text, tmp, "", "", lambda m: None, voice=value)
+        elif provider == "edge":
             _edge(cfg, text, tmp, lambda m: None, voice=value)
         else:
             c = dict(cfg, language="ru")
@@ -288,7 +371,7 @@ def make_sample(cfg, provider, value, text, out_mp3):
         tmp.replace(out_mp3)
     except Exception as e:
         tmp.unlink(missing_ok=True)
-        raise TTSError(_friendly(e))
+        raise TTSError(str(e) if provider == "eleven" else _friendly(e))
     return out_mp3
 
 

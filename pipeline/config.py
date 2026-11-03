@@ -3,8 +3,8 @@ import json
 import os
 from pathlib import Path
 
-VERSION = "4.0 (03.11.2026)"
-CONFIG_REV = 4      # при смене — обновляются настройки монтажа у уже сохранённых конфигов
+VERSION = "4.1 (04.11.2026)"
+CONFIG_REV = 5      # при смене — обновляются настройки монтажа у уже сохранённых конфигов
 ROOT = Path(__file__).resolve().parent.parent
 CONFIG_PATH = ROOT / "config.json"
 NICHES_DIR = ROOT / "niches"
@@ -24,20 +24,24 @@ DEFAULTS = {
     "claude_model": "claude-sonnet-5-5",
     "pexels_key": "",
     "pixabay_key": "",
-    "tts_provider": "yandex",          # yandex | openai | elevenlabs | edge
+    "tts_provider": "elevenlabs",      # elevenlabs (основная) | yandex | edge | openai
     "openai_key": "",
     "openai_voice": "onyx",
     "elevenlabs_key": "",
     "elevenlabs_voice_id": "",
     "elevenlabs_model": "eleven_multilingual_v2",
+    "eleven_voices": [],               # сохранённые голоса ElevenLabs: [{id, name, desc, preview}]
+    "eleven_speed": 0.9,               # скорость речи ElevenLabs (0.7–1.2)
+    "eleven_stability": 0.45,
+    "eleven_style": 0.2,
     "edge_voice": "ru-RU-DmitryNeural",
     "music_volume": 0.12,              # громкость фоновой музыки (0..1)
     "shot_seconds": 4.5,               # средняя длина одного кадра, сек
     "max_shot_seconds": 7.0,           # обычно кадр не длиннее этого
     "show_labels": True,               # всплывающие надписи (места, люди, даты)
-    "visual_check": "chat",            # chat — кадры выбирает Claude в чате по листам; auto — нейросеть Yandex; none — без проверки
+    "visual_check": "claude",          # claude — Claude по API (автоматически); chat — листы в чат; auto — Yandex; none — без проверки
     "strict_visuals": True,            # каждый кадр проверяется нейросетью по смыслу и на водяные знаки
-    "vision_model": "claude-haiku-5-5",
+    "vision_model": "claude-sonnet-5-5",   # Claude проверяет кадры по смыслу
     "min_relevance": 8,                # порог соответствия смыслу (0–10)
     "reserve_relevance": 6,            # запасной порог: такие кадры берутся, только если не хватает лучших
     "max_checked_per_segment": 48,     # сколько кандидатов максимум проверять на один абзац
@@ -103,6 +107,10 @@ def load_config() -> dict:
             cfg["yandex_speed"] = DEFAULTS["yandex_speed"]
         if cfg.get("yandex_voice") in ("", "ermil"):
             cfg["yandex_voice"] = DEFAULTS["yandex_voice"]
+        if int(cfg.get("config_rev", 0) or 0) < 5:
+            cfg["tts_provider"] = "elevenlabs"        # основная озвучка — ElevenLabs
+            cfg["visual_check"] = "claude"            # кадры проверяет Claude
+            cfg["vision_model"] = DEFAULTS["vision_model"]
         cfg["config_rev"] = CONFIG_REV
     return cfg
 

@@ -181,42 +181,61 @@
 
     <!-- ГОЛОСА -->
     <section class="page" id="page-voices">
-      <div class="voice-top">
-        <div class="seg big" id="provSeg">
-          <button data-v="yandex">Yandex SpeechKit</button>
-          <button data-v="edge">Edge · бесплатно</button>
-        </div>
-        <div class="prov-state" id="provState"></div>
-      </div>
-      <div class="card">
-        <div class="card-head">
-          <div>
-            <h2 id="provTitle">Голоса Yandex</h2>
-            <p class="muted" id="provHint"></p>
+      <div class="grid-home">
+        <div class="col">
+          <div class="card">
+            <div class="card-head">
+              <div>
+                <h2>Мои голоса ElevenLabs</h2>
+                <p class="muted">Слушайте и выбирайте голос диктора. ▶ — пример с сайта (бесплатно), «Моя фраза» — ваш текст этим голосом</p>
+              </div>
+            </div>
+            <div class="field">
+              <label>Фраза для прослушивания</label>
+              <div class="row gap">
+                <input class="input grow" id="sampleText" maxlength="400">
+                <button class="btn ghost small" id="sampleReset">По умолчанию</button>
+              </div>
+            </div>
+            <div class="voice-list mt" id="elVoices"></div>
           </div>
-          <button class="btn ghost" id="samplesBtn">Озвучить все</button>
-        </div>
-        <div class="field">
-          <label>Фраза для прослушивания</label>
-          <div class="row gap">
-            <input class="input grow" id="sampleText" maxlength="400">
-            <button class="btn ghost small" id="sampleReset" title="Вернуть фразу по умолчанию">По умолчанию</button>
+          <div class="card">
+            <h3>Настройка голоса</h3>
+            <div class="speed-box" style="border:none;padding-top:6px;margin-top:6px">
+              <div class="field grow">
+                <label>Скорость речи: <b id="elSpeedVal"></b> <span class="muted">· по умолчанию 0.90× — спокойный темп диктора</span></label>
+                <div class="range-ticks"><input type="range" min="0.7" max="1.2" step="0.05" id="elSpeed"><span class="tick" style="left:40%"></span></div>
+                <div class="range-labels"><span>медленнее</span><span>обычная</span><span>быстрее</span></div>
+              </div>
+              <button class="btn ghost small" id="elSpeedReset">Сбросить</button>
+            </div>
+            <div class="field mt">
+              <label>Стабильность: <b id="elStabVal"></b> <span class="muted">· выше — ровнее и спокойнее, ниже — живее и эмоциональнее</span></label>
+              <input type="range" min="0.2" max="0.8" step="0.05" id="elStab">
+            </div>
           </div>
         </div>
-        <div class="filters" id="voiceFilter">
-          <button class="chipbtn on" data-f="doc">Для документалок</button>
-          <button class="chipbtn" data-f="m">Мужские</button>
-          <button class="chipbtn" data-f="f">Женские</button>
-          <button class="chipbtn" data-f="all">Все</button>
-        </div>
-        <div class="voice-list" id="voices"></div>
-        <div class="speed-box" id="speedBox">
-          <div class="field grow">
-            <label>Скорость речи: <b id="speedVal"></b> <span class="muted">· по умолчанию 0.85× — спокойный темп диктора</span></label>
-            <div class="range-ticks"><input type="range" min="0.8" max="1.2" step="0.05" id="speed"><span class="tick" style="left:12.5%"></span></div>
-            <div class="range-labels"><span>медленнее</span><span>обычная</span><span>быстрее</span></div>
+        <div class="col">
+          <div class="card">
+            <h3>Добавить голос</h3>
+            <p class="muted small">1. Откройте библиотеку и найдите голос (фильтр Language: Russian).<br>2. У голоса нажмите «Add to my voices».<br>3. Нажмите ⋯ → «Copy voice ID» и вставьте сюда.</p>
+            <div class="row gap mt">
+              <input class="input grow" id="elAddId" placeholder="ID голоса или ссылка на него" spellcheck="false">
+              <button class="btn primary" id="elAddBtn">Добавить</button>
+            </div>
+            <div class="row gap mt">
+              <button class="btn ghost" id="elLibBtn">Открыть библиотеку голосов</button>
+              <button class="btn ghost" id="elImportBtn">Загрузить все мои голоса</button>
+            </div>
           </div>
-          <button class="btn ghost small" id="speedReset">Сбросить</button>
+          <div class="card">
+            <div class="card-head"><h3>Аккаунт ElevenLabs</h3><button class="btn ghost small" id="elUsageBtn">Обновить</button></div>
+            <div id="elUsage" class="muted small">—</div>
+          </div>
+          <div class="card">
+            <h3>Какой голос искать под документалки</h3>
+            <p class="muted small">В библиотеке включите Language: Russian и Use case: «Narrative &amp; Story». Хорошо подходят спокойные низкие голоса со словами в описании: <i>deep, calm, narrator, documentary, storyteller</i>. Слушайте на русском фразой «Моя фраза» — пример с сайта часто на английском.</p>
+          </div>
         </div>
       </div>
     </section>
@@ -284,9 +303,10 @@
             <div class="range-wrap"><input type="range" min="2.5" max="8" step="0.5" data-key="shot_seconds" id="shotSec"><span class="range-val" id="shotVal"></span></div>
           </div>
           <div class="set-row">
-            <div><b>Кто проверяет кадры по смыслу</b><p class="muted small">Claude в чате — бесплатно и точнее: программа соберёт листы с превью, Claude выберет кадры</p></div>
+            <div><b>Кто проверяет кадры по смыслу</b><p class="muted small">Claude смотрит каждого кандидата и берёт только кадры по смыслу фразы. Нужен ключ Claude</p></div>
             <div class="select-wrap"><select data-key="visual_check">
-              <option value="chat">Claude в чате (рекомендую)</option>
+              <option value="claude">Claude — автоматически (рекомендую)</option>
+              <option value="chat">Claude в чате — листы вручную</option>
               <option value="auto">Нейросеть Yandex — автоматически, платно</option>
               <option value="none">Без проверки — по тегам</option></select></div>
           </div>
@@ -295,9 +315,9 @@
             <label class="switch"><input type="checkbox" data-key="show_labels"><span></span></label>
           </div>
           <div class="set-row">
-            <div><b>Озвучка</b><p class="muted small">yandex — основной вариант</p></div>
+            <div><b>Озвучка</b><p class="muted small">ElevenLabs — основная, голос выбирается во вкладке «Голоса»</p></div>
             <div class="select-wrap"><select data-key="tts_provider">
-              <option value="yandex">Yandex SpeechKit</option><option value="elevenlabs">ElevenLabs</option>
+              <option value="elevenlabs">ElevenLabs</option><option value="yandex">Yandex SpeechKit (запасная)</option>
               <option value="openai">OpenAI</option><option value="edge">Edge (бесплатно)</option></select></div>
           </div>
         </div>
@@ -306,15 +326,18 @@
       <div class="tabpane" id="tab-keys">
         <div class="card settings">
           <h3 class="sec">Основные</h3>
-          <div class="key-row" data-k="yandex_api_key" data-label="API-ключ Yandex Cloud" data-secret="1" data-hint="AQVN… — для озвучки и проверки кадров"></div>
-          <div class="key-row" data-k="yandex_folder_id" data-label="ID каталога Yandex Cloud" data-hint="b1g…"></div>
+          <div class="key-row" data-k="elevenlabs_key" data-label="Ключ ElevenLabs" data-secret="1" data-hint="озвучка · elevenlabs.io → Profile → API Keys"></div>
+          <div class="key-row" data-k="anthropic_key" data-label="Ключ Claude" data-secret="1" data-hint="проверка кадров · sk-ant-…"></div>
           <div class="key-row" data-k="pixabay_key" data-label="Ключ Pixabay" data-secret="1" data-hint="видео и фото"></div>
+          <div class="row gap" style="margin:6px 0 4px">
+            <button class="btn ghost small" data-url="https://elevenlabs.io/app/settings/api-keys">Где взять ключ ElevenLabs</button>
+            <button class="btn ghost small" data-url="https://console.anthropic.com/settings/keys">Где взять ключ Claude</button>
+          </div>
           <h3 class="sec">Дополнительно</h3>
+          <div class="key-row" data-k="yandex_api_key" data-label="API-ключ Yandex Cloud" data-secret="1" data-hint="запасная озвучка"></div>
+          <div class="key-row" data-k="yandex_folder_id" data-label="ID каталога Yandex Cloud" data-hint="b1g…"></div>
           <div class="key-row" data-k="pexels_key" data-label="Ключ Pexels" data-secret="1"></div>
-          <div class="key-row" data-k="elevenlabs_key" data-label="Ключ ElevenLabs" data-secret="1"></div>
-          <div class="key-row" data-k="elevenlabs_voice_id" data-label="ID голоса ElevenLabs"></div>
           <div class="key-row" data-k="openai_key" data-label="Ключ OpenAI" data-secret="1"></div>
-          <div class="key-row" data-k="anthropic_key" data-label="Ключ Claude" data-secret="1"></div>
           <div class="row gap mt">
             <button class="btn primary" id="checkBtn">Проверить подключения</button>
           </div>

@@ -50,7 +50,8 @@ def _open_path(p):
 def _h(text):
     """Имя файла примера зависит от фразы и скорости речи — при смене скорости пример озвучится заново."""
     import hashlib
-    speed = str(config.load_config().get("yandex_speed", "0.9"))
+    c = config.load_config()
+    speed = f"{c.get('yandex_speed')}|{c.get('eleven_speed')}|{c.get('eleven_stability')}"
     return hashlib.md5(f"{text}|{speed}".encode("utf-8")).hexdigest()[:8]
 
 
@@ -302,7 +303,7 @@ def make_shortcut(quiet=False):
 PUBLIC_KEYS = ["yandex_api_key", "yandex_folder_id", "yandex_voice", "yandex_speed", "pixabay_key", "pexels_key",
                "tts_provider", "edge_voice", "anthropic_key", "openai_key", "elevenlabs_key", "elevenlabs_voice_id",
                "music_volume", "shot_seconds", "show_labels", "theme", "sound_done", "open_folder_after",
-               "default_niche", "update_repo", "language", "visual_check"]
+               "default_niche", "update_repo", "language", "visual_check", "eleven_speed", "eleven_stability", "eleven_style"]
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -522,8 +523,63 @@ class Handler(BaseHTTPRequestHandler):
                 return {"selfcheck": STATE["selfcheck"]}
             ok = run_job("selfcheck", job)
             return self._send(200 if ok else 409, {"ok": ok, "error": None if ok else "Уже идёт работа"})
+        if p == "/api/eleven":
+            cfg = config.load_config()
+            return self._send(200, {"voices": cfg.get("eleven_voices") or [], "current": cfg.get("elevenlabs_voice_id", ""),
+                                    "has_key": bool(str(cfg.get("elevenlabs_key", "")).strip())})
+        if p == "/api/eleven_add":
+            import re as _re
+            raw = str(data.get("voice") or "").strip()
+            m = _re.search(r"(?:voiceId=|voice_id=|/voices?/)([A-Za-z0-9]{16,32})", raw) or _re.fullmatch(r"\s*([A-Za-z0-9]{16,32})\s*", raw)
+            if not m:
+                return self._send(400, {"error": "Не похоже на ID голоса. На сайте ElevenLabs у голоса: ⋯ → Copy voice ID, и вставьте сюда."})
+            vid = m.group(1)
+            cfg = config.load_config()
+            try:
+                row = tts.el_voice_info(cfg, vid)
+            except Exception as e:
+                if "не найден" in str(e):
+                    return self._send(400, {"error": "Голос не найден в вашем аккаунте. На сайте нажмите у голоса «Add to my voices», затем вставьте ID снова."})
+                return self._send(400, {"error": str(e)})
+            voices = [v for v in (cfg.get("eleven_voices") or []) if v.get("id") != vid] + [row]
+            save_settings({})
+            cfg = config.load_config(); cfg["eleven_voices"] = voices
+            if not cfg.get("elevenlabs_voice_id"):
+                cfg["elevenlabs_voice_id"] = vid
+            config.save_config(cfg)
+            return self._send(200, {"ok": True, "voice": row})
+        if p == "/api/eleven_import":
+            cfg = config.load_config()
+            try:
+                rows = tts.el_account_voices(cfg)
+            except Exception as e:
+                return self._send(400, {"error": str(e)})
+            have = {v.get("id") for v in (cfg.get("eleven_voices") or [])}
+            cfg["eleven_voices"] = (cfg.get("eleven_voices") or []) + [r for r in rows if r["id"] not in have]
+            config.save_config(cfg)
+            return self._send(200, {"ok": True, "added": len([r for r in rows if r["id"] not in have])})
+        if p == "/api/eleven_remove":
+            cfg = config.load_config()
+            vid = str(data.get("id") or "")
+            cfg["eleven_voices"] = [v for v in (cfg.get("eleven_voices") or []) if v.get("id") != vid]
+            if cfg.get("elevenlabs_voice_id") == vid:
+                cfg["elevenlabs_voice_id"] = ""
+            config.save_config(cfg)
+            return self._send(200, {"ok": True})
+        if p == "/api/eleven_usage":
+            try:
+                return self._send(200, {"ok": True, **tts.el_subscription(config.load_config())})
+            except Exception as e:
+                return self._send(200, {"ok": False, "error": str(e)})
+        if p == "/api/open_url":
+            url = str(data.get("url") or "")
+            if not url.startswith(("https://elevenlabs.io/", "https://console.anthropic.com/", "https://platform.claude.com/")):
+                return self._send(400, {"error": "Этот адрес открыть нельзя"})
+            import webbrowser
+            webbrowser.open(url)
+            return self._send(200, {"ok": True})
         if p == "/api/voice_sample":
-            provider = "edge" if data.get("provider") == "edge" else "yandex"
+            provider = data.get("provider") if data.get("provider") in ("edge", "eleven") else "yandex"
             value = str(data.get("value") or "")
             text = (data.get("text") or SAMPLE_TEXT).strip()[:400]
             h = _h(text)
