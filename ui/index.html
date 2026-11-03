@@ -307,7 +307,6 @@
             <div class="select-wrap"><select data-key="visual_check">
               <option value="claude">Claude — автоматически (рекомендую)</option>
               <option value="chat">Claude в чате — листы вручную</option>
-              <option value="auto">Нейросеть Yandex — автоматически, платно</option>
               <option value="none">Без проверки — по тегам</option></select></div>
           </div>
           <div class="set-row">
@@ -317,7 +316,7 @@
           <div class="set-row">
             <div><b>Озвучка</b><p class="muted small">ElevenLabs — основная, голос выбирается во вкладке «Голоса»</p></div>
             <div class="select-wrap"><select data-key="tts_provider">
-              <option value="elevenlabs">ElevenLabs</option><option value="yandex">Yandex SpeechKit (запасная)</option>
+              <option value="elevenlabs">ElevenLabs</option>
               <option value="openai">OpenAI</option><option value="edge">Edge (бесплатно)</option></select></div>
           </div>
         </div>
@@ -334,10 +333,10 @@
             <button class="btn ghost small" data-url="https://console.anthropic.com/settings/keys">Где взять ключ Claude</button>
           </div>
           <h3 class="sec">Дополнительно</h3>
-          <div class="key-row" data-k="yandex_api_key" data-label="API-ключ Yandex Cloud" data-secret="1" data-hint="запасная озвучка"></div>
-          <div class="key-row" data-k="yandex_folder_id" data-label="ID каталога Yandex Cloud" data-hint="b1g…"></div>
           <div class="key-row" data-k="pexels_key" data-label="Ключ Pexels" data-secret="1"></div>
           <div class="key-row" data-k="openai_key" data-label="Ключ OpenAI" data-secret="1"></div>
+          <h3 class="sec">Подключение</h3>
+          <div class="key-row" data-k="proxy_url" data-label="Прокси только для программы" data-hint="порт из VPN-приложения, например 127.0.0.1:10808 · пусто — как обычно"></div>
           <div class="row gap mt">
             <button class="btn primary" id="checkBtn">Проверить подключения</button>
           </div>

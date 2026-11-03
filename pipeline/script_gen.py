@@ -41,7 +41,7 @@ class ScriptError(Exception):
 
 
 def _call_claude(cfg, system, user, max_tokens=8000, log=print):
-    """Запрос к нейросети для сценария (Yandex AI Studio или Claude — по настройкам)."""
+    """Запрос к нейросети Claude для сценария."""
     try:
         return llm.chat(cfg, system, user, max_tokens, "text", log)
     except llm.LLMError as e:

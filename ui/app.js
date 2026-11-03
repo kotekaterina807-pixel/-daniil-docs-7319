@@ -146,7 +146,7 @@ let saveTimer = null, pending = {};
 function save(values, quiet) {
   Object.assign(pending, values);
   Object.assign(S.cfg, values);
-  if ("tts_provider" in values || "yandex_voice" in values || "edge_voice" in values) {
+  if ("tts_provider" in values || "elevenlabs_voice_id" in values) {
     setTimeout(renderVoiceCard, 0);
     if ("tts_provider" in values) VS.provider = null;
   }
@@ -375,9 +375,6 @@ function onJobDone(j) {
   } else if (j.kind === "selfcheck") {
     const bad = (j.result && j.result.selfcheck || []).filter((c) => !c.ok && c.critical);
     toast(bad.length ? `Есть проблемы: ${bad.length}` : "Все подключения работают", bad.length ? "err" : "ok", 4000);
-  } else if (j.kind === "voices") {
-    if (j.error) toast(j.error, "err", 7000);
-    else { toast(`Примеры голосов готовы: ${j.result.made}`, "ok"); loadVoices(); }
   }
 }
 const runCheck = () => api("/api/selfcheck", {}).then(() => toast("Проверяю подключения…")).catch((e) => toast(e.message, "err"));
@@ -540,20 +537,12 @@ function playUrl(url, btn, key) {
 }
 player.addEventListener("ended", () => { if (playingBtn) playingBtn.innerHTML = PLAY; playingBtn = null; playingKey = null; });
 document.addEventListener("visibilitychange", () => { if (document.hidden) stopAudio(); });
-const PROV = { yandex: "Yandex SpeechKit", edge: "Edge (бесплатно)", elevenlabs: "ElevenLabs", openai: "OpenAI" };
+const PROV = { elevenlabs: "ElevenLabs" };
 const VS = { provider: null, list: [], defText: "", filter: "doc", role: {} };
 function sampleText() {
   let t = "";
   try { t = localStorage.getItem("ds-sample") || ""; } catch (e) {}
   return t || VS.defText || DEF_TEXT;
-}
-function currentVoice(provider) {
-  return provider === "edge" ? (S.cfg.edge_voice || "ru-RU-DmitryNeural") : (S.cfg.yandex_voice || "alexander");
-}
-async function fetchVoices(provider) {
-  const r = await api(`/api/voices?provider=${provider}&text=${encodeURIComponent(sampleText())}`);
-  if (!VS.defText) VS.defText = r.default_text;
-  return r.items;
 }
 // прослушать: если примера нет — программа озвучит его (1–3 секунды) и сразу включит
 async function playVoice(provider, value, btn) {
@@ -572,10 +561,6 @@ async function playVoice(provider, value, btn) {
     if (row) $$(`.role[data-value="${CSS.escape(value)}"]`, row).forEach((x) => { if (!$(".d", x)) x.insertAdjacentHTML("beforeend", '<span class="d"></span>'); });
   } catch (e) { toast(e.message, "err", 8000); }
   finally { btn.classList.remove("loading"); btn.disabled = false; }
-}
-function voiceTitle(item, value) {
-  const role = item.roles.find((r) => r.value === value);
-  return item.name + (role ? ` — ${role.name}` : "") + (item.model === "livetts" ? " (LiveTTS)" : "");
 }
 // ---------- голоса ElevenLabs ----------
 const DEF_TEXT = "В декабре тысяча девятисотого года с маяка на крошечном острове исчезли три смотрителя. Их так и не нашли.";
@@ -657,7 +642,7 @@ $("#sampleReset").onclick = () => { try { localStorage.removeItem("ds-sample"); 
 
 // карточка «Голос диктора» на главной — меняется вместе с настройками
 async function renderVoiceCard() {
-  const prov = S.cfg.tts_provider || "yandex";
+  const prov = "elevenlabs";
   const btn = $("#homePlay");
   btn.innerHTML = PLAY;
   $("#homeProv").textContent = PROV[prov] || prov;
@@ -670,19 +655,7 @@ async function renderVoiceCard() {
     btn.onclick = d.current ? () => playVoice("eleven", d.current, btn) : null;
     return;
   }
-  if (prov !== "yandex" && prov !== "edge") {
-    $("#homeVoice").textContent = "голос из настроек"; btn.disabled = true; btn.onclick = null; return;
-  }
-  btn.disabled = false;
-  const value = currentVoice(prov);
-  let title = value;
-  try {
-    const items = await fetchVoices(prov);
-    const it = items.find((v) => v.voice === value.split(":")[0]);
-    if (it) title = voiceTitle(it, value);
-  } catch (e) {}
-  $("#homeVoice").textContent = title;
-  btn.onclick = () => playVoice(prov, value, btn);
+  $("#homeVoice").textContent = "голос не выбран"; btn.disabled = true; btn.onclick = null;
 }
 
 // ---------- музыка ----------

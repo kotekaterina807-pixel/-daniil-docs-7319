@@ -37,54 +37,16 @@ def _disk():
     return ("Место на диске", ok, f"свободно {free_gb:.0f} ГБ" + ("" if ok else " — для ролика 30 мин нужно ~10–15 ГБ"), False)
 
 
-def _yandex_tts(cfg):
-    name = "Озвучка Yandex SpeechKit"
-    if not cfg.get("yandex_api_key"):
-        return (name, False, "не указан API-ключ Yandex Cloud", True)
-    c = dict(cfg, language="ru")
-    voice = c.get("yandex_voice", "alexander")
-    with tempfile.TemporaryDirectory() as d:
-        try:
-            tts._yandex_v3(c, "Проверка связи.", Path(d) / "t.mp3", lambda m: None)
-            return (name, True, f"голос {voice} работает", True)
-        except Exception as e3:
-            err3 = str(e3)
-        if "401" in err3 or "403" in err3:
-            return (name, False, "ключ не подходит или у сервисного аккаунта нет роли ai.speechkit-tts.user; "
-                                 "проверьте, что вставлен СЕКРЕТНЫЙ ключ (AQVN…)", True)
-        try:
-            tts._yandex_v1(c, "Проверка связи.", Path(d) / "t1.mp3", lambda m: None)
-            return (name, False, f"голос {voice} не работает ({err3[:160]}); работают только старые голоса "
-                                 f"ermil/filipp/zahar — выберите другой голос", False)
-        except Exception as e1:
-            return (name, False, err3[:300], True)
-
-
-def _yandex_vision(cfg):
-    name = "Проверка кадров по смыслу (Yandex)"
-    if not cfg.get("yandex_api_key") or not cfg.get("yandex_folder_id"):
-        return (name, False, "не указан ключ Yandex или ID каталога", True)
-    im = Image.new("RGB", (64, 64), (40, 90, 160))
-    buf = io.BytesIO()
-    im.save(buf, "JPEG")
-    content = [{"type": "image", "b64": base64.b64encode(buf.getvalue()).decode()},
-               {"type": "text", "text": 'Какого цвета эта картинка? Верни СТРОГО JSON: {"color": "одно слово"}'}]
+def _proxy(cfg):
+    name = "Прокси программы"
+    url = str(cfg.get("proxy_url", "")).strip()
     try:
-        ans = llm.chat(dict(cfg, llm_provider="yandex"), "", content, 50, "vision", lambda m: None).strip()
-        if not ans:
-            return (name, False, "модель отвечает пустым текстом — кадры будут выбираться без проверки по смыслу", True)
-        import json as _j, re as _r
-        try:
-            raw = _r.sub(r"^```(?:json)?\s*|\s*```$", "", ans)
-            color = _j.loads(raw[raw.find("{"):raw.rfind("}") + 1]).get("color", "")
-            return (name, True, f"модель отвечает («{color}»)", True)
-        except Exception:
-            return (name, False, f"модель отвечает не в нужном формате («{ans[:40]}»)", True)
+        r = requests.get("https://ipinfo.io/json", headers=UA, timeout=20)
+        d = r.json()
+        where = f"{d.get('country', '?')}, {d.get('city', '')}".strip(", ")
+        return (name, True, (f"через {url} → " if url else "без прокси (системное подключение) → ") + f"выход в интернет: {where}", False)
     except Exception as e:
-        msg = str(e)
-        if "401" in msg or "403" in msg:
-            msg = "нет доступа: проверьте ID каталога (b1g…) и роль ai.languageModels.user у сервисного аккаунта"
-        return (name, False, msg[:300], True)
+        return (name, False, f"{'прокси ' + url + ' не отвечает' if url else 'нет связи'} ({type(e).__name__}) — проверьте, что VPN-приложение запущено", True)
 
 
 def _pixabay(cfg):
@@ -156,16 +118,10 @@ def _claude(cfg):
 
 def run_all(cfg, log=print):
     checks = [_ffmpeg, _gpu, _disk]
-    prov = cfg.get("tts_provider", "elevenlabs")
-    if prov == "elevenlabs":
-        checks.append(lambda: _eleven(cfg))
-    elif prov == "yandex":
-        checks.append(lambda: _yandex_tts(cfg))
-    mode = cfg.get("visual_check", "claude")
-    if mode == "claude":
+    checks.append(lambda: _proxy(cfg))
+    checks.append(lambda: _eleven(cfg))
+    if cfg.get("visual_check", "claude") in ("claude", "auto"):
         checks.append(lambda: _claude(cfg))
-    elif mode == "auto":
-        checks.append(lambda: _yandex_vision(cfg))
     checks += [lambda: _pixabay(cfg), _wikimedia]
     out = []
     for fn in checks:

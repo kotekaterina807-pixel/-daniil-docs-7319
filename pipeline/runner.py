@@ -146,13 +146,9 @@ def step_build(cfg, niche, project, log=print, stop_flag=lambda: False, progress
             raise RuntimeError("Остановлено пользователем.")
 
     # ---------- 1. озвучка ----------
-    provider = cfg.get("tts_provider", "yandex")
-    if provider == "yandex" and code not in tts.YANDEX_LANGS:
-        provider = "edge"
-        log(f"У Yandex SpeechKit нет голоса для языка «{L['name']}» — озвучка через Edge (бесплатно).")
+    provider = "elevenlabs"
     voice = {"openai": cfg.get("openai_voice"), "elevenlabs": f"{cfg.get('elevenlabs_voice_id')}:{cfg.get('eleven_speed')}:{cfg.get('eleven_stability')}",
-             "edge": cfg.get("edge_voice"),
-             "yandex": f"{cfg.get('yandex_voice')}:{cfg.get('yandex_speed')}" if code == "ru" else code
+             "edge": cfg.get("edge_voice")
              }.get(provider, "")
     segs = [s for ch in script["chapters"] for s in ch["segments"]]
     log(f"Озвучка: {len(segs)} абзацев ({provider}, {L['name']})...")
@@ -254,6 +250,8 @@ def step_build(cfg, niche, project, log=print, stop_flag=lambda: False, progress
             jobs.append((bi, len(b["specs"]) - 1))
 
     mode = cfg.get("visual_check", "claude")
+    if mode == "auto":
+        mode = "claude"
     if mode == "claude":
         if str(cfg.get("anthropic_key", "")).strip():
             cfg["llm_provider"] = "claude"            # проверка кадров и запасные запросы — через Claude

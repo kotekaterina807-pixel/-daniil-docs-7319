@@ -3,8 +3,8 @@ import json
 import os
 from pathlib import Path
 
-VERSION = "4.1 (04.11.2026)"
-CONFIG_REV = 5      # при смене — обновляются настройки монтажа у уже сохранённых конфигов
+VERSION = "4.2 (04.11.2026)"
+CONFIG_REV = 6      # при смене — обновляются настройки монтажа у уже сохранённых конфигов
 ROOT = Path(__file__).resolve().parent.parent
 CONFIG_PATH = ROOT / "config.json"
 NICHES_DIR = ROOT / "niches"
@@ -12,19 +12,12 @@ MUSIC_DIR = ROOT / "music"
 OUTPUT_DIR = ROOT / "output"
 
 DEFAULTS = {
-    # нейросеть для сценария и проверки кадров: yandex (работает из РФ, оплата картой РФ) | claude
-    "llm_provider": "yandex",
-    "yandex_api_key": "",
-    "yandex_folder_id": "",
-    "yandex_text_model": "aliceai-llm",          # сценарий
-    "yandex_vision_model": "qwen3.6-35b-a3b",    # проверка кадров (понимает изображения)
-    "yandex_voice": "alexander",                 # голос диктора для русского (API v3)
-    "yandex_speed": "0.85",                      # 0.85 — спокойный темп диктора документалки
+    "llm_provider": "claude",         # нейросеть: Claude (проверка кадров)
     "anthropic_key": "",
     "claude_model": "claude-sonnet-5-5",
     "pexels_key": "",
     "pixabay_key": "",
-    "tts_provider": "elevenlabs",      # elevenlabs (основная) | yandex | edge | openai
+    "tts_provider": "elevenlabs",      # озвучка — ElevenLabs
     "openai_key": "",
     "openai_voice": "onyx",
     "elevenlabs_key": "",
@@ -39,7 +32,7 @@ DEFAULTS = {
     "shot_seconds": 4.5,               # средняя длина одного кадра, сек
     "max_shot_seconds": 7.0,           # обычно кадр не длиннее этого
     "show_labels": True,               # всплывающие надписи (места, люди, даты)
-    "visual_check": "claude",          # claude — Claude по API (автоматически); chat — листы в чат; auto — Yandex; none — без проверки
+    "visual_check": "claude",          # claude — Claude по API (автоматически); chat — листы в чат; none — без проверки
     "strict_visuals": True,            # каждый кадр проверяется нейросетью по смыслу и на водяные знаки
     "vision_model": "claude-sonnet-5-5",   # Claude проверяет кадры по смыслу
     "min_relevance": 8,                # порог соответствия смыслу (0–10)
@@ -48,6 +41,7 @@ DEFAULTS = {
     "language": "ru",                  # язык видео по умолчанию (код из LANGS)
     "label_min_gap_sec": 45,           # минимум секунд между всплывающими надписями
     "allow_historic_symbols": False,   # пропускать кадры с символикой экстремистских режимов
+    "proxy_url": "",                   # прокси только для программы, например socks5://127.0.0.1:10808
     # интерфейс
     "theme": "light",                  # light | dark | system
     "sound_done": True,                # звук, когда видео готово
@@ -96,17 +90,20 @@ def load_config() -> dict:
                 cfg.update(json.loads(path.read_text(encoding="utf-8-sig")))
             except Exception:
                 pass
-    cfg["yandex_folder_id"] = clean_folder_id(cfg.get("yandex_folder_id", ""))
     if not str(cfg.get("update_repo") or "").strip():
         cfg["update_repo"] = DEFAULTS["update_repo"]
+    # Yandex Cloud из программы удалён: его ключи и настройки стираются
+    for k in [k for k in cfg if k.startswith("yandex_")]:
+        cfg.pop(k, None)
+    cfg["llm_provider"] = "claude"
+    if cfg.get("tts_provider") not in ("elevenlabs",):
+        cfg["tts_provider"] = "elevenlabs"
+    if cfg.get("visual_check") == "auto":
+        cfg["visual_check"] = "claude"
     if int(cfg.get("config_rev", 0) or 0) < CONFIG_REV:
         # новая версия монтажа: старые сохранённые значения темпа и голоса заменяются новыми
         for k in ("shot_seconds", "max_shot_seconds", "min_relevance", "reserve_relevance", "max_checked_per_segment"):
             cfg[k] = DEFAULTS[k]
-        if str(cfg.get("yandex_speed", "")).strip() in ("", "1", "1.0", "1.00", "0.9", "0.90"):
-            cfg["yandex_speed"] = DEFAULTS["yandex_speed"]
-        if cfg.get("yandex_voice") in ("", "ermil"):
-            cfg["yandex_voice"] = DEFAULTS["yandex_voice"]
         if int(cfg.get("config_rev", 0) or 0) < 5:
             cfg["tts_provider"] = "elevenlabs"        # основная озвучка — ElevenLabs
             cfg["visual_check"] = "claude"            # кадры проверяет Claude

@@ -51,7 +51,7 @@ def _h(text):
     """Имя файла примера зависит от фразы и скорости речи — при смене скорости пример озвучится заново."""
     import hashlib
     c = config.load_config()
-    speed = f"{c.get('yandex_speed')}|{c.get('eleven_speed')}|{c.get('eleven_stability')}"
+    speed = f"{c.get('eleven_speed')}|{c.get('eleven_stability')}"
     return hashlib.md5(f"{text}|{speed}".encode("utf-8")).hexdigest()[:8]
 
 
@@ -256,13 +256,22 @@ def apply_update(zip_bytes, log):
         tmp.write_bytes(zf.read(n))
         os.replace(tmp, target)
         count += 1
+    removed = ROOT / "_removed.txt"
+    if removed.exists():                            # файлы, которых в новой версии больше нет
+        for rel in removed.read_text(encoding="utf-8").splitlines():
+            rel = rel.strip()
+            if rel and not rel.startswith("#") and rel.split("/")[0] not in KEEP:
+                t = (ROOT / rel).resolve()
+                if ROOT.resolve() in t.parents and t.is_file():
+                    t.unlink(missing_ok=True)
     log(f"Обновлено файлов: {count}. Новая версия: {new_version or 'неизвестна'}.")
     new_req = (ROOT / "requirements.txt").read_text(encoding="utf-8") if (ROOT / "requirements.txt").exists() else ""
     if new_req != old_req:
         log("Ставлю новые компоненты (pip)...")
+        env = {k: v for k, v in os.environ.items() if k.lower() not in ("https_proxy", "http_proxy")}
         p = subprocess.run([sys.executable.replace("pythonw.exe", "python.exe"), "-m", "pip", "install", "-r",
                             str(ROOT / "requirements.txt")], capture_output=True, text=True,
-                           creationflags=_NO_WINDOW)
+                           creationflags=_NO_WINDOW, env=env)
         log("Компоненты установлены." if p.returncode == 0 else f"pip: {p.stderr[-400:]}")
     make_shortcut(quiet=True)
     return new_version
@@ -300,7 +309,7 @@ def make_shortcut(quiet=False):
 
 
 # ---------------- HTTP ----------------
-PUBLIC_KEYS = ["yandex_api_key", "yandex_folder_id", "yandex_voice", "yandex_speed", "pixabay_key", "pexels_key",
+PUBLIC_KEYS = ["pixabay_key", "pexels_key", "proxy_url",
                "tts_provider", "edge_voice", "anthropic_key", "openai_key", "elevenlabs_key", "elevenlabs_voice_id",
                "music_volume", "shot_seconds", "show_labels", "theme", "sound_done", "open_folder_after",
                "default_niche", "update_repo", "language", "visual_check", "eleven_speed", "eleven_stability", "eleven_style"]
@@ -405,7 +414,6 @@ class Handler(BaseHTTPRequestHandler):
                     "version": config.VERSION,
                     "cfg": {k: cfg.get(k, "") for k in PUBLIC_KEYS},
                     "niches": niches,
-                    "voices": [{"id": v, "name": t} for v, t in tts.RU_VOICES],
                     "platform": os.name,
                 })
             if p == "/api/projects":
@@ -414,24 +422,8 @@ class Handler(BaseHTTPRequestHandler):
                 d = _project_dir(q.get("id", [""])[0])
                 name = Path(q.get("name", [""])[0]).name
                 return self._file(d / name)
-            if p == "/api/voices":
-                provider = q.get("provider", ["yandex"])[0]
-                text = q.get("text", [SAMPLE_TEXT])[0] or SAMPLE_TEXT
-                h = _h(text)
-                vdir = ROOT / "voice_samples" / provider
-                if provider == "edge":
-                    items = [{"voice": v, "name": n, "gender": g, "roles": [], "model": "edge", "doc": True}
-                             for v, n, g in tts.EDGE_VOICES]
-                else:
-                    items = [{"voice": v, "name": n, "gender": g, "model": m, "doc": doc,
-                              "roles": [{"id": r, "name": tts.ROLE_RU.get(r, r), "value": tts.voice_value(v, r)}
-                                        for r in roles]} for v, n, g, roles, m, doc in tts.YANDEX_VOICES]
-                for it in items:
-                    vals = [r["value"] for r in it["roles"]] or [it["voice"]]
-                    it["samples"] = [x for x in vals if (vdir / f"{x.replace(':', '_')}_{h}.mp3").exists()]
-                return self._send(200, {"items": items, "default_text": SAMPLE_TEXT})
             if p == "/api/voice_audio":
-                provider = Path(q.get("provider", ["yandex"])[0]).name
+                provider = "eleven"
                 value = q.get("value", [""])[0].replace(":", "_")
                 h = Path(q.get("h", [""])[0]).name
                 return self._file(ROOT / "voice_samples" / provider / f"{Path(value).name}_{h}.mp3")
@@ -579,7 +571,7 @@ class Handler(BaseHTTPRequestHandler):
             webbrowser.open(url)
             return self._send(200, {"ok": True})
         if p == "/api/voice_sample":
-            provider = data.get("provider") if data.get("provider") in ("edge", "eleven") else "yandex"
+            provider = "eleven"
             value = str(data.get("value") or "")
             text = (data.get("text") or SAMPLE_TEXT).strip()[:400]
             h = _h(text)
@@ -590,21 +582,6 @@ class Handler(BaseHTTPRequestHandler):
                 except Exception as e:
                     return self._send(200, {"ok": False, "error": str(e)})
             return self._send(200, {"ok": True, "h": h})
-        if p == "/api/voice_samples":
-            provider = "edge" if data.get("provider") == "edge" else "yandex"
-            text = (data.get("text") or SAMPLE_TEXT).strip()[:400]
-
-            def job():
-                cfg = config.load_config()
-                if provider == "yandex" and not cfg.get("yandex_api_key"):
-                    raise RuntimeError("Не указан API-ключ Yandex — вставьте его в «Параметры → Сервисы и ключи».")
-                JOB.add_log("Озвучиваю пример всеми голосами...")
-                made, errors = tts.voice_samples(cfg, text, ROOT / "voice_samples", JOB.add_log, provider, h=_h(text))
-                if not made:
-                    raise RuntimeError(errors[0] if errors else "Ни один голос не озвучил пример")
-                return {"made": len(made), "errors": errors}
-            ok = run_job("voices", job)
-            return self._send(200 if ok else 409, {"ok": ok, "error": None if ok else "Уже идёт работа"})
         if p == "/api/open":
             return self._open(data)
         if p == "/api/delete_project":
@@ -734,18 +711,23 @@ def _niche_path(niche_id):
     return next(iter(niches.values()))
 
 
+def apply_proxy(cfg=None):
+    """Прокси только для DocuStudio: все запросы программы (Pixabay, ElevenLabs, Claude, GitHub) идут через него,
+    остальные программы на компьютере его не используют."""
+    cfg = cfg or config.load_config()
+    url = str(cfg.get("proxy_url", "")).strip()
+    for k in ("HTTPS_PROXY", "HTTP_PROXY", "https_proxy", "http_proxy"):
+        if url:
+            os.environ[k] = url
+        else:
+            os.environ.pop(k, None)
+    os.environ["NO_PROXY"] = os.environ["no_proxy"] = "127.0.0.1,localhost"
+
+
 def save_settings(values):
     """Сохраняет параметры. Возвращает предупреждения (например, перепутаны ключ и ID каталога)."""
     cfg = config.load_config()
     notes = []
-    key = str(values.get("yandex_api_key", cfg.get("yandex_api_key", ""))).strip()
-    folder = config.clean_folder_id(str(values.get("yandex_folder_id", cfg.get("yandex_folder_id", ""))))
-    if key.startswith("b1g") and folder.startswith("AQV"):
-        key, folder = folder, key
-        notes.append("Ключ Yandex и ID каталога были перепутаны местами — исправлено.")
-    if key.startswith(("b1g", "aje")):
-        notes.append("В поле «API-ключ Yandex» вставлен не ключ (ключ начинается на AQVN…).")
-    values["yandex_api_key"], values["yandex_folder_id"] = key, folder
     for k, v in values.items():
         if k not in PUBLIC_KEYS:
             continue
@@ -760,7 +742,15 @@ def save_settings(values):
                 notes.append(f"Поле {k} должно быть числом — не сохранено.")
                 continue
         cfg[k] = v
+    if "proxy_url" in values:
+        u = str(cfg.get("proxy_url", "")).strip()
+        if u and "://" not in u:
+            u = "socks5h://" + u                     # «127.0.0.1:10808» → socks5h://127.0.0.1:10808
+        if u.startswith("socks5://"):
+            u = "socks5h://" + u[len("socks5://"):]   # имена сайтов тоже через прокси
+        cfg["proxy_url"] = u
     path = config.save_config(cfg)
+    apply_proxy(cfg)
     return {"ok": True, "notes": notes, "path": str(path)}
 
 
@@ -880,6 +870,7 @@ def main(argv):
         open_window(f"http://127.0.0.1:{old}/?t={TOKEN}")
         return
     config.ensure_dirs()
+    apply_proxy()
     srv, port = _bind()
     url = f"http://127.0.0.1:{port}/?t={TOKEN}"
     print(f"DocuStudio: {url}", flush=True)
