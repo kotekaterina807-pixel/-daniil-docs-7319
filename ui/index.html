@@ -32,7 +32,7 @@
       <button class="nav-item upd-btn" id="updSide" title="Проверить и установить обновление">
         <svg viewBox="0 0 24 24"><path d="M20 12a8 8 0 1 1-2.3-5.6M20 4v5h-5"/></svg><span id="updSideText">Обновить программу</span><span class="upd-dot" id="updDot" hidden></span>
       </button>
-      <div class="mini-job" id="miniJob" hidden>
+      <div class="mini-job" id="miniJob" hidden title="Открыть сборку">
         <div class="mini-job-title"><span class="dot pulse"></span><span id="miniJobText">Сборка…</span></div>
         <div class="bar small"><div class="bar-fill" id="miniBar"></div></div>
       </div>
@@ -82,6 +82,25 @@
             </div>
           </div>
 
+          <div class="card choose" id="chooseCard" hidden>
+            <div class="card-head">
+              <div>
+                <h2>Нужен выбор кадров</h2>
+                <p class="muted" id="chooseText"></p>
+              </div>
+            </div>
+            <ol class="howto">
+              <li>Нажмите «Открыть листы» — откроется папка проекта с файлами <b>кадры_лист_01.jpg</b>, <b>02</b>…</li>
+              <li>Перетащите все листы в чат Claude и напишите: «выбери кадры».</li>
+              <li>Claude ответит списком строк вида <code>12: 3 1</code>. Скопируйте ответ целиком.</li>
+              <li>Нажмите «Вставить ответ Claude» — сборка продолжится сама.</li>
+            </ol>
+            <div class="row gap">
+              <button class="btn ghost" id="chooseOpen">Открыть листы</button>
+              <button class="btn primary" id="choosePaste">Вставить ответ Claude</button>
+            </div>
+          </div>
+
           <div class="card job" id="jobCard" hidden>
             <div class="card-head">
               <div>
@@ -90,12 +109,17 @@
               </div>
               <button class="btn ghost danger" id="stopBtn"><svg viewBox="0 0 24 24"><rect x="6" y="6" width="12" height="12" rx="2" class="fill"/></svg>Стоп</button>
             </div>
+            <div class="eta-big">
+              <div class="eta-left"><span class="eta-label">Осталось до конца</span><span class="eta-val" id="jobEta">считаю…</span></div>
+              <div class="eta-right"><span class="eta-label">Будет готово</span><span class="eta-clock" id="jobDoneAt">—</span></div>
+            </div>
             <div class="bar"><div class="bar-fill" id="jobBar"></div></div>
             <div class="job-meta">
               <span class="pct" id="jobPct">0%</span>
+              <span id="jobStep"></span>
               <span>прошло <b id="jobElapsed">0:00</b></span>
-              <span>осталось <b id="jobEta">считаю…</b></span>
             </div>
+            <div class="steps" id="jobSteps"></div>
           </div>
 
           <div class="card">
@@ -188,8 +212,8 @@
         <div class="voice-list" id="voices"></div>
         <div class="speed-box" id="speedBox">
           <div class="field grow">
-            <label>Скорость речи: <b id="speedVal"></b> <span class="muted">· по умолчанию 0.90× — спокойный темп диктора</span></label>
-            <div class="range-ticks"><input type="range" min="0.8" max="1.2" step="0.05" id="speed"><span class="tick" style="left:25%"></span></div>
+            <label>Скорость речи: <b id="speedVal"></b> <span class="muted">· по умолчанию 0.85× — спокойный темп диктора</span></label>
+            <div class="range-ticks"><input type="range" min="0.8" max="1.2" step="0.05" id="speed"><span class="tick" style="left:12.5%"></span></div>
             <div class="range-labels"><span>медленнее</span><span>обычная</span><span>быстрее</span></div>
           </div>
           <button class="btn ghost small" id="speedReset">Сбросить</button>
@@ -256,8 +280,15 @@
       <div class="tabpane" id="tab-edit">
         <div class="card settings">
           <div class="set-row col-on-narrow">
-            <div><b>Смена кадра</b><p class="muted small">Средняя длина одного кадра. 1,8 с ≈ 90 кадров на 3 минуты</p></div>
-            <div class="range-wrap"><input type="range" min="1.5" max="5" step="0.1" data-key="shot_seconds" id="shotSec"><span class="range-val" id="shotVal"></span></div>
+            <div><b>Смена кадра</b><p class="muted small">Средняя длина одного кадра. 4,5 с — спокойный темп документалки</p></div>
+            <div class="range-wrap"><input type="range" min="2.5" max="8" step="0.5" data-key="shot_seconds" id="shotSec"><span class="range-val" id="shotVal"></span></div>
+          </div>
+          <div class="set-row">
+            <div><b>Кто проверяет кадры по смыслу</b><p class="muted small">Claude в чате — бесплатно и точнее: программа соберёт листы с превью, Claude выберет кадры</p></div>
+            <div class="select-wrap"><select data-key="visual_check">
+              <option value="chat">Claude в чате (рекомендую)</option>
+              <option value="auto">Нейросеть Yandex — автоматически, платно</option>
+              <option value="none">Без проверки — по тегам</option></select></div>
           </div>
           <div class="set-row">
             <div><b>Всплывающие надписи</b><p class="muted small">Места, даты и имена людей внизу кадра</p></div>

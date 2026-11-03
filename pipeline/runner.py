@@ -14,7 +14,7 @@ from .config import MUSIC_DIR, OUTPUT_DIR, ensure_dirs, ffmpeg_exe, lang
 from . import library
 from .visuals import VisualFinder
 
-PAUSE_SEC = 0.6      # пауза между абзацами
+PAUSE_SEC = 0.8      # пауза между абзацами
 CARD_SEC = 1.8       # название главы поверх видео
 TITLE_SEC = 4.0      # заставка с названием в начале
 LABEL_SEC = 5.0      # сколько держится всплывающая подпись
@@ -242,7 +242,7 @@ def step_build(cfg, niche, project, log=print, stop_flag=lambda: False, progress
         for i, ((vis, query), (t0, t1), txt) in enumerate(zip(specs, ranges, texts)):
             length = max(0.1, t1 - t0)
             n = max(1, round(length / shot_sec), math.ceil(length / max_shot - 1e-6))
-            n = min(n, max(1, int(length / 1.1)))
+            n = min(n, max(1, int(length / 2.0)))
             spec = {"visual": vis, "query": query, "t0": t0, "t1": t1, "n": n, "text": txt}
             if vis == "person":
                 name, _, shown = query.partition("|")
@@ -253,41 +253,47 @@ def step_build(cfg, niche, project, log=print, stop_flag=lambda: False, progress
             b["specs"].append(spec)
             jobs.append((bi, len(b["specs"]) - 1))
 
-    def run_job(job):
-        bi, si = job
-        b = seg_blocks[bi]
-        spec = b["specs"][si]
-        topic = script.get("topic", "")
-        key = _key(spec["visual"], spec["query"], str(spec["n"]), spec["text"][:80],
-                   "strict" if cfg.get("strict_visuals", True) else "", "v2")
-        cached = vis_cache.get(key)
-        if cached and all(Path(it["path"]).exists() for it in cached["items"]):
-            return key, cached
-        items = []
-        if spec["visual"] == "person":
-            items = [dict(f, person=True) for f in finder.find_person(spec["query"], spec["text"], topic)]
-            rest = spec["n"] - len(items)
-            if rest > 0:
-                items += finder.find("stock", spec["fill_query"], rest, spec["text"], topic)
-        else:
-            items = finder.find(spec["visual"], spec["query"], spec["n"], spec["text"], topic)
-        out = {"items": [{"path": f["path"], "kind": f["kind"], "url": f["url"], "duration": f.get("duration", 0),
-                          "person": bool(f.get("person"))} for f in items],
-               "credits": [f["credit"] for f in items]}
-        return key, out
+    mode = cfg.get("visual_check", "chat")
+    if mode == "none":
+        cfg["strict_visuals"] = False
+    if mode == "chat":
+        _choose_in_chat(cfg, project, finder, seg_blocks, jobs, vis_cache, log, check_stop, progress)
+    else:
+        def run_job(job):
+            bi, si = job
+            b = seg_blocks[bi]
+            spec = b["specs"][si]
+            topic = script.get("topic", "")
+            key = _key(spec["visual"], spec["query"], str(spec["n"]), spec["text"][:80],
+                       "strict" if cfg.get("strict_visuals", True) else "", "v2")
+            cached = vis_cache.get(key)
+            if cached and all(Path(it["path"]).exists() for it in cached["items"]):
+                return key, cached
+            items = []
+            if spec["visual"] == "person":
+                items = [dict(f, person=True) for f in finder.find_person(spec["query"], spec["text"], topic)]
+                rest = spec["n"] - len(items)
+                if rest > 0:
+                    items += finder.find("stock", spec["fill_query"], rest, spec["text"], topic)
+            else:
+                items = finder.find(spec["visual"], spec["query"], spec["n"], spec["text"], topic)
+            out = {"items": [{"path": f["path"], "kind": f["kind"], "url": f["url"], "duration": f.get("duration", 0),
+                              "person": bool(f.get("person"))} for f in items],
+                   "credits": [f["credit"] for f in items]}
+            return key, out
 
-    from concurrent.futures import ThreadPoolExecutor
-    done = 0
-    with ThreadPoolExecutor(max_workers=3) as ex:
-        for (bi, si), (key, res) in zip(jobs, ex.map(run_job, jobs)):
-            check_stop()
-            vis_cache[key] = res
-            seg_blocks[bi]["specs"][si]["items"] = res["items"]
-            done += 1
-            if done % 5 == 0 or done == len(jobs):
-                _save_json(vis_cache_path, vis_cache)
-                log(f"  Кадры подобраны: {done}/{len(jobs)} строк сценария")
-            progress(0.10 + 0.35 * done / len(jobs), f"Подбор кадров {done}/{len(jobs)}")
+        from concurrent.futures import ThreadPoolExecutor
+        done = 0
+        with ThreadPoolExecutor(max_workers=3) as ex:
+            for (bi, si), (key, res) in zip(jobs, ex.map(run_job, jobs)):
+                check_stop()
+                vis_cache[key] = res
+                seg_blocks[bi]["specs"][si]["items"] = res["items"]
+                done += 1
+                if done % 5 == 0 or done == len(jobs):
+                    _save_json(vis_cache_path, vis_cache)
+                    log(f"  Кадры подобраны: {done}/{len(jobs)} строк сценария")
+                progress(0.10 + 0.35 * done / len(jobs), f"Подбор кадров {done}/{len(jobs)}")
     finder.credits = [c for v in vis_cache.values() for c in v.get("credits", [])
                       if any(c.get("url") == it.get("url") for b in seg_blocks for sp in b["specs"]
                              for it in sp.get("items", []))]
@@ -374,17 +380,18 @@ def step_build(cfg, niche, project, log=print, stop_flag=lambda: False, progress
                 if not items and last_item[0]:
                     items = [last_item[0]]
             # отрезки: в паузах речи, не длиннее max_shot (если кадр один — можно до 2×max_shot)
+            # без повторов: отрезков столько, сколько разных кадров; один кадр повторяется
+            # (другим участком) только если иначе он шёл бы дольше 1,5×max_shot
+            lim = max_shot * 1.5
             n = spec["n"]
-            if len(items) == 1:
-                n = max(1, math.ceil(length / (2 * max_shot) - 1e-6))
-            elif items:
-                n = max(math.ceil(length / max_shot - 1e-6), min(n, len(items)))
+            if items:
+                k = len(items)
+                n = k if length / k <= lim else max(k, math.ceil(length / lim - 1e-6))
             pauses = [(t - t0, ln) for t, ln in b["pauses"] if t0 < t < t1]
             bounds = [x - t0 for x in b["sent_bounds"] if t0 < x < t1]
-            cuts = timing.cut_points(length, n, pauses, bounds, min_shot=1.0)
+            cuts = timing.cut_points(length, n, pauses, bounds, min_shot=2.0)
             edges = [0.0] + cuts + [length]
             fixed = [0.0]
-            lim = 2 * max_shot if len(items) == 1 else max_shot
             for a_, b_ in zip(edges, edges[1:]):
                 parts = max(1, math.ceil((b_ - a_) / lim - 1e-6))
                 fixed += [a_ + (b_ - a_) * (q + 1) / parts for q in range(parts)]
@@ -478,3 +485,58 @@ def step_build(cfg, niche, project, log=print, stop_flag=lambda: False, progress
     progress(1.0, "Готово")
     log(f"ГОТОВО: {final}")
     return final
+
+
+def _choose_in_chat(cfg, project, finder, seg_blocks, jobs, vis_cache, log, check_stop, progress):
+    """Кадры выбирает Claude в чате по листам с превью (см. pipeline/review.py)."""
+    from . import review
+    rev_path, ch_path = project / "review.json", project / "выбор_кадров.json"
+    sig = [[bi, si, seg_blocks[bi]["specs"][si]["visual"], seg_blocks[bi]["specs"][si]["query"],
+            seg_blocks[bi]["specs"][si]["n"]] for bi, si in jobs]
+    lines = review.load_review(rev_path)
+    if not lines or [ln.get("sig") for ln in lines] != sig:
+        lines = None
+        ch_path.unlink(missing_ok=True)
+    if lines is None:
+        log("Ищу кандидатов под каждую строку сценария (проверять будет Claude в чате)...")
+        taken = {u for v in vis_cache.values() for it in v.get("items", []) for u in [it.get("url", "")]}
+        lines = []
+        for no, (bi, si) in enumerate(jobs, 1):
+            check_stop()
+            spec = seg_blocks[bi]["specs"][si]
+            cands = review.collect(finder, spec, taken)
+            q = spec["query"] if spec["visual"] != "person" else \
+                f"фото человека: {spec['query']}, затем — {spec.get('fill_query', '')}"
+            keep = ("kind", "url", "thumb", "duration", "source", "page", "title", "author", "license", "person", "local")
+            lines.append({"no": no, "sig": sig[no - 1], "text": spec["text"], "query": q, "n": spec["n"],
+                          "cands": [{k: c.get(k) for k in keep} for c in cands]})
+            progress(0.10 + 0.25 * no / len(jobs), f"Поиск кадров {no}/{len(jobs)}")
+        review.save_review(rev_path, lines)
+    if not ch_path.exists():
+        sheets = review.make_sheets(lines, project, log)
+        raise review.NeedChoices(sheets, len(lines))
+    choices = {int(k): v for k, v in json.loads(ch_path.read_text(encoding="utf-8")).items()}
+    log("Скачиваю выбранные кадры...")
+    picked = [(ln, [ln["cands"][k - 1] for k in choices.get(ln["no"], []) if 0 < k <= len(ln["cands"])])
+              for ln in lines]
+    flat = [c for _, cs in picked for c in cs]
+
+    def dl(c):
+        return c["url"], finder._download(c)
+    from concurrent.futures import ThreadPoolExecutor
+    with ThreadPoolExecutor(max_workers=4) as ex:
+        paths = dict(ex.map(dl, flat))
+    credits = []
+    for (bi, si), (ln, cs) in zip(jobs, picked):
+        items = []
+        for c in cs:
+            pth = paths.get(c["url"])
+            if pth:
+                items.append({"path": str(pth), "kind": c["kind"], "url": c["url"],
+                              "duration": c.get("duration") or 0, "person": bool(c.get("person"))})
+                credits.append(c)
+        seg_blocks[bi]["specs"][si]["items"] = items
+    vis_cache["chat"] = {"items": [it for b in seg_blocks for sp in b["specs"] for it in sp.get("items", [])],
+                         "credits": credits}
+    _save_json(project / "visuals.json", vis_cache)
+    progress(0.45, "Кадры выбраны")

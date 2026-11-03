@@ -1,0 +1,27 @@
+{
+  "id": "space",
+  "name": "Тайны космоса",
+  "style": "Тон: научно-популярный, спокойный. Что наблюдали, какие данные получены, какие объяснения у учёных и где наука пока не знает ответа.",
+  "visual_hint": "звёздное небо, галактики, телескопы, планеты, ракеты, обсерватории — stock; реальные снимки NASA/ESA — archive.",
+  "tts_instructions": "Говори как диктор документального фильма-расследования: низкий спокойный голос, размеренный темп, лёгкое напряжение, выразительные паузы перед ключевыми фактами.",
+  "grade": "eq=contrast=1.05:saturation=0.9:gamma=0.98,colorbalance=rs=-0.02:bs=0.03:rh=0.02:bh=-0.02,vignette=PI/6",
+  "accent": [
+    120,
+    110,
+    240
+  ],
+  "fallback_queries": [
+    "starry night sky",
+    "galaxy space",
+    "telescope observatory",
+    "planet space",
+    "milky way"
+  ],
+  "eyebrow": {
+    "ru": "Тайны космоса",
+    "en": "Space mysteries",
+    "de": "Rätsel des Weltalls",
+    "fr": "Mystères de l'espace",
+    "es": "Misterios del espacio"
+  }
+}

@@ -192,6 +192,8 @@ def _project_info(d: Path):
         "thumb": thumb.name if thumb.exists() else "",
         "language": data.get("language", "ru"),
         "has_description": (d / "description.txt").exists(),
+        "need_choices": (d / "review.json").exists() and not (d / "выбор_кадров.json").exists() and not video,
+        "sheets": sorted(p.name for p in d.glob("кадры_лист_*.jpg")),
     }
 
 
@@ -300,7 +302,7 @@ def make_shortcut(quiet=False):
 PUBLIC_KEYS = ["yandex_api_key", "yandex_folder_id", "yandex_voice", "yandex_speed", "pixabay_key", "pexels_key",
                "tts_provider", "edge_voice", "anthropic_key", "openai_key", "elevenlabs_key", "elevenlabs_voice_id",
                "music_volume", "shot_seconds", "show_labels", "theme", "sound_done", "open_folder_after",
-               "default_niche", "update_repo", "language"]
+               "default_niche", "update_repo", "language", "visual_check"]
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -486,16 +488,25 @@ class Handler(BaseHTTPRequestHandler):
             d = _project_dir(data.get("id"))
 
             def job():
-                JOB.project = d.name
                 sj = runner._load_json(d / "script.json", {})
                 npath = sj.get("niche_file")
                 if not (npath and Path(npath).exists()):
                     npath = _niche_path(data.get("niche"))
-                runner.step_build(config.load_config(), config.load_niche(npath), d, JOB.add_log,
-                                  lambda: JOB.stop, JOB.progress)
-                return {"project": d.name}
+                return _build(d, Path(npath))
             ok = run_job("build", job)
             return self._send(200 if ok else 409, {"ok": ok, "error": None if ok else "Уже идёт работа"})
+        if p == "/api/choices":
+            from pipeline import review
+            d = _project_dir(data.get("id"))
+            lines = review.load_review(d / "review.json")
+            if not lines:
+                return self._send(400, {"error": "В проекте нет листов для выбора кадров"})
+            ch = review.parse_choices(data.get("text", ""), lines)
+            if not ch:
+                return self._send(400, {"error": "Не нашёл в тексте номеров. Вставьте ответ Claude целиком: строки вида «12: 3 1»."})
+            missing = [ln["no"] for ln in lines if ln["no"] not in ch]
+            (d / "выбор_кадров.json").write_text(json.dumps({str(k): v for k, v in ch.items()}), encoding="utf-8")
+            return self._send(200, {"ok": True, "lines": len(ch), "missing": missing})
         if p == "/api/stop":
             JOB.stop = True
             JOB.add_log("Остановка после текущего шага... Сделанное сохранится — повторная сборка продолжит.")
@@ -577,15 +588,7 @@ class Handler(BaseHTTPRequestHandler):
 
         def job():
             project = runner.project_from_text(path, npath, JOB.add_log)
-            JOB.project = project.name
-            runner.step_build(config.load_config(), config.load_niche(npath), project, JOB.add_log,
-                              lambda: JOB.stop, JOB.progress)
-            if config.load_config().get("open_folder_after"):
-                try:
-                    _open_path(project)
-                except Exception:
-                    pass
-            return {"project": project.name}
+            return _build(project, npath)
         ok = run_job("build", job)
         return self._send(200 if ok else 409, {"ok": ok, "error": None if ok else "Уже идёт работа"})
 
@@ -643,6 +646,24 @@ class Handler(BaseHTTPRequestHandler):
         if r.status_code != 200:
             return self._send(502, {"error": f"Не удалось скачать обновление ({r.status_code})"})
         return self._update_zip(r.content)
+
+
+def _build(project, npath):
+    """Сборка проекта. Если нужен выбор кадров в чате — возвращает это как результат, а не ошибку."""
+    from pipeline import review
+    JOB.project = project.name
+    try:
+        runner.step_build(config.load_config(), config.load_niche(npath), project, JOB.add_log,
+                          lambda: JOB.stop, JOB.progress)
+    except review.NeedChoices as e:
+        JOB.add_log("Кадры-кандидаты собраны. Отправьте листы Claude в чат и вставьте его ответ в программу.")
+        return {"project": project.name, "need_choices": True, "sheets": e.sheets, "lines": e.lines}
+    if config.load_config().get("open_folder_after"):
+        try:
+            _open_path(project)
+        except Exception:
+            pass
+    return {"project": project.name}
 
 
 def _niche_path(niche_id):

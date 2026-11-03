@@ -1,0 +1,27 @@
+{
+  "id": "lost",
+  "name": "Затерянные города и древние цивилизации",
+  "style": "Тон: научно-популярный, как у археологического документального фильма. Что нашли, как датировали, какие гипотезы у учёных и что остаётся неизвестным.",
+  "visual_hint": "руины, пустыня, джунгли, древние камни, раскопки, аэросъёмка, карты — stock; реальные памятники и находки — archive.",
+  "tts_instructions": "Говори как диктор документального фильма-расследования: низкий спокойный голос, размеренный темп, лёгкое напряжение, выразительные паузы перед ключевыми фактами.",
+  "grade": "eq=contrast=1.05:saturation=0.9:gamma=0.98,colorbalance=rs=-0.02:bs=0.03:rh=0.02:bh=-0.02,vignette=PI/6",
+  "accent": [
+    200,
+    150,
+    60
+  ],
+  "fallback_queries": [
+    "ancient ruins",
+    "desert aerial",
+    "jungle temple",
+    "old stones",
+    "archaeology excavation"
+  ],
+  "eyebrow": {
+    "ru": "Затерянные миры",
+    "en": "Lost worlds",
+    "de": "Verlorene Welten",
+    "fr": "Mondes perdus",
+    "es": "Mundos perdidos"
+  }
+}

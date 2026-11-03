@@ -1,0 +1,27 @@
+{
+  "id": "ocean",
+  "name": "Тайны океана и корабли-призраки",
+  "style": "Тон: спокойное морское расследование. Хронология рейса, что нашли, версии с аргументами, вывод: что известно точно. Без мистики ради мистики.",
+  "visual_hint": "море, парусники, шторм, туман над водой, порты, карты, компас, судовой журнал — stock; реальные корабли и люди — archive.",
+  "tts_instructions": "Говори как диктор документального фильма-расследования: низкий спокойный голос, размеренный темп, лёгкое напряжение, выразительные паузы перед ключевыми фактами.",
+  "grade": "eq=contrast=1.05:saturation=0.9:gamma=0.98,colorbalance=rs=-0.02:bs=0.03:rh=0.02:bh=-0.02,vignette=PI/6",
+  "accent": [
+    40,
+    140,
+    220
+  ],
+  "fallback_queries": [
+    "ocean waves",
+    "sailing ship sea",
+    "fog over sea",
+    "stormy sea",
+    "old harbor"
+  ],
+  "eyebrow": {
+    "ru": "Тайны океана",
+    "en": "Mysteries of the sea",
+    "de": "Rätsel des Meeres",
+    "fr": "Mystères de l'océan",
+    "es": "Misterios del océano"
+  }
+}

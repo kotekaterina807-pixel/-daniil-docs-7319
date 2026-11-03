@@ -409,3 +409,20 @@ input[type=range]::-webkit-slider-thumb:hover { transform: scale(1.15); }
 
 .upd-btn { position: relative; }
 .upd-dot { width: 8px; height: 8px; border-radius: 50%; background: #ff6b6b; box-shadow: 0 0 0 3px rgba(255,107,107,.25); margin-left: auto; animation: pulse 1.6s ease-in-out infinite; }
+
+.mini-job { cursor: pointer; transition: background .2s ease; }
+.mini-job:hover { background: rgba(255,255,255,.12); }
+.eta-big { display: flex; justify-content: space-between; align-items: flex-end; gap: 16px; margin: 4px 0 14px; }
+.eta-left, .eta-right { display: flex; flex-direction: column; gap: 2px; }
+.eta-right { text-align: right; }
+.eta-label { font-size: 12px; color: var(--muted); text-transform: uppercase; letter-spacing: .05em; font-weight: 600; }
+.eta-val { font-size: 30px; font-weight: 700; letter-spacing: -.01em; font-variant-numeric: tabular-nums; color: var(--text); }
+.eta-clock { font-size: 20px; font-weight: 600; color: var(--primary-text); font-variant-numeric: tabular-nums; }
+.job-meta b, .pct { font-variant-numeric: tabular-nums; }
+.steps { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 12px; }
+.step { font-size: 12px; padding: 4px 10px; border-radius: 14px; background: var(--surface-2); color: var(--muted); transition: all .3s ease; }
+.step.done { color: var(--success); background: var(--success-soft); }
+.step.now { color: #fff; background: var(--primary); }
+.card.choose { border-color: color-mix(in srgb, var(--warn) 45%, var(--line)); }
+.howto { margin: 0 0 16px; padding-left: 20px; color: var(--text); line-height: 1.7; font-size: 13.5px; }
+.howto code, .modal code { background: var(--surface-3); padding: 1px 6px; border-radius: 5px; font-size: 12.5px; }

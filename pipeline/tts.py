@@ -400,7 +400,7 @@ def synthesize(cfg, niche, text, out_wav, prev_text="", next_text="", log=print)
         else:
             _openai(cfg, part, mp3, niche.get("tts_instructions", ""), log)
         mp3s.append(mp3)
-    to_wav(mp3s, out_wav, gap=0.32 if provider == "yandex" else 0.0, tempo=tempo)
+    to_wav(mp3s, out_wav, gap=0.4 if provider == "yandex" else 0.0, tempo=tempo)
     for m in mp3s:
         m.unlink(missing_ok=True)
     return wav_duration(out_wav)

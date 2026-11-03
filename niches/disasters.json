@@ -1,0 +1,27 @@
+{
+  "id": "disasters",
+  "name": "Катастрофы и истории выживания",
+  "style": "Тон: сдержанный и уважительный к жертвам. Хронология событий по минутам, причины по данным расследований, что изменилось после. Без смакования.",
+  "visual_hint": "стихия, горы, снег, море, техника, спасатели, документы расследования — stock; реальные места и фото событий — archive.",
+  "tts_instructions": "Говори как диктор документального фильма-расследования: низкий спокойный голос, размеренный темп, лёгкое напряжение, выразительные паузы перед ключевыми фактами.",
+  "grade": "eq=contrast=1.05:saturation=0.9:gamma=0.98,colorbalance=rs=-0.02:bs=0.03:rh=0.02:bh=-0.02,vignette=PI/6",
+  "accent": [
+    230,
+    90,
+    40
+  ],
+  "fallback_queries": [
+    "storm clouds",
+    "snow mountains",
+    "rescue helicopter",
+    "dark sea",
+    "old documents"
+  ],
+  "eyebrow": {
+    "ru": "Катастрофы",
+    "en": "Disasters",
+    "de": "Katastrophen",
+    "fr": "Catastrophes",
+    "es": "Catástrofes"
+  }
+}
