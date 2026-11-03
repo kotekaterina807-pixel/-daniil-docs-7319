@@ -406,3 +406,6 @@ input[type=range]::-webkit-slider-thumb:hover { transform: scale(1.15); }
 .chipbtn .n { opacity: .7; margin-left: 4px; }
 .modal.wide { width: min(1100px, 94vw); }
 .player { width: 100%; border-radius: 12px; background: #000; display: block; max-height: 70vh; }
+
+.upd-btn { position: relative; }
+.upd-dot { width: 8px; height: 8px; border-radius: 50%; background: #ff6b6b; box-shadow: 0 0 0 3px rgba(255,107,107,.25); margin-left: auto; animation: pulse 1.6s ease-in-out infinite; }

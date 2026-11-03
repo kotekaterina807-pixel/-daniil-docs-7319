@@ -625,36 +625,52 @@ async function updateFromZip(f) {
   } catch (e) { toast("Обновление не установлено: " + e.message, "err", 7000); }
 }
 $("#updFile").addEventListener("change", (e) => { if (e.target.files[0]) updateFromZip(e.target.files[0]); e.target.value = ""; });
-$("#updCheck").onclick = async () => {
+// обновление одной кнопкой: проверка на GitHub → установка → перезапуск
+async function installOnline() {
+  $("#updStatus").textContent = "Скачиваю и устанавливаю…";
+  $("#updSideText").textContent = "Устанавливаю…";
   try {
-    const r = await api("/api/check_update", {});
-    if (!r.ok) { toast(r.error, "err", 5000); return; }
-    if (!r.newer) { toast(`У вас последняя версия (${r.current})`, "ok"); return; }
-    modal("Есть новая версия", `<p>Установлена ${esc(r.current)}, доступна <b>${esc(r.latest)}</b>.</p>`, [
-      { text: "Позже" },
-      { text: "Обновить", cls: "primary", onClick: async () => {
-        try { const u = await api("/api/update_online", {}); toast(`Обновлено до ${u.version}. Перезапуск…`, "ok", 5000); S.restarting = true; }
-        catch (e) { toast(e.message, "err", 7000); } } },
-    ]);
-  } catch (e) { toast(e.message, "err"); }
-};
+    const u = await api("/api/update_online", {});
+    toast(`Обновлено до версии ${u.version}. Перезапуск…`, "ok", 6000);
+    S.restarting = true;
+  } catch (e) {
+    toast("Не обновилось: " + e.message, "err", 8000);
+    $("#updStatus").textContent = "Не обновилось: " + e.message;
+    $("#updSideText").textContent = "Обновить программу";
+  }
+}
+async function checkUpdate(manual) {
+  if (S.jobRunning) { if (manual) toast("Дождитесь окончания сборки, потом обновляйте", "err"); return; }
+  if (manual) { $("#updStatus").textContent = "Проверяю…"; $("#updSideText").textContent = "Проверяю…"; }
+  let r;
+  try { r = await api("/api/check_update", {}); }
+  catch (e) { r = { ok: false, error: e.message }; }
+  $("#updSideText").textContent = "Обновить программу";
+  if (!r.ok) {
+    if (manual) { toast("Не удалось проверить: " + r.error, "err", 6000); $("#updStatus").textContent = "Не удалось проверить: " + r.error; }
+    return;
+  }
+  $("#updDot").hidden = !r.newer;
+  if (!r.newer) {
+    $("#updStatus").textContent = `У вас последняя версия (${r.current})`;
+    if (manual) toast(`У вас последняя версия (${r.current})`, "ok");
+    return;
+  }
+  $("#updStatus").textContent = `Доступна версия ${r.latest}`;
+  $("#updSideText").textContent = "Доступно обновление";
+  modal("Доступно обновление", `<p>Установлена версия ${esc(r.current)}. Доступна <b>${esc(r.latest)}</b>.</p>
+    <p class="muted small">Ключи, проекты, футажи и музыка сохранятся. Программа перезапустится сама.</p>`, [
+    { text: "Позже" },
+    { text: "Обновить", cls: "primary", onClick: installOnline },
+  ]);
+}
+$("#updNow").onclick = () => checkUpdate(true);
+$("#updSide").onclick = () => checkUpdate(true);
+$("#updCheck").onclick = () => checkUpdate(true);
 $("#shortcutBtn").onclick = () => api("/api/shortcut", {}).then((r) => toast(r.ok ? "Ярлык DocuStudio на рабочем столе готов" : "Не удалось создать ярлык", r.ok ? "ok" : "err")).catch((e) => toast(e.message, "err"));
 
 // при запуске программа сама проверяет, есть ли новая версия на GitHub
-async function autoUpdateCheck() {
-  if (!S.cfg.update_repo || S.jobRunning) return;
-  try {
-    const r = await api("/api/check_update", {});
-    if (!r.ok || !r.newer) return;
-    modal("Доступно обновление", `<p>Установлена версия ${esc(r.current)}. Доступна <b>${esc(r.latest)}</b>.</p>
-      <p class="muted small">Ключи, проекты, футажи и музыка сохранятся. Программа перезапустится сама.</p>`, [
-      { text: "Позже" },
-      { text: "Обновить", cls: "primary", onClick: async () => {
-        try { const u = await api("/api/update_online", {}); toast(`Обновлено до ${u.version}. Перезапуск…`, "ok", 5000); S.restarting = true; }
-        catch (e) { toast("Не обновилось: " + e.message, "err", 7000); } } },
-    ]);
-  } catch (e) {}
-}
+function autoUpdateCheck() { if (S.cfg.update_repo) checkUpdate(false); }
 
 // окно закрывается — программа завершится сама, если ничего не собирается
 window.addEventListener("pagehide", () => { try { navigator.sendBeacon(`/api/bye?t=${encodeURIComponent(TOKEN)}`); } catch (e) {} });
