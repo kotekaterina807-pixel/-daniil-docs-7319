@@ -48,8 +48,10 @@ def _open_path(p):
 
 
 def _h(text):
+    """Имя файла примера зависит от фразы и скорости речи — при смене скорости пример озвучится заново."""
     import hashlib
-    return hashlib.md5(text.encode("utf-8")).hexdigest()[:8]
+    speed = str(config.load_config().get("yandex_speed", "0.9"))
+    return hashlib.md5(f"{text}|{speed}".encode("utf-8")).hexdigest()[:8]
 
 
 def _fmt(sec):
@@ -530,7 +532,7 @@ class Handler(BaseHTTPRequestHandler):
                 if provider == "yandex" and not cfg.get("yandex_api_key"):
                     raise RuntimeError("Не указан API-ключ Yandex — вставьте его в «Параметры → Сервисы и ключи».")
                 JOB.add_log("Озвучиваю пример всеми голосами...")
-                made, errors = tts.voice_samples(cfg, text, ROOT / "voice_samples", JOB.add_log, provider)
+                made, errors = tts.voice_samples(cfg, text, ROOT / "voice_samples", JOB.add_log, provider, h=_h(text))
                 if not made:
                     raise RuntimeError(errors[0] if errors else "Ни один голос не озвучил пример")
                 return {"made": len(made), "errors": errors}

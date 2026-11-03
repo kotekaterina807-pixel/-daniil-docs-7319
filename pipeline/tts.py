@@ -168,7 +168,7 @@ def _yandex_v3(cfg, text, out_mp3, log, voice_value=None):
     if voice in LIVETTS:
         body["model"] = "livetts"
     else:
-        hints.append({"speed": str(cfg.get("yandex_speed", "1.0") or "1.0")})
+        hints.append({"speed": f"{_speed(cfg):.2f}"})
     headers = {"Authorization": f"Api-Key {key}", "Content-Type": "application/json"}
     from .config import clean_folder_id
     folder = clean_folder_id(cfg.get("yandex_folder_id", ""))
@@ -292,10 +292,10 @@ def make_sample(cfg, provider, value, text, out_mp3):
     return out_mp3
 
 
-def voice_samples(cfg, text, out_dir, log=print, provider="yandex"):
+def voice_samples(cfg, text, out_dir, log=print, provider="yandex", h=None):
     """Озвучивает одну фразу всеми голосами (амплуа по умолчанию) — для сравнения на слух."""
     import hashlib
-    h = hashlib.md5(text.encode("utf-8")).hexdigest()[:8]
+    h = h or hashlib.md5(text.encode("utf-8")).hexdigest()[:8]
     out_dir = Path(out_dir) / provider
     made, errors = [], []
     items = ([(v, t) for v, t, _ in EDGE_VOICES] if provider == "edge"
@@ -324,7 +324,8 @@ def _edge(cfg, text, out_mp3, log, voice=None):
         raise TTSError("Модуль edge-tts не установлен. Запустите install.bat ещё раз.")
 
     async def run():
-        await edge_tts.Communicate(text, voice or cfg.get("edge_voice", "ru-RU-DmitryNeural")).save(str(out_mp3))
+        rate = f"{round((_speed(cfg) - 1) * 100):+d}%"
+        await edge_tts.Communicate(text, voice or cfg.get("edge_voice", "ru-RU-DmitryNeural"), rate=rate).save(str(out_mp3))
 
     for attempt in range(4):
         try:
@@ -336,7 +337,14 @@ def _edge(cfg, text, out_mp3, log, voice=None):
     raise TTSError("Бесплатная озвучка Edge не отвечает.")
 
 
-def to_wav(inputs, out_wav, gap=0.0):
+def _speed(cfg):
+    try:
+        return max(0.7, min(1.3, float(str(cfg.get("yandex_speed", "0.9")).replace(",", "."))))
+    except ValueError:
+        return 0.9
+
+
+def to_wav(inputs, out_wav, gap=0.0, tempo=1.0):
     """Склеивает один или несколько аудиофайлов в WAV моно 44.1 кГц (gap — пауза между частями, сек)."""
     import os
     cmd = [ffmpeg_exe(), "-y", "-hide_banner", "-loglevel", "error"]
@@ -345,7 +353,8 @@ def to_wav(inputs, out_wav, gap=0.0):
     n = len(inputs)
     pre = "".join(f"[{i}:a]aformat=sample_rates={SAMPLE_RATE}:channel_layouts=mono"
                   f"{f',apad=pad_dur={gap}' if gap and i < n - 1 else ''}[p{i}];" for i in range(n))
-    filt = pre + "".join(f"[p{i}]" for i in range(n)) + f"concat=n={n}:v=0:a=1[a]"
+    filt = pre + "".join(f"[p{i}]" for i in range(n)) + f"concat=n={n}:v=0:a=1" + \
+        (f",atempo={tempo:.3f}" if abs(tempo - 1) > 0.01 else "") + "[a]"
     cmd += ["-filter_complex", filt, "-map", "[a]", "-ac", "1", "-ar", str(SAMPLE_RATE), str(out_wav)]
     p = subprocess.run(cmd, capture_output=True, text=True, errors="replace",
                        creationflags=0x08000000 if os.name == "nt" else 0)
@@ -365,8 +374,22 @@ def synthesize(cfg, niche, text, out_wav, prev_text="", next_text="", log=print)
     if provider == "yandex" and cfg.get("language", "ru") not in YANDEX_LANGS:
         provider = "edge"          # у Yandex нет голосов для этого языка
     limit = {"openai": 1500, "elevenlabs": 2500, "edge": 3000, "yandex": 240}.get(provider, 1500)
+    if provider == "yandex":
+        # каждое предложение — отдельно, с паузой между ними: так звучит размеренная речь диктора
+        parts = []
+        for sent in [x for x in re.split(r"(?<=[.!?…])\s+", text.strip()) if x]:
+            if parts and len(parts[-1]) < 30 and len(parts[-1]) + len(sent) < limit:
+                parts[-1] += " " + sent             # очень короткие фразы склеиваем с соседней
+            else:
+                parts += _chunks(sent, limit)
+    else:
+        parts = _chunks(text, limit)
+    speed = _speed(cfg)
+    voice = _split_voice(cfg.get("yandex_voice"))[0]
+    # у голосов LiveTTS скорость не задаётся в запросе — замедляем сами, без изменения тембра
+    tempo = speed if (provider == "yandex" and voice in LIVETTS and abs(speed - 1) > 0.01) else 1.0
     mp3s = []
-    for j, part in enumerate(_chunks(text, limit)):
+    for j, part in enumerate(parts):
         mp3 = out_wav.with_name(f"{out_wav.stem}_{j}.mp3")
         if provider == "yandex":
             _yandex(cfg, part, mp3, log)
@@ -377,7 +400,7 @@ def synthesize(cfg, niche, text, out_wav, prev_text="", next_text="", log=print)
         else:
             _openai(cfg, part, mp3, niche.get("tts_instructions", ""), log)
         mp3s.append(mp3)
-    to_wav(mp3s, out_wav, gap=0.18 if provider == "yandex" else 0.0)
+    to_wav(mp3s, out_wav, gap=0.32 if provider == "yandex" else 0.0, tempo=tempo)
     for m in mp3s:
         m.unlink(missing_ok=True)
     return wav_duration(out_wav)

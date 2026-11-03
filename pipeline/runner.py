@@ -14,7 +14,7 @@ from .config import MUSIC_DIR, OUTPUT_DIR, ensure_dirs, ffmpeg_exe, lang
 from . import library
 from .visuals import VisualFinder
 
-PAUSE_SEC = 0.35     # пауза между абзацами
+PAUSE_SEC = 0.6      # пауза между абзацами
 CARD_SEC = 1.8       # название главы поверх видео
 TITLE_SEC = 4.0      # заставка с названием в начале
 LABEL_SEC = 5.0      # сколько держится всплывающая подпись
@@ -158,7 +158,7 @@ def step_build(cfg, niche, project, log=print, stop_flag=lambda: False, progress
     log(f"Озвучка: {len(segs)} абзацев ({provider}, {L['name']})...")
     for i, s in enumerate(segs):
         check_stop()
-        s["audio"] = str(audio_dir / f"{_key(provider, voice or '', s['text'])}.wav")
+        s["audio"] = str(audio_dir / f"{_key(provider, voice or '', s['text'], 'p3')}.wav")
         if not Path(s["audio"]).exists():
             prev_t = segs[i - 1]["text"] if i else ""
             next_t = segs[i + 1]["text"] if i + 1 < len(segs) else ""

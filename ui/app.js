@@ -539,7 +539,7 @@ async function loadVoices() {
       <div class="name">${esc(v.name)}${tags}<small>${v.gender === "м" ? "мужской" : "женский"}${isCur ? " · выбран: " + esc(voiceTitle(v, cur)) : ""}</small>${roles}</div>
       ${isCur && selVal === cur ? '<span class="chip ok">Выбран</span>' : '<button class="btn small ghost" data-pick>Выбрать</button>'}</div>`;
   }).join("");
-  const sp = $("#speed"); sp.value = S.cfg.yandex_speed || 1.0; rangeFill(sp); $("#speedVal").textContent = `${parseFloat(sp.value).toFixed(2)}×`;
+  const sp = $("#speed"); sp.value = S.cfg.yandex_speed || 0.9; rangeFill(sp); $("#speedVal").textContent = `${parseFloat(sp.value).toFixed(2)}×`;
 }
 $("#provSeg").addEventListener("click", (e) => { const b = e.target.closest("button"); if (!b) return; VS.provider = b.dataset.v; VS.role = {}; loadVoices(); });
 $("#voiceFilter").addEventListener("click", (e) => {
@@ -571,7 +571,7 @@ $("#sampleText").addEventListener("change", (e) => {
 $("#sampleReset").onclick = () => { try { localStorage.removeItem("ds-sample"); } catch (e) {} loadVoices(); renderVoiceCard(); };
 $("#speed").addEventListener("input", (e) => { rangeFill(e.target); $("#speedVal").textContent = `${parseFloat(e.target.value).toFixed(2)}×`; });
 $("#speed").addEventListener("change", (e) => save({ yandex_speed: String(e.target.value) }));
-$("#speedReset").onclick = () => { const sp = $("#speed"); sp.value = 1.0; rangeFill(sp); $("#speedVal").textContent = "1.00×"; save({ yandex_speed: "1.0" }); };
+$("#speedReset").onclick = () => { const sp = $("#speed"); sp.value = 0.9; rangeFill(sp); $("#speedVal").textContent = "0.90×"; save({ yandex_speed: "0.9" }); };
 $("#samplesBtn").onclick = () => api("/api/voice_samples", { provider: VS.provider || "yandex", text: sampleText() })
   .then(() => toast("Озвучиваю все голоса — прогресс на главной, можно оставаться здесь")).catch((e) => toast(e.message, "err"));
 
