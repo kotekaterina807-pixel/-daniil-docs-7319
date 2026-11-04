@@ -746,16 +746,33 @@ class Handler(BaseHTTPRequestHandler):
         return self._update_zip(r.content)
 
 
+def _tokens_left():
+    """Остаток токенов Lumean (None, если озвучка не через Lumean или сайт не ответил)."""
+    try:
+        cfg = config.load_config()
+        if tts.provider_of(cfg) != "lumean":
+            return None
+        from pipeline import lumean
+        acc = lumean.account(cfg)
+        return int(acc["left"])
+    except Exception:
+        return None
+
+
 def _build(project, npath):
     """Сборка проекта. Если нужен выбор кадров в чате — возвращает это как результат, а не ошибку."""
     from pipeline import review
     JOB.project = project.name
+    before = _tokens_left()
     try:
         runner.step_build(config.load_config(), config.load_niche(npath), project, JOB.add_log,
                           lambda: JOB.stop, JOB.progress)
     except review.NeedChoices as e:
         JOB.add_log("Кадры-кандидаты собраны. Отправьте листы Claude в чат и вставьте его ответ в программу.")
         return {"project": project.name, "need_choices": True, "sheets": e.sheets, "lines": e.lines}
+    after = _tokens_left()
+    if before is not None and after is not None:
+        JOB.add_log(f"Озвучка: потрачено токенов Lumean {max(0, before - after):,}, осталось {after:,}".replace(",", " "))
     if config.load_config().get("open_folder_after"):
         try:
             _open_path(project)

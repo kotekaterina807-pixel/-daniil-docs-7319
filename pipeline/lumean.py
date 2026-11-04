@@ -117,19 +117,34 @@ def account(cfg):
 
 # ---------- голоса ----------
 def library(cfg, search="", gender="", age="", use_cases="", language="ru", page=0):
-    params = {"page": page, "page_size": 30}
-    for k, v in (("search", search), ("gender", gender), ("age", age), ("use_cases", use_cases),
-                 ("required_languages", language)):
-        if v:
-            params[k] = v
-    d = _req(cfg, "GET", "/voices/elevenlabs/library", params=params) or {}
+    def speaks(v):
+        """Голос действительно для нужного языка (каталог иногда отдаёт чужие)."""
+        if not language:
+            return True
+        langs = {str(v.get("language") or "").lower()[:2]}
+        for vl in v.get("verified_languages") or []:
+            if isinstance(vl, dict):
+                langs.add(str(vl.get("language") or "").lower()[:2])
+        return language.lower()[:2] in langs
+    raw, d = [], {}
+    for _ in range(4):                               # если на странице мало голосов нужного языка — берём следующую
+        params = {"page": page, "page_size": 30}
+        for k, v in (("search", search), ("gender", gender), ("age", age), ("use_cases", use_cases),
+                     ("required_languages", language), ("language", language)):
+            if v:
+                params[k] = v
+        d = _req(cfg, "GET", "/voices/elevenlabs/library", params=params) or {}
+        raw += [v for v in d.get("voices") or [] if speaks(v)]
+        if len(raw) >= 10 or not d.get("has_more"):
+            break
+        page += 1
     out = []
-    for v in d.get("voices") or []:
+    for v in raw:
         desc = ", ".join(x for x in (v.get("gender"), v.get("age"), v.get("accent"), v.get("descriptive"),
                                      v.get("use_case"), v.get("language")) if x)
         out.append({"id": v.get("voice_id"), "name": v.get("name") or v.get("voice_id"), "desc": desc,
                     "preview": v.get("preview_url") or "", "about": (v.get("description") or "")[:200]})
-    return {"voices": out, "has_more": bool(d.get("has_more")), "page": d.get("page", page)}
+    return {"voices": out, "has_more": bool(d.get("has_more")), "page": page}
 
 
 # ---------- шаблон ----------

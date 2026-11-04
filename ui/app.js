@@ -346,6 +346,7 @@ $("#miniJob").addEventListener("click", () => { go("home"); setTimeout(() => $("
 function onJobDone(j) {
   if (j.kind === "build") {
     loadRecent();
+    if (EL.hasKey) loadUsage();
     if (j.result && j.result.need_choices) {
       if (S.cfg.sound_done) chime();
       showChoose(j.result.project, j.result.sheets.length, j.result.lines);
@@ -602,8 +603,11 @@ async function loadUsage() {
   if (!r.ok) { $("#elUsage").innerHTML = `<span style="color:var(--danger)">${esc(r.error)}</span>`; return; }
   const left = Math.max(0, (r.limit || 0) - (r.used || 0));
   const unit = r.unit || "символов";
-  $("#elUsage").innerHTML = `Тариф: <b>${esc(r.tier)}</b> · осталось ${unit}: <b>${left.toLocaleString("ru-RU")}</b> из ${(r.limit || 0).toLocaleString("ru-RU")}<br>Это примерно <b>${Math.floor(left / 1100)} мин</b> озвучки (1 ${unit === "токенов" ? "токен" : "символ"} ≈ 1 буква текста; 3-минутное видео ≈ 3 300).`;
+  const now = new Date().toLocaleTimeString("ru-RU", { hour: "2-digit", minute: "2-digit" });
+  $("#elUsage").innerHTML = `Тариф: <b>${esc(r.tier)}</b> · осталось ${unit}: <b>${left.toLocaleString("ru-RU")}</b> из ${(r.limit || 0).toLocaleString("ru-RU")}<br>Это примерно <b>${Math.floor(left / 1100)} мин</b> озвучки (1 ${unit === "токенов" ? "токен" : "символ"} ≈ 1 буква текста; 3-минутное видео ≈ 3 300).<br><span class="muted small">Обновлено в ${now} · обновляется само каждую минуту и после каждой сборки</span>`;
 }
+// остаток токенов: раз в минуту, пока открыта вкладка «Голоса», и сразу после каждой сборки
+setInterval(() => { if ($("#page-voices").classList.contains("active") && EL.hasKey && !document.hidden) loadUsage(); }, 60000);
 $("#elVoices").addEventListener("click", async (e) => {
   const row = e.target.closest(".vrow"); if (!row) return;
   const id = row.dataset.id, v = EL.voices.find((x) => x.id === id);
@@ -647,6 +651,7 @@ async function libSearch(page) {
     age: $("#libAge").value, use_cases: $("#libUse").value, language: "ru", page }).catch((e) => ({ ok: false, error: e.message }));
   if (!r.ok) { box.innerHTML = `<p class="small" style="color:var(--danger)">${esc(r.error)}</p>`; return; }
   LIB.items = page ? LIB.items.concat(r.voices) : r.voices;
+  if (r.page != null) LIB.page = r.page;
   const have = new Set(EL.voices.map((v) => v.id));
   box.innerHTML = LIB.items.length ? LIB.items.map((v, i) => `<div class="vrow" data-i="${i}">
       <button class="playbtn" data-lprev ${v.preview ? "" : "disabled"} title="Пример с сайта">${PLAY}</button>
