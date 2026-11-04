@@ -244,10 +244,31 @@ def ai_model(cfg):
     if r.status_code != 200:
         raise LumeanError(f"Lumean AI: список моделей недоступен ({r.status_code}). "
                           "Проверьте галочку «AI» у ключа.")
-    ids = [m.get("id", "") for m in r.json().get("data", []) if m.get("kind", "chat") == "chat"]
-    claude = [i for i in ids if "claude" in i.lower()]
+    try:
+        d = r.json()
+    except ValueError:
+        d = {}
+    items = d.get("data", d) if isinstance(d, dict) else d
+    if isinstance(items, dict):
+        items = items.get("items") or items.get("models") or items.get("data") or []
+    if not isinstance(items, list):
+        items = []
+    models = []
+    for m in items:
+        if isinstance(m, str):
+            m = {"id": m}
+        if not isinstance(m, dict):
+            continue
+        mid = str(m.get("id") or m.get("model") or m.get("name") or "")
+        kind = str(m.get("kind") or m.get("type") or "chat").lower()
+        if mid and not any(x in kind for x in ("image", "embed", "audio", "tts", "video")):
+            info = " ".join(str(m.get(k, "")) for k in ("id", "name", "owned_by", "provider", "vendor")).lower()
+            models.append((mid, info))
+    claude = [i for i, info in models if any(w in info for w in ("claude", "anthropic", "sonnet", "opus", "haiku"))]
     pick = sorted([i for i in claude if "sonnet" in i.lower()], reverse=True) or sorted(claude, reverse=True)
     if not pick:
-        raise LumeanError("В Lumean сейчас нет моделей Claude.")
+        names = ", ".join(i for i, _ in models[:12]) or "список пуст"
+        raise LumeanError("Lumean не отдал ни одной модели Claude для этого ключа. Проверьте, что у ключа включён "
+                          f"доступ к AI. Модели, которые видит ключ: {names}")
     _model_cache[key] = pick[0]
     return pick[0]
