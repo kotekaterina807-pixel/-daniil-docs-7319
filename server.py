@@ -747,6 +747,15 @@ def apply_proxy(cfg=None):
     os.environ["NO_PROXY"] = os.environ["no_proxy"] = "127.0.0.1,localhost"
 
 
+def clean_key(v):
+    """Убирает то, что часто прилипает при копировании: пробелы, невидимые символы, кавычки, «X-API-KEY:»."""
+    import re
+    v = re.sub(r"[\s ​-‏⁠﻿]", "", v)
+    v = v.strip("\"'`«»“”‘’<>")
+    v = re.sub(r"^(x-api-key:|x-api-key=|apikey:|api_key=|bearer)", "", v, flags=re.I)
+    return v.strip("\"'`«»“”‘’<>")
+
+
 def save_settings(values):
     """Сохраняет параметры. Возвращает предупреждения (например, перепутаны ключ и ID каталога)."""
     cfg = config.load_config()
@@ -757,7 +766,12 @@ def save_settings(values):
         if isinstance(v, str):
             v = v.strip().replace("\n", "").replace("\r", "")
             if k.endswith("_key") or k.endswith("_id"):
-                v = v.replace(" ", "")
+                v = clean_key(v)
+                if k.endswith("_key") and v and any(m in v for m in ("•", "●", "*", "…", "...")):
+                    notes.append("Это скрытая (сокращённая) версия ключа — в списке ключей сайт показывает только "
+                                 "его начало. Полный ключ виден один раз, при создании: создайте новый ключ "
+                                 "и сразу нажмите «Копировать».")
+                    continue
         if k in ("music_volume", "shot_seconds"):
             try:
                 v = float(str(v).replace(",", "."))
