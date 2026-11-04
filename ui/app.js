@@ -537,7 +537,7 @@ function playUrl(url, btn, key) {
 }
 player.addEventListener("ended", () => { if (playingBtn) playingBtn.innerHTML = PLAY; playingBtn = null; playingKey = null; });
 document.addEventListener("visibilitychange", () => { if (document.hidden) stopAudio(); });
-const PROV = { elevenlabs: "ElevenLabs" };
+const PROV = { elevenlabs: "ElevenLabs", lumean: "Lumean · ElevenLabs" };
 const VS = { provider: null, list: [], defText: "", filter: "doc", role: {} };
 function sampleText() {
   let t = "";
@@ -570,12 +570,18 @@ async function loadVoices() {
   $("#sampleText").value = sampleText();
   let d = { voices: [], current: "", has_key: false };
   try { d = await api("/api/eleven", {}); } catch (e) { toast(e.message, "err"); }
-  EL.voices = d.voices; EL.current = d.current; EL.hasKey = d.has_key;
+  EL.voices = d.voices; EL.current = d.current; EL.hasKey = d.has_key; EL.provider = d.provider;
+  const lum = d.provider === "lumean";
+  $("#libCard").hidden = !lum || !d.has_key; $("#elTipsCard").hidden = lum;
+  $("#elImportBtn").hidden = lum; $("#elLibBtn").hidden = lum;
+  $("#lumAddHint").hidden = !lum; $("#elAddHint").hidden = lum;
+  $("#accTitle").textContent = lum ? "Аккаунт Lumean" : "Аккаунт ElevenLabs";
   const box = $("#elVoices");
+  if (lum && d.has_key && !$("#libList").children.length) libSearch(0);
   if (!d.has_key) {
-    box.innerHTML = '<div class="empty" style="padding:30px"><div>Сначала вставьте ключ ElevenLabs:<br><b>Параметры → Сервисы и ключи → Ключ ElevenLabs</b></div><button class="btn primary mt" data-goto="settings">Открыть параметры</button></div>';
+    box.innerHTML = `<div class="empty" style="padding:30px"><div>Сначала вставьте ключ ${lum ? "Lumean" : "ElevenLabs"}:<br><b>Параметры → Сервисы и ключи → Ключ ${lum ? "Lumean" : "ElevenLabs"}</b></div><button class="btn primary mt" data-goto="settings">Открыть параметры</button></div>`;
   } else if (!EL.voices.length) {
-    box.innerHTML = '<div class="empty" style="padding:30px"><div>Голосов пока нет. Добавьте голос по ID справа или нажмите «Загрузить все мои голоса».</div></div>';
+    box.innerHTML = `<div class="empty" style="padding:30px"><div>Голосов пока нет. ${lum ? "Найдите голос в библиотеке справа и нажмите «Добавить»." : "Добавьте голос по ID справа или нажмите «Загрузить все мои голоса»."}</div></div>`;
   } else {
     box.innerHTML = EL.voices.map((v) => {
       const cur = v.id === EL.current;
@@ -595,7 +601,8 @@ async function loadUsage() {
   const r = await api("/api/eleven_usage", {}).catch((e) => ({ ok: false, error: e.message }));
   if (!r.ok) { $("#elUsage").innerHTML = `<span style="color:var(--danger)">${esc(r.error)}</span>`; return; }
   const left = Math.max(0, (r.limit || 0) - (r.used || 0));
-  $("#elUsage").innerHTML = `Тариф: <b>${esc(r.tier)}</b> · осталось символов: <b>${left.toLocaleString("ru-RU")}</b> из ${(r.limit || 0).toLocaleString("ru-RU")}<br>Это примерно <b>${Math.floor(left / 1100)} мин</b> озвучки (3-минутное видео ≈ 3 300 символов).`;
+  const unit = r.unit || "символов";
+  $("#elUsage").innerHTML = `Тариф: <b>${esc(r.tier)}</b> · осталось ${unit}: <b>${left.toLocaleString("ru-RU")}</b> из ${(r.limit || 0).toLocaleString("ru-RU")}<br>Это примерно <b>${Math.floor(left / 1100)} мин</b> озвучки (1 ${unit === "токенов" ? "токен" : "символ"} ≈ 1 буква текста; 3-минутное видео ≈ 3 300).`;
 }
 $("#elVoices").addEventListener("click", async (e) => {
   const row = e.target.closest(".vrow"); if (!row) return;
@@ -608,8 +615,8 @@ $("#elVoices").addEventListener("click", async (e) => {
   const mine = e.target.closest("[data-mine]");
   if (mine) { playVoice("eleven", id, mine); return; }
   if (e.target.closest("[data-pick]")) {
-    Object.assign(S.cfg, { elevenlabs_voice_id: id, tts_provider: "elevenlabs" }); EL.current = id;
-    await api("/api/save", { values: { elevenlabs_voice_id: id, tts_provider: "elevenlabs" } }).catch((err) => toast(err.message, "err"));
+    Object.assign(S.cfg, { elevenlabs_voice_id: id }); EL.current = id;
+    await api("/api/save", { values: { elevenlabs_voice_id: id } }).catch((err) => toast(err.message, "err"));
     toast(`Голос «${v ? v.name : id}» выбран для озвучки видео`, "ok"); loadVoices(); renderVoiceCard(); return;
   }
   if (e.target.closest("[data-del]")) {
@@ -630,6 +637,41 @@ $("#elImportBtn").onclick = async () => {
   try { const r = await api("/api/eleven_import", {}); toast(r.added ? `Добавлено голосов: ${r.added}` : "Новых голосов в аккаунте нет", "ok"); loadVoices(); }
   catch (e) { toast(e.message, "err", 8000); }
 };
+// библиотека голосов ElevenLabs через Lumean
+const LIB = { page: 0, items: [] };
+async function libSearch(page) {
+  LIB.page = page;
+  const box = $("#libList");
+  if (!page) box.innerHTML = '<p class="muted small">Ищу голоса…</p>';
+  const r = await api("/api/lumean_library", { search: $("#libSearch").value.trim(), gender: $("#libGender").value,
+    age: $("#libAge").value, use_cases: $("#libUse").value, language: "ru", page }).catch((e) => ({ ok: false, error: e.message }));
+  if (!r.ok) { box.innerHTML = `<p class="small" style="color:var(--danger)">${esc(r.error)}</p>`; return; }
+  LIB.items = page ? LIB.items.concat(r.voices) : r.voices;
+  const have = new Set(EL.voices.map((v) => v.id));
+  box.innerHTML = LIB.items.length ? LIB.items.map((v, i) => `<div class="vrow" data-i="${i}">
+      <button class="playbtn" data-lprev ${v.preview ? "" : "disabled"} title="Пример с сайта">${PLAY}</button>
+      <div class="name">${esc(v.name)}<small>${esc(v.desc)}</small></div>
+      ${have.has(v.id) ? '<span class="chip ok">Добавлен</span>' : '<button class="btn small ghost" data-ladd>Добавить</button>'}</div>`).join("")
+    : '<p class="muted small">Ничего не нашлось — измените поиск или фильтры.</p>';
+  $("#libMore").hidden = !r.has_more;
+}
+$("#libFind").onclick = () => libSearch(0);
+$("#libSearch").addEventListener("keydown", (e) => { if (e.key === "Enter") libSearch(0); });
+["#libGender", "#libAge", "#libUse"].forEach((s) => $(s).addEventListener("change", () => libSearch(0)));
+$("#libMore").onclick = () => libSearch(LIB.page + 1);
+$("#libList").addEventListener("click", async (e) => {
+  const row = e.target.closest(".vrow"); if (!row) return;
+  const v = LIB.items[+row.dataset.i];
+  const pv = e.target.closest("[data-lprev]");
+  if (pv) { if (playingBtn === pv && !player.paused) { stopAudio(); return; } playUrl(v.preview, pv, "lib|" + v.id); return; }
+  if (e.target.closest("[data-ladd]")) {
+    try {
+      await api("/api/eleven_add", { voice_obj: { id: v.id, name: v.name, desc: v.desc, preview: v.preview } });
+      toast(`Голос «${v.name}» добавлен в «Мои голоса»`, "ok");
+      const d = await api("/api/init"); S.cfg = d.cfg; await loadVoices(); libSearch(0); renderVoiceCard();
+    } catch (err) { toast(err.message, "err"); }
+  }
+});
 $("#elLibBtn").onclick = () => api("/api/open_url", { url: "https://elevenlabs.io/app/voice-library" }).catch((e) => toast(e.message, "err"));
 $("#elUsageBtn").onclick = loadUsage;
 $("#elSpeed").addEventListener("input", (e) => elRange(e.target, e.target.value, "#elSpeedVal"));
@@ -642,11 +684,11 @@ $("#sampleReset").onclick = () => { try { localStorage.removeItem("ds-sample"); 
 
 // карточка «Голос диктора» на главной — меняется вместе с настройками
 async function renderVoiceCard() {
-  const prov = "elevenlabs";
+  const prov = S.cfg.tts_provider === "elevenlabs" ? "elevenlabs" : "lumean";
   const btn = $("#homePlay");
   btn.innerHTML = PLAY;
   $("#homeProv").textContent = PROV[prov] || prov;
-  if (prov === "elevenlabs") {
+  if (prov === "elevenlabs" || prov === "lumean") {
     let d = { voices: [], current: "" };
     try { d = await api("/api/eleven", {}); } catch (e) {}
     const v = d.voices.find((x) => x.id === d.current);
@@ -757,7 +799,7 @@ async function loadInit() {
   renderVoiceCard();
   poll();
   setTimeout(autoUpdateCheck, 2500);
-  if (!S.cfg.elevenlabs_key || !S.cfg.pixabay_key) {
+  if (!(S.cfg.lumean_key || S.cfg.elevenlabs_key) || !S.cfg.pixabay_key) {
     setTimeout(() => toast("Сначала вставьте ключи: Параметры → Сервисы и ключи", "", 6000), 600);
   }
 })();

@@ -146,22 +146,37 @@ def step_build(cfg, niche, project, log=print, stop_flag=lambda: False, progress
             raise RuntimeError("Остановлено пользователем.")
 
     # ---------- 1. озвучка ----------
-    provider = "elevenlabs"
-    voice = {"openai": cfg.get("openai_voice"), "elevenlabs": f"{cfg.get('elevenlabs_voice_id')}:{cfg.get('eleven_speed')}:{cfg.get('eleven_stability')}",
-             "edge": cfg.get("edge_voice")
-             }.get(provider, "")
+    provider = tts.provider_of(cfg)
+    voice = f"{cfg.get('elevenlabs_voice_id')}:{cfg.get('eleven_speed')}:{cfg.get('eleven_stability')}:{cfg.get('elevenlabs_model')}"
+    if not str(cfg.get("elevenlabs_voice_id", "")).strip():
+        raise RuntimeError("Не выбран голос диктора — выберите его на вкладке «Голоса».")
     segs = [s for ch in script["chapters"] for s in ch["segments"]]
-    log(f"Озвучка: {len(segs)} абзацев ({provider}, {L['name']})...")
+    log(f"Озвучка: {len(segs)} абзацев ({'Lumean' if provider == 'lumean' else 'ElevenLabs'}, {L['name']})...")
+    todo = []
     for i, s in enumerate(segs):
-        check_stop()
-        s["audio"] = str(audio_dir / f"{_key(provider, voice or '', s['text'], 'p3')}.wav")
+        s["audio"] = str(audio_dir / f"{_key('elevenlabs', voice, s['text'], 'p3')}.wav")
         if not Path(s["audio"]).exists():
-            prev_t = segs[i - 1]["text"] if i else ""
-            next_t = segs[i + 1]["text"] if i + 1 < len(segs) else ""
-            tts.synthesize(cfg, niche, s["text"], s["audio"], prev_t, next_t, log)
-        progress(0.10 * (i + 1) / len(segs), f"Озвучка {i + 1}/{len(segs)}")
-        if (i + 1) % 10 == 0 or i + 1 == len(segs):
-            log(f"  Озвучено {i + 1}/{len(segs)}")
+            todo.append(i)
+    done = [len(segs) - len(todo)]
+
+    def speak(i):
+        if stop_flag():
+            return
+        s = segs[i]
+        prev_t = segs[i - 1]["text"] if i else ""
+        next_t = segs[i + 1]["text"] if i + 1 < len(segs) else ""
+        tts.synthesize(cfg, niche, s["text"], s["audio"], prev_t, next_t, log)
+        done[0] += 1
+        progress(0.10 * done[0] / len(segs), f"Озвучка {done[0]}/{len(segs)}")
+        if done[0] % 5 == 0 or done[0] == len(segs):
+            log(f"  Озвучено {done[0]}/{len(segs)}")
+
+    # заказы Lumean выполняются на их стороне — отправляем по 3 абзаца сразу
+    from concurrent.futures import ThreadPoolExecutor
+    with ThreadPoolExecutor(max_workers=3 if provider == "lumean" else 2) as ex:
+        list(ex.map(speak, todo))
+    check_stop()
+    progress(0.10, f"Озвучка {len(segs)}/{len(segs)}")
 
     # ---------- 2. таймлайн (в сэмплах — без рассинхрона) ----------
     narration = project / "narration.wav"
@@ -253,13 +268,13 @@ def step_build(cfg, niche, project, log=print, stop_flag=lambda: False, progress
     if mode == "auto":
         mode = "claude"
     if mode == "claude":
-        if str(cfg.get("anthropic_key", "")).strip():
+        if str(cfg.get("anthropic_key", "")).strip() or str(cfg.get("lumean_key", "")).strip():
             cfg["llm_provider"] = "claude"            # проверка кадров и запасные запросы — через Claude
             cfg["strict_visuals"] = True
             log("  Кадры проверяет Claude.")
         else:
             mode = "chat"
-            log("  Ключ Claude не указан — кадры выберете через листы в чат (Параметры → Сервисы и ключи → Ключ Claude).")
+            log("  Нет ключа Lumean или Claude — кадры выберете через листы в чат.")
     if mode == "none":
         cfg["strict_visuals"] = False
     if mode == "chat":

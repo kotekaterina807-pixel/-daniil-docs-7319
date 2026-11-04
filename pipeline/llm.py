@@ -53,23 +53,35 @@ def _post(url, headers, body, log, who):
             time.sleep(wait)
             continue
         if r.status_code in (401, 403):
-            raise LLMError(f"{who}: ключ не подходит или нет прав ({r.status_code}). Проверьте ключ Claude "
-                           f"(sk-ant-…) и баланс аккаунта Anthropic. Ответ: {r.text[:300]}")
+            raise LLMError(f"{who}: ключ не подходит или нет прав ({r.status_code}). Проверьте ключ "
+                           f"и галочку «AI» у ключа Lumean. Ответ: {r.text[:300]}")
+        if r.status_code == 402:
+            raise LLMError(f"{who}: не хватает денег на балансе для проверки кадров — пополните баланс "
+                           f"(Lumean: «Магазин» / Anthropic: Billing).")
         raise LLMError(f"{who}: ошибка {r.status_code}: {r.text[:400]}")
     raise LLMError(f"{who} не отвечает: {last}")
 
 
 def chat(cfg, system, content, max_tokens=4000, purpose="text", log=print):
     """purpose: "text" — сценарий, "vision" — проверка кадров (дешёвая модель с картинками)."""
-    if True:                                   # нейросеть программы — Claude
-        key = cfg.get("anthropic_key", "").strip()
-        if not key:
-            raise LLMError("Не указан ключ Claude в настройках.")
-        model = cfg.get("vision_model" if purpose == "vision" else "claude_model")
-        body = {"model": model, "max_tokens": max_tokens,
-                "messages": [{"role": "user", "content": _parts_claude(content)}]}
-        if system:
-            body["system"] = system
-        data = _post(CLAUDE_URL, {"x-api-key": key, "anthropic-version": "2023-06-01",
-                                  "content-type": "application/json"}, body, log, "Claude")
-        return "".join(b.get("text", "") for b in data.get("content", []) if b.get("type") == "text")
+    """Claude напрямую (ключ Anthropic) или через Lumean (тот же ключ, что для озвучки)."""
+    key = str(cfg.get("anthropic_key", "")).strip()
+    url, who = CLAUDE_URL, "Claude"
+    model = cfg.get("vision_model" if purpose == "vision" else "claude_model")
+    if not key:
+        lkey = str(cfg.get("lumean_key", "")).strip()
+        if not lkey:
+            raise LLMError("Нет ключа для Claude: вставьте ключ Lumean (или ключ Claude) в «Сервисы и ключи».")
+        from . import lumean
+        try:
+            model = lumean.ai_model(cfg)
+        except lumean.LumeanError as e:
+            raise LLMError(str(e))
+        key, url, who = lkey, lumean.AI_BASE + "/messages", "Claude (через Lumean)"
+    body = {"model": model, "max_tokens": max_tokens,
+            "messages": [{"role": "user", "content": _parts_claude(content)}]}
+    if system:
+        body["system"] = system
+    data = _post(url, {"x-api-key": key, "anthropic-version": "2023-06-01",
+                       "content-type": "application/json"}, body, log, who)
+    return "".join(b.get("text", "") for b in data.get("content", []) if b.get("type") == "text")

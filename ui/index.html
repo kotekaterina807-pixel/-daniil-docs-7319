@@ -216,9 +216,25 @@
           </div>
         </div>
         <div class="col">
+          <div class="card" id="libCard">
+            <div class="card-head"><h3>Библиотека голосов ElevenLabs</h3><span class="chip ok">через Lumean</span></div>
+            <div class="row gap">
+              <input class="input grow" id="libSearch" placeholder="Поиск по имени, например: narrator, deep, Николай">
+              <button class="btn primary" id="libFind">Найти</button>
+            </div>
+            <div class="row gap mt">
+              <div class="select-wrap"><select id="libGender"><option value="">Любой пол</option><option value="male">Мужской</option><option value="female">Женский</option></select></div>
+              <div class="select-wrap"><select id="libAge"><option value="">Любой возраст</option><option value="young">Молодой</option><option value="middle_aged">Средний</option><option value="old">Пожилой</option></select></div>
+              <div class="select-wrap"><select id="libUse"><option value="narrative_story">Для повествования</option><option value="">Любое назначение</option><option value="informative_educational">Обучающие</option><option value="characters_animation">Персонажи</option></select></div>
+            </div>
+            <p class="muted small mt">Показаны голоса с русским языком. ▶ — пример с сайта, «Добавить» — в «Мои голоса» слева.</p>
+            <div class="voice-list" id="libList"></div>
+            <div class="row gap mt"><button class="btn ghost small" id="libMore" hidden>Показать ещё</button></div>
+          </div>
           <div class="card">
-            <h3>Добавить голос</h3>
-            <p class="muted small">1. Откройте библиотеку и найдите голос (фильтр Language: Russian).<br>2. У голоса нажмите «Add to my voices».<br>3. Нажмите ⋯ → «Copy voice ID» и вставьте сюда.</p>
+            <h3>Добавить голос по ID</h3>
+            <p class="muted small" id="lumAddHint" hidden>Если у вас уже есть ID голоса ElevenLabs (Voice ID) — вставьте его сюда.</p>
+            <p class="muted small" id="elAddHint">1. Откройте библиотеку и найдите голос (фильтр Language: Russian).<br>2. У голоса нажмите «Add to my voices».<br>3. Нажмите ⋯ → «Copy voice ID» и вставьте сюда.</p>
             <div class="row gap mt">
               <input class="input grow" id="elAddId" placeholder="ID голоса или ссылка на него" spellcheck="false">
               <button class="btn primary" id="elAddBtn">Добавить</button>
@@ -229,10 +245,10 @@
             </div>
           </div>
           <div class="card">
-            <div class="card-head"><h3>Аккаунт ElevenLabs</h3><button class="btn ghost small" id="elUsageBtn">Обновить</button></div>
+            <div class="card-head"><h3 id="accTitle">Аккаунт ElevenLabs</h3><button class="btn ghost small" id="elUsageBtn">Обновить</button></div>
             <div id="elUsage" class="muted small">—</div>
           </div>
-          <div class="card">
+          <div class="card" id="elTipsCard">
             <h3>Какой голос искать под документалки</h3>
             <p class="muted small">В библиотеке включите Language: Russian и Use case: «Narrative &amp; Story». Хорошо подходят спокойные низкие голоса со словами в описании: <i>deep, calm, narrator, documentary, storyteller</i>. Слушайте на русском фразой «Моя фраза» — пример с сайта часто на английском.</p>
           </div>
@@ -314,9 +330,9 @@
             <label class="switch"><input type="checkbox" data-key="show_labels"><span></span></label>
           </div>
           <div class="set-row">
-            <div><b>Озвучка</b><p class="muted small">ElevenLabs — основная, голос выбирается во вкладке «Голоса»</p></div>
+            <div><b>Озвучка</b><p class="muted small">Lumean — основной вариант, голос выбирается во вкладке «Голоса»</p></div>
             <div class="select-wrap"><select data-key="tts_provider">
-              <option value="elevenlabs">ElevenLabs</option>
+              <option value="lumean">Lumean (голоса ElevenLabs)</option><option value="elevenlabs">ElevenLabs напрямую</option>
               <option value="openai">OpenAI</option><option value="edge">Edge (бесплатно)</option></select></div>
           </div>
         </div>
@@ -325,14 +341,14 @@
       <div class="tabpane" id="tab-keys">
         <div class="card settings">
           <h3 class="sec">Основные</h3>
-          <div class="key-row" data-k="elevenlabs_key" data-label="Ключ ElevenLabs" data-secret="1" data-hint="озвучка · elevenlabs.io → Profile → API Keys"></div>
-          <div class="key-row" data-k="anthropic_key" data-label="Ключ Claude" data-secret="1" data-hint="проверка кадров · sk-ant-…"></div>
+          <div class="key-row" data-k="lumean_key" data-label="Ключ Lumean" data-secret="1" data-hint="озвучка голосами ElevenLabs + Claude для проверки кадров"></div>
           <div class="key-row" data-k="pixabay_key" data-label="Ключ Pixabay" data-secret="1" data-hint="видео и фото"></div>
           <div class="row gap" style="margin:6px 0 4px">
-            <button class="btn ghost small" data-url="https://elevenlabs.io/app/settings/api-keys">Где взять ключ ElevenLabs</button>
-            <button class="btn ghost small" data-url="https://console.anthropic.com/settings/keys">Где взять ключ Claude</button>
+            <button class="btn ghost small" data-url="https://lumean.app/developers">Открыть ключи Lumean</button>
           </div>
-          <h3 class="sec">Дополнительно</h3>
+          <h3 class="sec">Дополнительно — не нужны, если есть ключ Lumean</h3>
+          <div class="key-row" data-k="elevenlabs_key" data-label="Ключ ElevenLabs (напрямую)" data-secret="1" data-hint="только если озвучка «ElevenLabs напрямую»"></div>
+          <div class="key-row" data-k="anthropic_key" data-label="Ключ Claude (напрямую)" data-secret="1" data-hint="без него Claude работает через Lumean"></div>
           <div class="key-row" data-k="pexels_key" data-label="Ключ Pexels" data-secret="1"></div>
           <div class="key-row" data-k="openai_key" data-label="Ключ OpenAI" data-secret="1"></div>
           <h3 class="sec">Подключение</h3>

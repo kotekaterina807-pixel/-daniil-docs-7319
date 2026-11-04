@@ -3,8 +3,8 @@ import json
 import os
 from pathlib import Path
 
-VERSION = "4.2 (04.11.2026)"
-CONFIG_REV = 6      # при смене — обновляются настройки монтажа у уже сохранённых конфигов
+VERSION = "4.3 (04.11.2026)"
+CONFIG_REV = 7      # при смене — обновляются настройки монтажа у уже сохранённых конфигов
 ROOT = Path(__file__).resolve().parent.parent
 CONFIG_PATH = ROOT / "config.json"
 NICHES_DIR = ROOT / "niches"
@@ -17,12 +17,15 @@ DEFAULTS = {
     "claude_model": "claude-sonnet-5-5",
     "pexels_key": "",
     "pixabay_key": "",
-    "tts_provider": "elevenlabs",      # озвучка — ElevenLabs
+    "tts_provider": "lumean",          # lumean — голоса ElevenLabs через Lumean; elevenlabs — напрямую
     "openai_key": "",
     "openai_voice": "onyx",
     "elevenlabs_key": "",
     "elevenlabs_voice_id": "",
     "elevenlabs_model": "eleven_multilingual_v2",
+    "lumean_key": "",                  # ключ Lumean: озвучка + Claude для проверки кадров
+    "lumean_template_id": "",          # шаблон «DocuStudio» в Lumean (создаётся сам)
+    "lumean_ai_model": "",             # модель Claude в Lumean; пусто — самая новая Sonnet
     "eleven_voices": [],               # сохранённые голоса ElevenLabs: [{id, name, desc, preview}]
     "eleven_speed": 0.9,               # скорость речи ElevenLabs (0.7–1.2)
     "eleven_stability": 0.45,
@@ -96,8 +99,10 @@ def load_config() -> dict:
     for k in [k for k in cfg if k.startswith("yandex_")]:
         cfg.pop(k, None)
     cfg["llm_provider"] = "claude"
-    if cfg.get("tts_provider") not in ("elevenlabs",):
-        cfg["tts_provider"] = "elevenlabs"
+    if cfg.get("tts_provider") not in ("elevenlabs", "lumean"):
+        cfg["tts_provider"] = "lumean"
+    if int(cfg.get("config_rev", 0) or 0) < 7 and not str(cfg.get("elevenlabs_key", "")).strip():
+        cfg["tts_provider"] = "lumean"
     if cfg.get("visual_check") == "auto":
         cfg["visual_check"] = "claude"
     if int(cfg.get("config_rev", 0) or 0) < CONFIG_REV:
@@ -105,7 +110,7 @@ def load_config() -> dict:
         for k in ("shot_seconds", "max_shot_seconds", "min_relevance", "reserve_relevance", "max_checked_per_segment"):
             cfg[k] = DEFAULTS[k]
         if int(cfg.get("config_rev", 0) or 0) < 5:
-            cfg["tts_provider"] = "elevenlabs"        # основная озвучка — ElevenLabs
+            cfg["tts_provider"] = "lumean"            # основная озвучка — голоса ElevenLabs через Lumean
             cfg["visual_check"] = "claude"            # кадры проверяет Claude
             cfg["vision_model"] = DEFAULTS["vision_model"]
         cfg["config_rev"] = CONFIG_REV

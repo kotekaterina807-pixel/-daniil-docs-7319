@@ -100,10 +100,29 @@ def _eleven(cfg):
     return (name, True, msg + f" (~{left // 1100} мин озвучки)", True)
 
 
+def _lumean(cfg):
+    name = "Озвучка Lumean (голоса ElevenLabs)"
+    from . import lumean
+    if not str(cfg.get("lumean_key", "")).strip():
+        return (name, False, "не указан ключ Lumean", True)
+    try:
+        miss = lumean.missing_permissions(cfg)
+        acc = lumean.account(cfg)
+    except Exception as e:
+        return (name, False, str(e)[:300], True)
+    if miss:
+        return (name, False, "у ключа не хватает прав: " + ", ".join(miss) +
+                " — на сайте Lumean: ⋯ у ключа → Редактировать → Разрешения → «Все права» → Сохранить", True)
+    msg = f"ключ работает, тариф {acc['tier']}, осталось токенов: {acc['left']:,}".replace(",", " ")
+    if not str(cfg.get("elevenlabs_voice_id", "")).strip():
+        return (name, False, msg + " — но голос не выбран (вкладка «Голоса»)", True)
+    return (name, True, msg + f" (~{acc['left'] // 1100} мин озвучки)", True)
+
+
 def _claude(cfg):
     name = "Проверка кадров — Claude"
-    if not str(cfg.get("anthropic_key", "")).strip():
-        return (name, False, "не указан ключ Claude — кадры будут выбираться через листы в чат", False)
+    if not str(cfg.get("anthropic_key", "")).strip() and not str(cfg.get("lumean_key", "")).strip():
+        return (name, False, "нет ключа Lumean или Claude — кадры будут выбираться через листы в чат", False)
     im = Image.new("RGB", (64, 64), (40, 90, 160))
     buf = io.BytesIO()
     im.save(buf, "JPEG")
@@ -111,7 +130,9 @@ def _claude(cfg):
                {"type": "text", "text": 'Какого цвета эта картинка? Верни СТРОГО JSON: {"color": "одно слово"}'}]
     try:
         ans = llm.chat(dict(cfg, llm_provider="claude"), "", content, 50, "vision", lambda m: None).strip()
-        return (name, bool(ans), f"Claude отвечает («{ans[:40]}»)" if ans else "пустой ответ", True)
+        via = "напрямую" if str(cfg.get("anthropic_key", "")).strip() else "через Lumean"
+        model = cfg.get("vision_model") if via == "напрямую" else __import__("pipeline.lumean", fromlist=["x"]).ai_model(cfg)
+        return (name, bool(ans), f"Claude {via}, модель {model}: отвечает («{ans[:30]}»)" if ans else "пустой ответ", True)
     except Exception as e:
         return (name, False, str(e)[:300], True)
 
@@ -119,7 +140,7 @@ def _claude(cfg):
 def run_all(cfg, log=print):
     checks = [_ffmpeg, _gpu, _disk]
     checks.append(lambda: _proxy(cfg))
-    checks.append(lambda: _eleven(cfg))
+    checks.append(lambda: _lumean(cfg) if tts.provider_of(cfg) == "lumean" else _eleven(cfg))
     if cfg.get("visual_check", "claude") in ("claude", "auto"):
         checks.append(lambda: _claude(cfg))
     checks += [lambda: _pixabay(cfg), _wikimedia]

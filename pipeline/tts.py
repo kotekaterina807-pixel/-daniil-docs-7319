@@ -1,4 +1,4 @@
-"""Озвучка: ElevenLabs."""
+"""Озвучка голосами ElevenLabs: через Lumean (основной вариант) или напрямую через API ElevenLabs."""
 import asyncio
 import re
 import subprocess
@@ -166,13 +166,39 @@ def el_subscription(cfg):
     return {"tier": d.get("tier", ""), "used": d.get("character_count", 0), "limit": d.get("character_limit", 0)}
 
 
+def provider_of(cfg):
+    """lumean — если выбран Lumean или есть только его ключ; иначе ElevenLabs напрямую."""
+    p = cfg.get("tts_provider", "lumean")
+    if p == "elevenlabs" and not str(cfg.get("elevenlabs_key", "")).strip() and str(cfg.get("lumean_key", "")).strip():
+        return "lumean"
+    return "elevenlabs" if p == "elevenlabs" else "lumean"
+
+
+def _lumean(cfg, text, out_mp3, log, voice=None, name=""):
+    from . import lumean
+    from .config import load_config, save_config
+
+    def remember(tid):                                 # id шаблона сохраняем, чтобы не создавать заново
+        c = load_config()
+        c["lumean_template_id"] = tid
+        save_config(c)
+    try:
+        lumean.synthesize(cfg, text, out_mp3, log, voice=voice, language=cfg.get("language", "ru"),
+                          name=name, save_template=remember)
+    except lumean.LumeanError as e:
+        raise TTSError(str(e))
+
+
 def make_sample(cfg, provider, value, text, out_mp3):
-    """Озвучивает фразу одним голосом ElevenLabs — для прослушивания."""
+    """Озвучивает фразу одним голосом — для прослушивания."""
     out_mp3 = Path(out_mp3)
     out_mp3.parent.mkdir(parents=True, exist_ok=True)
     tmp = out_mp3.with_suffix(".part.mp3")
     try:
-        _elevenlabs(cfg, text, tmp, "", "", lambda m: None, voice=value)
+        if provider_of(cfg) == "lumean":
+            _lumean(cfg, text, tmp, lambda m: None, voice=value, name="DocuStudio: пример голоса")
+        else:
+            _elevenlabs(cfg, text, tmp, "", "", lambda m: None, voice=value)
         tmp.replace(out_mp3)
     except Exception as e:
         tmp.unlink(missing_ok=True)
@@ -226,10 +252,15 @@ def synthesize(cfg, niche, text, out_wav, prev_text="", next_text="", log=print)
     """Озвучивает абзац через ElevenLabs и сохраняет WAV. Возвращает длительность в секундах."""
     out_wav = Path(out_wav)
     mp3s = []
-    for j, part in enumerate(_chunks(text, 2500)):
-        mp3 = out_wav.with_name(f"{out_wav.stem}_{j}.mp3")
-        _elevenlabs(cfg, part, mp3, prev_text, next_text, log)
+    if provider_of(cfg) == "lumean":
+        mp3 = out_wav.with_name(f"{out_wav.stem}_0.mp3")
+        _lumean(cfg, text, mp3, log, name=f"DocuStudio: {text[:50]}")
         mp3s.append(mp3)
+    else:
+        for j, part in enumerate(_chunks(text, 2500)):
+            mp3 = out_wav.with_name(f"{out_wav.stem}_{j}.mp3")
+            _elevenlabs(cfg, part, mp3, prev_text, next_text, log)
+            mp3s.append(mp3)
     to_wav(mp3s, out_wav)
     for m in mp3s:
         m.unlink(missing_ok=True)
