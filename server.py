@@ -231,6 +231,17 @@ def _version_of(text):
     return m.group(1) if m else ""
 
 
+def _vkey(v):
+    """«4.10 (05.11.2026)» → (4, 10) — для сравнения версий числами."""
+    import re
+    m = re.match(r"\s*([\d.]+)", v or "")
+    return tuple(int(x) for x in m.group(1).split(".") if x) if m else ()
+
+
+def is_newer(latest, current):
+    return bool(_vkey(latest)) and _vkey(latest) > _vkey(current)
+
+
 def apply_update(zip_bytes, log):
     """Ставит новую версию из архива: заменяет файлы программы, ключи/проекты/футажи/музыку не трогает."""
     zf = zipfile.ZipFile(io.BytesIO(zip_bytes))
@@ -694,12 +705,24 @@ class Handler(BaseHTTPRequestHandler):
         if not repo:
             return self._send(200, {"ok": False, "error": "Не указан адрес обновлений"})
         import requests
-        r = requests.get(f"https://raw.githubusercontent.com/{repo}/main/pipeline/config.py", timeout=20)
-        if r.status_code != 200:
-            return self._send(200, {"ok": False, "error": f"Сервер обновлений ответил {r.status_code}"})
-        latest = _version_of(r.text)
+        latest, code = "", 0
+        try:                                         # API GitHub отдаёт свежий файл (raw-адрес кэшируется минутами)
+            r = requests.get(f"https://api.github.com/repos/{repo}/contents/pipeline/config.py",
+                             params={"ref": "main"}, headers={"Accept": "application/vnd.github.raw"}, timeout=20)
+            code = r.status_code
+            if r.status_code == 200:
+                latest = _version_of(r.text)
+        except requests.RequestException:
+            pass
+        if not latest:
+            r = requests.get(f"https://raw.githubusercontent.com/{repo}/main/pipeline/config.py",
+                             params={"t": int(time.time())}, timeout=20)
+            code = r.status_code
+            latest = _version_of(r.text) if r.status_code == 200 else ""
+        if not latest:
+            return self._send(200, {"ok": False, "error": f"Сервер обновлений ответил {code}"})
         return self._send(200, {"ok": True, "latest": latest, "current": config.VERSION,
-                                "newer": bool(latest) and latest != config.VERSION})
+                                "newer": is_newer(latest, config.VERSION)})
 
     def _update_online(self):
         if JOB.running:
@@ -711,6 +734,15 @@ class Handler(BaseHTTPRequestHandler):
         r = requests.get(f"https://codeload.github.com/{repo}/zip/refs/heads/main", timeout=120)
         if r.status_code != 200:
             return self._send(502, {"error": f"Не удалось скачать обновление ({r.status_code})"})
+        try:
+            zf = zipfile.ZipFile(io.BytesIO(r.content))
+            cfgname = next(n for n in zf.namelist() if n.endswith("pipeline/config.py"))
+            zver = _version_of(zf.read(cfgname).decode("utf-8", "replace"))
+        except Exception:
+            zver = ""
+        if zver and is_newer(config.VERSION, zver):      # никогда не откатываемся на старую версию
+            return self._send(409, {"error": f"На сервере пока версия {zver}, а у вас уже {config.VERSION} — "
+                                             "обновлять нечего."})
         return self._update_zip(r.content)
 
 

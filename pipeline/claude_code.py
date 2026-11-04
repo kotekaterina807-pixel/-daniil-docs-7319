@@ -35,7 +35,8 @@ def _env(cfg):
     env.pop("DOCUSTUDIO_CHILD", None)
     proxy = str(cfg.get("proxy_url", "")).strip()
     if proxy:                                     # Claude Code идёт в интернет через прокси программы
-        proxy = proxy.replace("socks5h://", "socks5://")
+        from . import proxybridge                 # SOCKS он не понимает — даём ему локальный HTTP-мост
+        proxy = proxybridge.http_proxy_for(proxy)
         for k in ("HTTPS_PROXY", "HTTP_PROXY", "https_proxy", "http_proxy"):
             env[k] = proxy
         env["NO_PROXY"] = env["no_proxy"] = "localhost,127.0.0.1"
@@ -52,9 +53,7 @@ def open_login(cfg):
     warn = ""
     if not proxy:
         warn = " Прокси программы не указан — если Claude Code напишет «Unable to connect», впишите прокси в поле ниже."
-    elif proxy.startswith("socks"):
-        warn = (" Прокси указан как SOCKS — если Claude Code напишет «Unable to connect», впишите HTTP-вариант "
-                "(http://…; у VPN-приложений это обычно соседний порт).")
+
     if os.name != "nt":
         return {"ok": False, "warn": True, "message": "Вход открывается только на Windows."}
     cmd = [str(exe)]
