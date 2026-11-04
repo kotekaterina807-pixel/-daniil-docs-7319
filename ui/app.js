@@ -586,13 +586,14 @@ async function loadVoices() {
   } else {
     box.innerHTML = EL.voices.map((v) => {
       const cur = v.id === EL.current;
-      return `<div class="vrow ${cur ? "sel" : ""}" data-id="${esc(v.id)}">
+      return `<div class="vrow drag ${cur ? "sel" : ""}" data-id="${esc(v.id)}" draggable="true">
+        <span class="grip" title="Перетащите наверх — голос станет голосом диктора"><svg viewBox="0 0 24 24"><circle cx="9" cy="6" r="1.6"/><circle cx="15" cy="6" r="1.6"/><circle cx="9" cy="12" r="1.6"/><circle cx="15" cy="12" r="1.6"/><circle cx="9" cy="18" r="1.6"/><circle cx="15" cy="18" r="1.6"/></svg></span>
         <button class="playbtn" data-preview ${v.preview ? "" : "disabled"} title="Пример с сайта ElevenLabs">${PLAY}</button>
         <div class="name">${esc(v.name)}<small>${esc(v.desc || v.category || "")}</small></div>
         <button class="btn small ghost" data-mine title="Озвучить вашу фразу этим голосом (тратит ~${sampleText().length} символов)">${PLAY}Моя фраза</button>
-        ${cur ? '<span class="chip ok">Выбран</span>' : '<button class="btn small ghost" data-pick>Выбрать</button>'}
+        ${cur ? '<span class="chip ok">Диктор</span>' : ""}
         <button class="ibtn danger" data-del title="Убрать из списка">${ICON.trash}</button></div>`;
-    }).join("");
+    }).join("") + (EL.voices.length > 1 ? '<p class="muted small drag-hint">Перетащите голос на первое место — он станет голосом диктора</p>' : "");
   }
   elRange($("#elSpeed"), S.cfg.eleven_speed ?? 0.9, "#elSpeedVal");
   elRange($("#elStab"), S.cfg.eleven_stability ?? 0.45, "#elStabVal");
@@ -608,6 +609,37 @@ async function loadUsage() {
 }
 // остаток токенов: раз в минуту, пока открыта вкладка «Голоса», и сразу после каждой сборки
 setInterval(() => { if ($("#page-voices").classList.contains("active") && EL.hasKey && !document.hidden) loadUsage(); }, 60000);
+// ---- перетаскивание голосов: первый в списке — голос диктора ----
+let dragRow = null;
+$("#elVoices").addEventListener("dragstart", (e) => {
+  dragRow = e.target.closest(".vrow.drag"); if (!dragRow) return;
+  dragRow.classList.add("dragging"); e.dataTransfer.effectAllowed = "move";
+  try { e.dataTransfer.setData("text/plain", dragRow.dataset.id); } catch (_) {}
+});
+$("#elVoices").addEventListener("dragover", (e) => {
+  if (!dragRow) return; e.preventDefault();
+  const over = e.target.closest(".vrow.drag"); if (!over || over === dragRow) return;
+  const r = over.getBoundingClientRect(), after = e.clientY > r.top + r.height / 2;
+  const first = [...$("#elVoices").querySelectorAll(".vrow.drag")].map((x) => x.getBoundingClientRect().top);
+  over.parentNode.insertBefore(dragRow, after ? over.nextSibling : over);
+  [...$("#elVoices").querySelectorAll(".vrow.drag")].forEach((x, i) => {      // плавный сдвиг соседей
+    const dy = first[i] - x.getBoundingClientRect().top;
+    if (dy && x !== dragRow) x.animate([{ transform: `translateY(${dy}px)` }, { transform: "none" }], { duration: 160, easing: "ease-out" });
+  });
+});
+$("#elVoices").addEventListener("dragend", async () => {
+  if (!dragRow) return;
+  dragRow.classList.remove("dragging"); dragRow = null;
+  const ids = [...$("#elVoices").querySelectorAll(".vrow.drag")].map((x) => x.dataset.id);
+  if (ids[0] === EL.current && ids.join() === EL.voices.map((v) => v.id).join()) return;
+  try {
+    const r = await api("/api/eleven_order", { ids });
+    const changed = r.current !== EL.current;
+    EL.current = r.current; S.cfg.elevenlabs_voice_id = r.current;
+    if (changed) toast(`Голос диктора: «${r.name}»`, "ok");
+  } catch (err) { toast(err.message, "err"); }
+  loadVoices(); renderVoiceCard();
+});
 $("#elVoices").addEventListener("click", async (e) => {
   const row = e.target.closest(".vrow"); if (!row) return;
   const id = row.dataset.id, v = EL.voices.find((x) => x.id === id);

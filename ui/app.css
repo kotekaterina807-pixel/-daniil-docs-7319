@@ -426,3 +426,12 @@ input[type=range]::-webkit-slider-thumb:hover { transform: scale(1.15); }
 .card.choose { border-color: color-mix(in srgb, var(--warn) 45%, var(--line)); }
 .howto { margin: 0 0 16px; padding-left: 20px; color: var(--text); line-height: 1.7; font-size: 13.5px; }
 .howto code, .modal code { background: var(--surface-3); padding: 1px 6px; border-radius: 5px; font-size: 12.5px; }
+
+/* перетаскивание голосов */
+.vrow.drag { cursor: grab; transition: box-shadow .18s, opacity .18s, background .18s; }
+.vrow.drag:active { cursor: grabbing; }
+.vrow.dragging { opacity: .55; box-shadow: 0 10px 28px rgba(0,0,0,.35); }
+.vrow .grip { display: flex; align-items: center; color: var(--muted); opacity: .6; margin-right: -4px; }
+.vrow .grip svg { width: 16px; height: 16px; fill: currentColor; }
+.vrow.drag:hover .grip { opacity: 1; }
+.drag-hint { margin: 10px 4px 0; }

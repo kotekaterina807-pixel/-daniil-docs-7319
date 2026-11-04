@@ -537,7 +537,10 @@ class Handler(BaseHTTPRequestHandler):
             cfg = config.load_config()
             prov = tts.provider_of(cfg)
             has = bool(str(cfg.get("lumean_key" if prov == "lumean" else "elevenlabs_key", "")).strip())
-            return self._send(200, {"voices": cfg.get("eleven_voices") or [], "current": cfg.get("elevenlabs_voice_id", ""),
+            vs = cfg.get("eleven_voices") or []
+            cur = cfg.get("elevenlabs_voice_id", "")
+            vs = [v for v in vs if v.get("id") == cur] + [v for v in vs if v.get("id") != cur]   # выбранный — первым
+            return self._send(200, {"voices": vs, "current": cur,
                                     "has_key": has, "provider": prov})
         if p == "/api/lumean_library":
             from pipeline import lumean
@@ -586,12 +589,24 @@ class Handler(BaseHTTPRequestHandler):
             cfg["eleven_voices"] = (cfg.get("eleven_voices") or []) + [r for r in rows if r["id"] not in have]
             config.save_config(cfg)
             return self._send(200, {"ok": True, "added": len([r for r in rows if r["id"] not in have])})
+        if p == "/api/eleven_order":
+            cfg = config.load_config()
+            ids = [str(x) for x in (data.get("ids") or [])]
+            vs = cfg.get("eleven_voices") or []
+            by = {v.get("id"): v for v in vs}
+            ordered = [by[i] for i in ids if i in by] + [v for v in vs if v.get("id") not in ids]
+            cfg["eleven_voices"] = ordered
+            if ordered:
+                cfg["elevenlabs_voice_id"] = ordered[0].get("id", "")
+            config.save_config(cfg)
+            return self._send(200, {"ok": True, "current": cfg.get("elevenlabs_voice_id", ""),
+                                    "name": ordered[0].get("name", "") if ordered else ""})
         if p == "/api/eleven_remove":
             cfg = config.load_config()
             vid = str(data.get("id") or "")
             cfg["eleven_voices"] = [v for v in (cfg.get("eleven_voices") or []) if v.get("id") != vid]
-            if cfg.get("elevenlabs_voice_id") == vid:
-                cfg["elevenlabs_voice_id"] = ""
+            if cfg.get("elevenlabs_voice_id") == vid:          # убрали выбранный — выбирается следующий сверху
+                cfg["elevenlabs_voice_id"] = (cfg["eleven_voices"][0].get("id", "") if cfg["eleven_voices"] else "")
             config.save_config(cfg)
             return self._send(200, {"ok": True})
         if p == "/api/eleven_usage":
