@@ -319,9 +319,10 @@
             <div class="range-wrap"><input type="range" min="2.5" max="8" step="0.5" data-key="shot_seconds" id="shotSec"><span class="range-val" id="shotVal"></span></div>
           </div>
           <div class="set-row">
-            <div><b>Кто проверяет кадры по смыслу</b><p class="muted small">Claude смотрит каждого кандидата и берёт только кадры по смыслу фразы. Нужен ключ Claude</p></div>
+            <div><b>Кто проверяет кадры по смыслу</b><p class="muted small">Claude смотрит кандидатов и берёт только кадры по смыслу фразы, без водяных знаков. Claude Code — по вашей подписке Claude, без оплаты API</p></div>
             <div class="select-wrap"><select data-key="visual_check">
-              <option value="claude">Claude — автоматически (рекомендую)</option>
+              <option value="claude_code">Claude Code — по подписке (рекомендую)</option>
+              <option value="claude">Claude по ключу API — платно</option>
               <option value="chat">Claude в чате — листы вручную</option>
               <option value="none">Без проверки — по тегам</option></select></div>
           </div>

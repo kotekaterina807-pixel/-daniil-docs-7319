@@ -75,10 +75,10 @@ def _thumb(url):
         return None
 
 
-def make_sheets(lines, out_dir, log=print):
+def make_sheets(lines, out_dir, log=print, prefix="кадры_лист"):
     """Листы для проверки: на каждой строке — текст диктора, запрос и 8 пронумерованных превью."""
     out_dir = Path(out_dir)
-    for old in out_dir.glob("кадры_лист_*.jpg"):
+    for old in out_dir.glob(f"{prefix}_*.jpg"):
         old.unlink(missing_ok=True)
     urls = [c["thumb"] for ln in lines for c in ln["cands"]]
     with ThreadPoolExecutor(max_workers=6) as ex:
@@ -117,7 +117,7 @@ def make_sheets(lines, out_dir, log=print):
             if not ln["cands"]:
                 d.text((x, ty + 50), "кандидатов не нашлось — оставьте «-»", font=f_head, fill=(255, 140, 140))
             y += row_h
-        p = out_dir / f"кадры_лист_{si // ROWS_PER_SHEET + 1:02d}.jpg"
+        p = out_dir / f"{prefix}_{si // ROWS_PER_SHEET + 1:02d}.jpg"
         img.save(p, quality=90)
         sheets.append(p.name)
     log(f"  Листы для проверки кадров: {len(sheets)} шт. (строк сценария: {len(lines)})")

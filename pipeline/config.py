@@ -3,8 +3,8 @@ import json
 import os
 from pathlib import Path
 
-VERSION = "4.6 (04.11.2026)"
-CONFIG_REV = 7      # при смене — обновляются настройки монтажа у уже сохранённых конфигов
+VERSION = "4.7 (04.11.2026)"
+CONFIG_REV = 8      # при смене — обновляются настройки монтажа у уже сохранённых конфигов
 ROOT = Path(__file__).resolve().parent.parent
 CONFIG_PATH = ROOT / "config.json"
 NICHES_DIR = ROOT / "niches"
@@ -35,7 +35,8 @@ DEFAULTS = {
     "shot_seconds": 4.5,               # средняя длина одного кадра, сек
     "max_shot_seconds": 7.0,           # обычно кадр не длиннее этого
     "show_labels": True,               # всплывающие надписи (места, люди, даты)
-    "visual_check": "claude",          # claude — Claude по API (автоматически); chat — листы в чат; none — без проверки
+    "visual_check": "claude_code",     # claude_code — Claude Code по подписке; claude — Claude по API; chat — листы в чат; none — без проверки
+    "claude_code_model": "sonnet",     # модель Claude Code для проверки кадров
     "strict_visuals": True,            # каждый кадр проверяется нейросетью по смыслу и на водяные знаки
     "vision_model": "claude-sonnet-5-5",   # Claude проверяет кадры по смыслу
     "min_relevance": 8,                # порог соответствия смыслу (0–10)
@@ -113,6 +114,9 @@ def load_config() -> dict:
             cfg["tts_provider"] = "lumean"            # основная озвучка — голоса ElevenLabs через Lumean
             cfg["visual_check"] = "claude"            # кадры проверяет Claude
             cfg["vision_model"] = DEFAULTS["vision_model"]
+        if int(cfg.get("config_rev", 0) or 0) < 8 and not str(cfg.get("anthropic_key", "")).strip() \
+                and cfg.get("visual_check") in ("claude", "auto"):
+            cfg["visual_check"] = "claude_code"       # кадры проверяет Claude по подписке, без оплаты API
         cfg["config_rev"] = CONFIG_REV
     return cfg
 

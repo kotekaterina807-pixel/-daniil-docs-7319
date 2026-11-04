@@ -137,12 +137,27 @@ def _claude(cfg):
         return (name, False, str(e)[:300], True)
 
 
+def _claude_code(cfg):
+    name = "Проверка кадров — Claude Code (подписка)"
+    from . import claude_code, config as _c
+    if not claude_code.find_exe():
+        return (name, False, "Claude Code не установлен — PowerShell: irm https://claude.ai/install.ps1 | iex, "
+                             "затем в терминале: claude → /login", True)
+    try:
+        exe, ans = claude_code.check(cfg, _c.ROOT if hasattr(_c, "ROOT") else ".")
+        return (name, bool(ans), f"работает по подписке ({exe.name}), ответ: «{ans[:30]}»" if ans else "пустой ответ", True)
+    except Exception as e:
+        return (name, False, str(e)[:300], True)
+
+
 def run_all(cfg, log=print):
     checks = [_ffmpeg, _gpu, _disk]
     checks.append(lambda: _proxy(cfg))
     checks.append(lambda: _lumean(cfg) if tts.provider_of(cfg) == "lumean" else _eleven(cfg))
     if cfg.get("visual_check", "claude") in ("claude", "auto"):
         checks.append(lambda: _claude(cfg))
+    if cfg.get("visual_check") == "claude_code":
+        checks.append(lambda: _claude_code(cfg))
     checks += [lambda: _pixabay(cfg), _wikimedia]
     out = []
     for fn in checks:

@@ -150,6 +150,13 @@ def step_build(cfg, niche, project, log=print, stop_flag=lambda: False, progress
     voice = f"{cfg.get('elevenlabs_voice_id')}:{cfg.get('eleven_speed')}:{cfg.get('eleven_stability')}:{cfg.get('elevenlabs_model')}"
     if not str(cfg.get("elevenlabs_voice_id", "")).strip():
         raise RuntimeError("Не выбран голос диктора — выберите его на вкладке «Голоса».")
+    if cfg.get("visual_check") == "claude_code":
+        from . import claude_code
+        if not claude_code.find_exe():
+            raise RuntimeError("Кадры должен проверять Claude Code, но он не установлен. Установите его "
+                               "(PowerShell: irm https://claude.ai/install.ps1 | iex, затем в терминале: claude → /login) "
+                               "или выберите другой способ "
+                               "проверки в «Параметры → Монтаж».")
     segs = [s for ch in script["chapters"] for s in ch["segments"]]
     log(f"Озвучка: {len(segs)} абзацев ({'Lumean' if provider == 'lumean' else 'ElevenLabs'}, {L['name']})...")
     todo = []
@@ -277,8 +284,11 @@ def step_build(cfg, niche, project, log=print, stop_flag=lambda: False, progress
             log("  Нет ключа Lumean или Claude — кадры выберете через листы в чат.")
     if mode == "none":
         cfg["strict_visuals"] = False
-    if mode == "chat":
-        _choose_in_chat(cfg, project, finder, seg_blocks, jobs, vis_cache, log, check_stop, progress)
+    if mode == "claude_code":
+        log("  Кадры проверяет Claude Code (по подписке Claude).")
+    if mode in ("chat", "claude_code"):
+        _choose_in_chat(cfg, project, finder, seg_blocks, jobs, vis_cache, log, check_stop, progress,
+                        auto=(mode == "claude_code"), topic=script.get("topic", ""))
     else:
         def run_job(job):
             bi, si = job
@@ -508,7 +518,8 @@ def step_build(cfg, niche, project, log=print, stop_flag=lambda: False, progress
     return final
 
 
-def _choose_in_chat(cfg, project, finder, seg_blocks, jobs, vis_cache, log, check_stop, progress):
+def _choose_in_chat(cfg, project, finder, seg_blocks, jobs, vis_cache, log, check_stop, progress,
+                    auto=False, topic=""):
     """Кадры выбирает Claude в чате по листам с превью (см. pipeline/review.py)."""
     from . import review
     rev_path, ch_path = project / "review.json", project / "выбор_кадров.json"
@@ -519,7 +530,7 @@ def _choose_in_chat(cfg, project, finder, seg_blocks, jobs, vis_cache, log, chec
         lines = None
         ch_path.unlink(missing_ok=True)
     if lines is None:
-        log("Ищу кандидатов под каждую строку сценария (проверять будет Claude в чате)...")
+        log("Ищу кандидатов под каждую строку сценария (проверять будет " + ("Claude Code" if auto else "Claude в чате") + ")...")
         taken = {u for v in vis_cache.values() for it in v.get("items", []) for u in [it.get("url", "")]}
         lines = []
         for no, (bi, si) in enumerate(jobs, 1):
@@ -533,6 +544,8 @@ def _choose_in_chat(cfg, project, finder, seg_blocks, jobs, vis_cache, log, chec
                           "cands": [{k: c.get(k) for k in keep} for c in cands]})
             progress(0.10 + 0.25 * no / len(jobs), f"Поиск кадров {no}/{len(jobs)}")
         review.save_review(rev_path, lines)
+    if not ch_path.exists() and auto:
+        _choose_with_claude_code(cfg, project, finder, lines, rev_path, ch_path, topic, log, check_stop, progress)
     if not ch_path.exists():
         sheets = review.make_sheets(lines, project, log)
         raise review.NeedChoices(sheets, len(lines))
@@ -561,3 +574,60 @@ def _choose_in_chat(cfg, project, finder, seg_blocks, jobs, vis_cache, log, chec
                          "credits": credits}
     _save_json(project / "visuals.json", vis_cache)
     progress(0.45, "Кадры выбраны")
+
+
+def _choose_with_claude_code(cfg, project, finder, lines, rev_path, ch_path, topic, log, check_stop, progress):
+    """Листы с кандидатами смотрит Claude Code по подписке. Где подходящего нет — новый запрос и второй круг."""
+    from concurrent.futures import ThreadPoolExecutor
+    from . import claude_code, review
+    keep = ("kind", "url", "thumb", "duration", "source", "page", "title", "author", "license", "person", "local")
+    by_no = {ln["no"]: ln for ln in lines}
+    choices = {}
+
+    def ask(sheet_lines, prefix, label):
+        sheets = review.make_sheets(sheet_lines, project, log, prefix=prefix)
+        done = [0]
+
+        def one(name):
+            check_stop()
+            ans = claude_code.run(cfg, claude_code.PROMPT.format(sheet=name, topic=topic or "документальное видео"),
+                                  project)
+            done[0] += 1
+            progress(0.36 + 0.08 * done[0] / max(1, len(sheets)), f"{label}: лист {done[0]}/{len(sheets)}")
+            return claude_code.parse(ans)
+        picks, queries = {}, {}
+        try:
+            with ThreadPoolExecutor(max_workers=2) as ex:
+                for p, q in ex.map(one, sheets):
+                    picks.update(p)
+                    queries.update(q)
+        except claude_code.ClaudeCodeError as e:
+            raise RuntimeError(str(e))
+        return picks, queries
+
+    log(f"Claude Code смотрит кадры ({len(lines)} строк сценария)...")
+    picks, queries = ask(lines, "кадры_лист", "Claude проверяет кадры")
+    for no, ks in picks.items():
+        if no in by_no:
+            choices[no] = [k for k in ks if 1 <= k <= len(by_no[no]["cands"])]
+    retry = [by_no[no] for no in by_no if not choices.get(no) and queries.get(no)]
+    if retry:
+        log(f"  Подходящих нет в {len(retry)} строках — ищу по новым запросам Claude...")
+        taken = {c["url"] for ln in lines for k in choices.get(ln["no"], []) for c in [ln["cands"][k - 1]]}
+        for ln in retry:
+            check_stop()
+            q = queries[ln["no"]]
+            spec = {"visual": "video", "query": q, "n": ln["n"], "text": ln["text"]}
+            ln["cands"] = [{k: c.get(k) for k in keep} for c in review.collect(finder, spec, taken)]
+            ln["query"] = q
+        retry = [ln for ln in retry if ln["cands"]]
+        if retry:
+            picks2, _ = ask(retry, "кадры_повтор", "Второй круг")
+            for no, ks in picks2.items():
+                if no in by_no:
+                    choices[no] = [k for k in ks if 1 <= k <= len(by_no[no]["cands"])]
+    empty = sum(1 for no in by_no if not choices.get(no))
+    if empty:
+        log(f"  Без подходящих кадров осталось строк: {empty} — их закроют соседние кадры.")
+    review.save_review(rev_path, lines)
+    ch_path.write_text(json.dumps({str(k): v for k, v in choices.items()}, ensure_ascii=False), encoding="utf-8")
