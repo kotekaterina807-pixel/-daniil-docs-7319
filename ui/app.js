@@ -586,7 +586,7 @@ async function loadVoices() {
   } else {
     box.innerHTML = EL.voices.map((v) => {
       const cur = v.id === EL.current;
-      return `<div class="vrow drag ${cur ? "sel" : ""}" data-id="${esc(v.id)}" draggable="true">
+      return `<div class="vrow drag" data-id="${esc(v.id)}">
         <span class="grip" title="Перетащите наверх — голос станет голосом диктора"><svg viewBox="0 0 24 24"><circle cx="9" cy="6" r="1.6"/><circle cx="15" cy="6" r="1.6"/><circle cx="9" cy="12" r="1.6"/><circle cx="15" cy="12" r="1.6"/><circle cx="9" cy="18" r="1.6"/><circle cx="15" cy="18" r="1.6"/></svg></span>
         <button class="playbtn" data-preview ${v.preview ? "" : "disabled"} title="Пример с сайта ElevenLabs">${PLAY}</button>
         <div class="name">${esc(v.name)}<small>${esc(v.desc || v.category || "")}</small></div>
@@ -609,37 +609,70 @@ async function loadUsage() {
 }
 // остаток токенов: раз в минуту, пока открыта вкладка «Голоса», и сразу после каждой сборки
 setInterval(() => { if ($("#page-voices").classList.contains("active") && EL.hasKey && !document.hidden) loadUsage(); }, 60000);
-// ---- перетаскивание голосов: первый в списке — голос диктора ----
-let dragRow = null;
-$("#elVoices").addEventListener("dragstart", (e) => {
-  dragRow = e.target.closest(".vrow.drag"); if (!dragRow) return;
-  dragRow.classList.add("dragging"); e.dataTransfer.effectAllowed = "move";
-  try { e.dataTransfer.setData("text/plain", dragRow.dataset.id); } catch (_) {}
+// ---- перетаскивание голосов (мышью, в любую сторону): первый в списке — голос диктора ----
+const DRAG = { row: null, startY: 0, on: false, rows: [], from: 0, to: 0, h: 0 };
+$("#elVoices").addEventListener("pointerdown", (e) => {
+  const row = e.target.closest(".vrow.drag");
+  if (!row || e.button !== 0 || e.target.closest("button")) return;
+  Object.assign(DRAG, { row, startY: e.clientY, on: false });
+  row.setPointerCapture(e.pointerId);
 });
-$("#elVoices").addEventListener("dragover", (e) => {
-  if (!dragRow) return; e.preventDefault();
-  const over = e.target.closest(".vrow.drag"); if (!over || over === dragRow) return;
-  const r = over.getBoundingClientRect(), after = e.clientY > r.top + r.height / 2;
-  const first = [...$("#elVoices").querySelectorAll(".vrow.drag")].map((x) => x.getBoundingClientRect().top);
-  over.parentNode.insertBefore(dragRow, after ? over.nextSibling : over);
-  [...$("#elVoices").querySelectorAll(".vrow.drag")].forEach((x, i) => {      // плавный сдвиг соседей
-    const dy = first[i] - x.getBoundingClientRect().top;
-    if (dy && x !== dragRow) x.animate([{ transform: `translateY(${dy}px)` }, { transform: "none" }], { duration: 160, easing: "ease-out" });
+$("#elVoices").addEventListener("pointermove", (e) => {
+  const d = DRAG; if (!d.row) return;
+  const dy = e.clientY - d.startY;
+  if (!d.on) {
+    if (Math.abs(dy) < 5) return;
+    d.on = true;
+    d.rows = [...$("#elVoices").querySelectorAll(".vrow.drag")];
+    d.from = d.to = d.rows.indexOf(d.row);
+    const r0 = d.rows[0].getBoundingClientRect(), r1 = d.rows[1] ? d.rows[1].getBoundingClientRect() : null;
+    d.h = r1 ? r1.top - r0.top : r0.height;
+    d.mids = d.rows.map((x) => { const r = x.getBoundingClientRect(); return r.top + r.height / 2; });
+    d.row.classList.add("dragging"); document.body.classList.add("no-select");
+  }
+  const minY = -d.from * d.h, maxY = (d.rows.length - 1 - d.from) * d.h;
+  const y = Math.max(minY - 8, Math.min(maxY + 8, dy));
+  d.row.style.transform = `translateY(${y}px)`;
+  const center = d.mids[d.from] + y;
+  let to = d.from;
+  d.mids.forEach((m, i) => { if (i < d.from && center < m) to = Math.min(to, i); if (i > d.from && center > m) to = Math.max(to, i); });
+  d.to = to;
+  d.rows.forEach((x, i) => {                                   // соседи плавно уступают место
+    if (x === d.row) return;
+    let shift = 0;
+    if (d.from < to && i > d.from && i <= to) shift = -d.h;
+    if (d.from > to && i >= to && i < d.from) shift = d.h;
+    x.style.transform = shift ? `translateY(${shift}px)` : "";
   });
 });
-$("#elVoices").addEventListener("dragend", async () => {
-  if (!dragRow) return;
-  dragRow.classList.remove("dragging"); dragRow = null;
-  const ids = [...$("#elVoices").querySelectorAll(".vrow.drag")].map((x) => x.dataset.id);
-  if (ids[0] === EL.current && ids.join() === EL.voices.map((v) => v.id).join()) return;
+async function endDrag() {
+  const d = DRAG; if (!d.row) return;
+  const row = d.row; d.row = null;
+  if (!d.on) return;
+  document.body.classList.remove("no-select");
+  const box = $("#elVoices"), list = d.rows.slice();
+  list.splice(d.from, 1); list.splice(d.to, 0, row);
+  d.rows.forEach((x) => { x.classList.add("settle"); x.style.transform = ""; });
+  list.forEach((x) => box.insertBefore(x, box.querySelector(".drag-hint")));
+  row.classList.remove("dragging");
+  setTimeout(() => d.rows.forEach((x) => x.classList.remove("settle")), 50);
+  if (d.from === d.to) return;
+  const ids = list.map((x) => x.dataset.id);
   try {
     const r = await api("/api/eleven_order", { ids });
     const changed = r.current !== EL.current;
     EL.current = r.current; S.cfg.elevenlabs_voice_id = r.current;
-    if (changed) toast(`Голос диктора: «${r.name}»`, "ok");
-  } catch (err) { toast(err.message, "err"); }
-  loadVoices(); renderVoiceCard();
-});
+    EL.voices = ids.map((id) => EL.voices.find((v) => v.id === id)).filter(Boolean);
+    list.forEach((x, i) => {                                    // метка «Диктор» — без перерисовки списка
+      const chip = x.querySelector(".chip.ok");
+      if (i === 0 && !chip) x.querySelector("[data-mine]").insertAdjacentHTML("afterend", '<span class="chip ok">Диктор</span>');
+      if (i !== 0 && chip) chip.remove();
+    });
+    if (changed) { toast(`Голос диктора: «${r.name}»`, "ok"); renderVoiceCard(); }
+  } catch (err) { toast(err.message, "err"); loadVoices(); }
+}
+$("#elVoices").addEventListener("pointerup", endDrag);
+$("#elVoices").addEventListener("pointercancel", endDrag);
 $("#elVoices").addEventListener("click", async (e) => {
   const row = e.target.closest(".vrow"); if (!row) return;
   const id = row.dataset.id, v = EL.voices.find((x) => x.id === id);
