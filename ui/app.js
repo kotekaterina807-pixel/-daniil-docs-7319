@@ -672,6 +672,7 @@ $("#libList").addEventListener("click", async (e) => {
     } catch (err) { toast(err.message, "err"); }
   }
 });
+$("#ccLoginBtn").onclick = () => api("/api/claude_login", {}).then((r) => toast(r.message || "Открываю Claude Code…", r.warn ? "err" : undefined, 9000)).catch((e) => toast(e.message, "err", 9000));
 $("#elLibBtn").onclick = () => api("/api/open_url", { url: "https://elevenlabs.io/app/voice-library" }).catch((e) => toast(e.message, "err"));
 $("#elUsageBtn").onclick = loadUsage;
 $("#elSpeed").addEventListener("input", (e) => elRange(e.target, e.target.value, "#elSpeedVal"));

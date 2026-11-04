@@ -34,9 +34,38 @@ def _env(cfg):
     env = {k: v for k, v in os.environ.items() if k not in ("ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN")}
     env.pop("DOCUSTUDIO_CHILD", None)
     proxy = str(cfg.get("proxy_url", "")).strip()
-    if proxy:                                     # Claude Code понимает только http(s)-прокси надёжно
-        env["HTTPS_PROXY"] = env["HTTP_PROXY"] = proxy.replace("socks5h://", "socks5://")
+    if proxy:                                     # Claude Code идёт в интернет через прокси программы
+        proxy = proxy.replace("socks5h://", "socks5://")
+        for k in ("HTTPS_PROXY", "HTTP_PROXY", "https_proxy", "http_proxy"):
+            env[k] = proxy
+        env["NO_PROXY"] = env["no_proxy"] = "localhost,127.0.0.1"
     return env
+
+
+def open_login(cfg):
+    """Открывает Claude Code в отдельном окне (с прокси программы) — для входа по подписке."""
+    exe = find_exe()
+    if not exe:
+        return {"ok": False, "warn": True, "message": "Claude Code не найден. Установите его: PowerShell → "
+                "irm https://claude.ai/install.ps1 | iex"}
+    proxy = str(cfg.get("proxy_url", "")).strip()
+    warn = ""
+    if not proxy:
+        warn = " Прокси программы не указан — если Claude Code напишет «Unable to connect», впишите прокси в поле ниже."
+    elif proxy.startswith("socks"):
+        warn = (" Прокси указан как SOCKS — если Claude Code напишет «Unable to connect», впишите HTTP-вариант "
+                "(http://…; у VPN-приложений это обычно соседний порт).")
+    if os.name != "nt":
+        return {"ok": False, "warn": True, "message": "Вход открывается только на Windows."}
+    cmd = [str(exe)]
+    if str(exe).lower().endswith(".cmd"):
+        cmd = ["cmd", "/k"] + cmd
+    try:
+        subprocess.Popen(cmd, env=_env(cfg), cwd=str(Path.home()), creationflags=0x00000010)  # новое окно консоли
+    except OSError as e:
+        return {"ok": False, "warn": True, "message": f"Не удалось открыть Claude Code: {e}"}
+    return {"ok": True, "warn": bool(warn), "message": "Открыл окно Claude Code: выберите «Claude account with "
+            "subscription», войдите в браузере, затем /exit." + warn}
 
 
 def run(cfg, prompt, workdir, timeout=900):

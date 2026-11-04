@@ -593,6 +593,9 @@ class Handler(BaseHTTPRequestHandler):
                 return self._send(200, {"ok": True, **tts.el_subscription(cfg)})
             except Exception as e:
                 return self._send(200, {"ok": False, "error": str(e)})
+        if p == "/api/claude_login":
+            from pipeline import claude_code
+            return self._send(200, claude_code.open_login(config.load_config()))
         if p == "/api/open_url":
             url = str(data.get("url") or "")
             if not url.startswith(("https://elevenlabs.io/", "https://console.anthropic.com/", "https://platform.claude.com/", "https://lumean.app/")):

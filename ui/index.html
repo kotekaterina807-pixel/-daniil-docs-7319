@@ -354,6 +354,11 @@
           <div class="key-row" data-k="openai_key" data-label="Ключ OpenAI" data-secret="1"></div>
           <h3 class="sec">Подключение</h3>
           <div class="key-row" data-k="proxy_url" data-label="Прокси только для программы" data-hint="порт из VPN-приложения, например 127.0.0.1:10808 · пусто — как обычно"></div>
+          <h3 class="sec">Claude Code — проверка кадров по подписке</h3>
+          <div class="set-row">
+            <div><b>Вход в Claude Code</b><p class="muted small">Откроется окно Claude Code, уже с прокси программы. Выберите «Claude account with subscription», войдите в браузере, затем введите /exit. Делается один раз</p></div>
+            <button class="btn ghost small" id="ccLoginBtn">Войти в Claude Code</button>
+          </div>
           <div class="row gap mt">
             <button class="btn primary" id="checkBtn">Проверить подключения</button>
           </div>
