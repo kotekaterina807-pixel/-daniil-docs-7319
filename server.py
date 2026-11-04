@@ -269,7 +269,9 @@ def apply_update(zip_bytes, log):
     if new_req != old_req:
         log("Ставлю новые компоненты (pip)...")
         env = {k: v for k, v in os.environ.items() if k.lower() not in ("https_proxy", "http_proxy")}
-        p = subprocess.run([sys.executable.replace("pythonw.exe", "python.exe"), "-m", "pip", "install", "-r",
+        py = ROOT / ".venv" / "Scripts" / "python.exe"
+        py = str(py) if py.exists() else sys.executable.replace("pythonw.exe", "python.exe")
+        p = subprocess.run([py, "-m", "pip", "install", "-r",
                             str(ROOT / "requirements.txt")], capture_output=True, text=True,
                            creationflags=_NO_WINDOW, env=env)
         log("Компоненты установлены." if p.returncode == 0 else f"pip: {p.stderr[-400:]}")
@@ -296,6 +298,11 @@ def make_shortcut(quiet=False):
         return False
     pyw = ROOT / ".venv" / "Scripts" / "pythonw.exe"
     target = pyw if pyw.exists() else Path(sys.executable)
+    try:
+        import app                                   # собственный процесс DocuStudio.exe — для VPN-маршрутизации
+        target = app.branded_exe() or target
+    except Exception:
+        pass
     ps = (
         "$d=[Environment]::GetFolderPath('Desktop');"
         "$s=(New-Object -ComObject WScript.Shell).CreateShortcut((Join-Path $d 'DocuStudio.lnk'));"

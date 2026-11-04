@@ -6,4 +6,8 @@ if not exist ".venv\Scripts\pythonw.exe" (
   pause
   exit /b 1
 )
+if exist ".venv\Scripts\DocuStudio.exe" if exist ".venv\Scripts\DocuStudio.ok" (
+  start "" ".venv\Scripts\DocuStudio.exe" app.py
+  exit /b 0
+)
 start "" ".venv\Scripts\pythonw.exe" app.py
