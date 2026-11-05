@@ -14,6 +14,8 @@ from . import library, vision
 
 UA = {"User-Agent": "DocuStudio/6.5 (personal documentary video tool; https://github.com/kotekaterina807-pixel/-daniil-docs-7319)"}
 
+BROWSER_UA = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) "
+                             "Chrome/130.0 Safari/537.36", "Accept": "application/json,text/html;q=0.9,*/*;q=0.8"}
 _DIRECT = requests.Session()
 _DIRECT.trust_env = False                       # без прокси программы
 
@@ -22,9 +24,14 @@ def _direct_retry(url, params, timeout, r):
     """Некоторые архивы (Openverse, Библиотека Конгресса, Met) не пускают адреса прокси-серверов
     и отвечают 403/410. Тогда тот же запрос — напрямую, с домашнего интернета: эти архивы из России открыты."""
     import os as _os
-    if r is not None and r.status_code in (401, 403, 410) and (_os.environ.get("HTTPS_PROXY") or _os.environ.get("https_proxy")):
+    if r is None or r.status_code not in (401, 403, 410):
+        return r
+    tries = [(requests, BROWSER_UA)]                # 1) тот же путь, но как обычный браузер
+    if _os.environ.get("HTTPS_PROXY") or _os.environ.get("https_proxy"):
+        tries += [(_DIRECT, UA), (_DIRECT, BROWSER_UA)]   # 2) напрямую, без прокси
+    for sess, hdr in tries:
         try:
-            r2 = _DIRECT.get(url, params=params, headers=UA, timeout=timeout)
+            r2 = sess.get(url, params=params, headers=hdr, timeout=timeout)
             if r2.status_code < 400:
                 return r2
         except requests.RequestException:

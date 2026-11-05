@@ -3,7 +3,7 @@ import json
 import os
 from pathlib import Path
 
-VERSION = "6.5 (05.11.2026)"
+VERSION = "6.6 (05.11.2026)"
 CONFIG_REV = 8      # при смене — обновляются настройки монтажа у уже сохранённых конфигов
 ROOT = Path(__file__).resolve().parent.parent
 CONFIG_PATH = ROOT / "config.json"

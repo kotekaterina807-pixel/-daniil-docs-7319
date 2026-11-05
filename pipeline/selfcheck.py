@@ -96,14 +96,12 @@ def _archives():
                                ("Чикаго", "https://api.artic.edu/api/v1/artworks/search", {"q": "ship", "limit": 1}),
                                ("Internet Archive", "https://archive.org/advancedsearch.php", {"q": "ship", "rows": 1, "output": "json"})):
         try:
-            r = requests.get(url, params=params, headers=UA, timeout=20)
-            how = ""
-            if r.status_code in (401, 403, 410):          # не пускают прокси — пробуем напрямую
-                s2 = requests.Session()
-                s2.trust_env = False
-                r = s2.get(url, params=params, headers=UA, timeout=20)
-                how = " (напрямую, без прокси)"
-            res.append((label, r.status_code == 200, f"ответ {r.status_code}{how}"))
+            from .visuals import _direct_retry
+            first = requests.get(url, params=params, headers=UA, timeout=20)
+            r = _direct_retry(url, params, 20, first)
+            how = "" if r is first else " напрямую"
+            detail = f"через прокси {first.status_code}" + (f", напрямую {r.status_code}" if r is first and first.status_code >= 400 else "")
+            res.append((label, r.status_code == 200, f"ответ {r.status_code}{how}" if r.status_code == 200 else detail))
         except requests.RequestException as e:
             res.append((label, False, type(e).__name__))
     ok = all(x[1] for x in res)
