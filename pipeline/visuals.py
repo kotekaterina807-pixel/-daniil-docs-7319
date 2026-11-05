@@ -30,6 +30,16 @@ BLOCK_WORDS = re.compile(
     re.I)
 
 
+# Для архивных фото (Wikimedia и т.п.) — только явные признаки чужих знаков и стоков. Слова вроде
+# «copyright», «title», «text» в описаниях архивов встречаются у любых свободных фото
+# («No known copyright restrictions», «Title: …») и раньше отсекали почти все портреты людей.
+ARCHIVE_BLOCK = re.compile(
+    r"watermark|\blogo\b|logotype|screenshot|screen[ _-]?(cap|capture|shot)|youtube|tiktok|instagram|"
+    r"getty|shutterstock|alamy|istock|depositphotos|123rf|dreamstime|pond5|storyblocks|envato|"
+    r"film[ _-]?still|video[ _-]?still|frame[ _-]?from|trailer|mock[ _-]?up|template",
+    re.I)
+
+
 STOP = {"the", "and", "with", "from", "into", "over", "under", "near", "for", "old", "a", "an", "of", "in", "on", "at"}
 
 
@@ -100,7 +110,7 @@ class VisualFinder:
             return None
         cats = " ".join(c.get("title", "") for c in p.get("categories") or [])
         desc = re.sub(r"<[^>]+>", " ", (meta.get("ImageDescription") or {}).get("value", ""))
-        if BLOCK_WORDS.search(p.get("title", "") + " " + cats + " " + desc[:400]):
+        if ARCHIVE_BLOCK.search(p.get("title", "") + " " + cats):
             return None
         artist = re.sub(r"<[^>]+>", "", html.unescape((meta.get("Artist") or {}).get("value", ""))).strip()
         url = info.get("thumburl") or info.get("url")
@@ -160,7 +170,7 @@ class VisualFinder:
                     if lic not in ("cc0", "pdm"):
                         continue
                     tags = " ".join(t.get("name", "") for t in it.get("tags") or [] if isinstance(t, dict))
-                    if BLOCK_WORDS.search((it.get("title") or "") + " " + tags):
+                    if ARCHIVE_BLOCK.search((it.get("title") or "") + " " + tags):
                         continue
                     out.append({
                         "kind": "image", "url": it["url"], "thumb": it.get("thumbnail") or it["url"],
@@ -206,7 +216,7 @@ class VisualFinder:
                     if not re.search(r"no known restrictions|public domain|no copyright", rights, re.I):
                         continue
                     title = res.get("title") or ""
-                    if BLOCK_WORDS.search(title):
+                    if ARCHIVE_BLOCK.search(title):
                         continue
                     thumb = next((u for u in imgs if u.endswith("r.jpg")), imgs[0])
                     out.append({"kind": "image", "url": imgs[-1], "thumb": thumb, "source": "Library of Congress",

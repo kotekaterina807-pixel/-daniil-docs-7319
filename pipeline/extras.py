@@ -278,3 +278,62 @@ def make_chapter_png(title, number, out_path, accent=(200, 30, 30), word="ГЛА
         _draw_tracked(d, ((W - tw) / 2, y), ln, big, (248, 248, 248, 255), 6)
         y += 100
     _soft_shadow(img, 16, 150).save(out_path)
+
+
+def make_person_card(name, out_path, accent=(200, 30, 30), sub="", variant=0):
+    """Карточка человека, если его фото нет в свободных источниках: монограмма с инициалами,
+    имя крупно, тёмный фон с мягкой виньеткой. JPG 1920x1080 (по ней идёт плавное приближение)."""
+    import random
+    W, H = 1920, 1080
+    img = Image.new("RGB", (W, H), (10, 13, 20))
+    px = img.load()
+    rnd = random.Random(name)
+    for y in range(0, H, 2):                       # градиент + лёгкое зерно
+        for x in range(0, W, 2):
+            dx, dy = (x - W / 2) / W, (y - H / 2) / H
+            v = max(0.0, 1 - (dx * dx + dy * dy) * 2.2)
+            g = int(10 + 26 * v + rnd.randint(-3, 3))
+            c = (g, g + 3, g + 9)
+            px[x, y] = c
+            if x + 1 < W:
+                px[x + 1, y] = c
+            if y + 1 < H:
+                px[x, y + 1] = c
+                if x + 1 < W:
+                    px[x + 1, y + 1] = c
+    d = ImageDraw.Draw(img)
+    words = [w for w in re.split(r"[\s.]+", name.strip()) if w]
+    initials = "".join(w[0] for w in words[:2]).upper() or "?"
+    if variant % 2 == 1:                           # второй вариант: монограмма слева, имя справа
+        r = 150
+        cx, cy = 560, H // 2
+        d.ellipse([cx - r, cy - r, cx + r, cy + r], outline=tuple(accent), width=4)
+        d.ellipse([cx - r + 14, cy - r + 14, cx + r - 14, cy + r - 14], outline=(70, 76, 92), width=2)
+        f_ini = _font(150, THIN_FONTS)
+        tw = d.textlength(initials, font=f_ini)
+        d.text((cx - tw / 2, cy - 98), initials, font=f_ini, fill=(235, 235, 240))
+        x0 = cx + r + 90
+        d.rectangle([x0, cy - 70, x0 + 4, cy + 70], fill=tuple(accent))
+        _draw_tracked(d, (x0 + 40, cy - 70), name.strip().upper(), _font(78, THIN_FONTS), (245, 245, 248), 5)
+        if sub:
+            _draw_tracked(d, (x0 + 42, cy + 30), sub.upper(), _font(32, SEMI_FONTS), (190, 196, 210), 4)
+        img.save(out_path, quality=92)
+        return
+    cx, cy, r = W // 2, 400, 150
+    d.ellipse([cx - r, cy - r, cx + r, cy + r], outline=tuple(accent), width=4)
+    d.ellipse([cx - r + 14, cy - r + 14, cx + r - 14, cy + r - 14], outline=(70, 76, 92), width=2)
+    f_ini = _font(150, THIN_FONTS)
+    tw = d.textlength(initials, font=f_ini)
+    d.text((cx - tw / 2, cy - 98), initials, font=f_ini, fill=(235, 235, 240))
+    f_name = _font(84, THIN_FONTS)
+    nm = name.strip().upper()
+    tracking = 6
+    total = sum(d.textlength(ch, font=f_name) + tracking for ch in nm) - tracking
+    _draw_tracked(d, (cx - total / 2, 610), nm, f_name, (245, 245, 248), tracking)
+    if sub:
+        f_sub = _font(34, SEMI_FONTS)
+        st = sub.upper()
+        total = sum(d.textlength(ch, font=f_sub) + 4 for ch in st) - 4
+        _draw_tracked(d, (cx - total / 2, 725), st, f_sub, (190, 196, 210), 4)
+    d.rectangle([cx - 60, 710 if not sub else 790, cx + 60, 713 if not sub else 793], fill=tuple(accent))
+    img.save(out_path, quality=92)

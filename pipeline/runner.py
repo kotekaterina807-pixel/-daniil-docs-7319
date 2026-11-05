@@ -270,6 +270,7 @@ def step_build(cfg, niche, project, log=print, stop_flag=lambda: False, progress
                 # если фото человека нет — кадры по теме этого человека (3-е поле строки), иначе по соседней строке
                 other = next((q for v, q in specs[i + 1:] + specs[:i][::-1] if v != "person"), "dark atmosphere")
                 spec["fill_query"] = parts[2] if len(parts) > 2 and parts[2] else other
+                spec["role"] = parts[3] if len(parts) > 3 else ""
             b["specs"].append(spec)
             jobs.append((bi, len(b["specs"]) - 1))
 
@@ -351,6 +352,7 @@ def step_build(cfg, niche, project, log=print, stop_flag=lambda: False, progress
     label_gap = float(cfg.get("label_min_gap_sec", 45))
     last_label = -1e9
     busy_until = [0.0]          # до какой секунды на экране уже есть подпись
+    person_cards = {}           # сколько карточек уже сделано для каждого человека (каждый раз новый вид)
     use_count = {}
     last_item = [None]
 
@@ -416,13 +418,22 @@ def step_build(cfg, niche, project, log=print, stop_flag=lambda: False, progress
             t0, t1 = spec["t0"], spec["t1"]
             length = t1 - t0
             if spec["visual"] == "person":
-                # подпись с именем человека (если рядом нет другой надписи)
-                if cfg.get("show_labels", True) and seg_start + t0 + 0.1 >= busy_until[0] and length >= 1.8:
+                has_photo = any(it.get("person") for it in items)
+                if not has_photo:
+                    # фото в свободных источниках нет — карточка с инициалами и именем, первым кадром
+                    var = person_cards[spec["shown"]] = person_cards.get(spec["shown"], -1) + 1
+                    cp = shots_dir / f"person_{_key(spec['shown'], spec.get('role', ''), str(accent), str(var))}.jpg"
+                    if not cp.exists():
+                        extras.make_person_card(spec["shown"], cp, accent, spec.get("role", ""), var)
+                    items.insert(0, {"path": str(cp), "kind": "image", "url": "card:" + spec["shown"],
+                                     "duration": 0, "person": True})
+                elif cfg.get("show_labels", True) and length >= 1.8:
+                    # подпись с именем у фото человека — всегда, она важнее прочих надписей
                     lp = shots_dir / f"label2_{_key(spec['shown'], str(accent))}.png"
-                    extras.make_label(spec["shown"], lp, accent)
+                    extras.make_label(spec["shown"] + (" | " + spec["role"] if spec.get("role") else ""), lp, accent)
                     dur = min(LABEL_SEC - 1, length - 0.2)
                     add_overlay(lp, seg_start + t0 + 0.1, dur, "label")
-                    busy_until[0] = seg_start + t0 + 0.1 + dur
+                    busy_until[0] = max(busy_until[0], seg_start + t0 + 0.1 + dur)
             if not items:
                 if spec.get("_merged"):                 # время этой строки уже отдано соседней
                     continue
@@ -556,15 +567,41 @@ def _choose_in_chat(cfg, project, finder, seg_blocks, jobs, vis_cache, log, chec
     if lines is None:
         log("Ищу кандидатов под каждую строку сценария (проверять будет " + ("Claude Code" if auto else "Claude в чате") + ")...")
         taken = {u for v in vis_cache.values() for it in v.get("items", []) for u in [it.get("url", "")]}
+        plan = {}
+        if auto:                                  # режиссёрский план: что должно быть в кадре + точные запросы
+            from . import claude_code
+            plan_path = project / "план_кадров.json"
+            try:
+                cached = json.loads(plan_path.read_text(encoding="utf-8"))
+                if cached.get("sig") == sig:
+                    plan = {int(k): v for k, v in cached["plan"].items()}
+            except Exception:
+                pass
+            if not plan:
+                log("Claude Code составляет план кадров: что должно быть в кадре на каждой фразе...")
+                progress(0.09, "План кадров")
+                plan = claude_code.plan(cfg, [{"no": no, "text": seg_blocks[bi]["specs"][si]["text"]}
+                                              for no, (bi, si) in enumerate(jobs, 1)], topic, project, log)
+                if plan:
+                    _save_json(plan_path, {"sig": sig, "plan": {str(k): v for k, v in plan.items()}})
+                    log(f"  План готов: {len(plan)} фраз.")
         lines = []
         for no, (bi, si) in enumerate(jobs, 1):
             check_stop()
-            spec = seg_blocks[bi]["specs"][si]
+            spec = dict(seg_blocks[bi]["specs"][si])
+            pl = plan.get(no) or {}
+            if pl.get("queries"):
+                spec["queries"] = pl["queries"]
+                if spec["visual"] == "person":
+                    spec["fill_query"] = pl["queries"][0]
+            if spec["visual"] != "person" and spec["n"] < 2 and spec.get("t1", 0) - spec.get("t0", 0) >= 5:
+                spec["n"] = 2                     # минимум два разных кадра на обычную фразу
             cands = review.collect(finder, spec, taken)
             q = spec["query"] if spec["visual"] != "person" else \
                 f"фото человека: {spec['query']}, затем — {spec.get('fill_query', '')}"
             keep = ("kind", "url", "thumb", "duration", "source", "page", "title", "author", "license", "person", "local")
             lines.append({"no": no, "sig": sig[no - 1], "text": spec["text"], "query": q, "n": spec["n"],
+                          "show": pl.get("show", ""),
                           "person": spec.get("shown", "") if spec["visual"] == "person" else "",
                           "cands": [{k: c.get(k) for k in keep} for c in cands]})
             progress(0.10 + 0.25 * no / len(jobs), f"Поиск кадров {no}/{len(jobs)}")
@@ -578,6 +615,10 @@ def _choose_in_chat(cfg, project, finder, seg_blocks, jobs, vis_cache, log, chec
     log("Скачиваю выбранные кадры...")
     picked = [(ln, [ln["cands"][k - 1] for k in choices.get(ln["no"], []) if 0 < k <= len(ln["cands"])])
               for ln in lines]
+    for ln, cs in picked:                         # строка о человеке: его фото показываем всегда, первым
+        ph = next((c for c in ln["cands"] if c.get("person")), None)
+        if ph and not any(c.get("person") for c in cs):
+            cs.insert(0, ph)
     flat = [c for _, cs in picked for c in cs]
 
     def dl(c):
@@ -639,7 +680,7 @@ def _choose_with_claude_code(cfg, project, finder, lines, rev_path, ch_path, top
     missing = [ln["person"] for ln in lines if ln.get("person") and ln not in found]
     if missing:
         log("  Фото не найдено в свободных источниках: " + ", ".join(dict.fromkeys(missing)) +
-            " — вместо него кадры по теме этого человека.")
+            " — вместо фото будет карточка с именем и кадры по его теме.")
     for rnd in (1, 2):                                   # до двух дополнительных кругов поиска
         retry = [by_no[no] for no in by_no if len(choices.get(no, [])) < by_no[no]["n"] and queries.get(no)]
         if not retry:

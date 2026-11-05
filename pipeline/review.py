@@ -15,10 +15,11 @@ from PIL import Image, ImageDraw, ImageOps
 from . import extras
 from .visuals import UA, _overlap
 
-CANDS = 6                 # кандидатов на строку
-ROWS_PER_SHEET = 4
-TW, TH = 304, 171         # размер превью на листе (крупнее — Claude лучше видит детали и водяные знаки)
-SHEET_W = 1920
+CANDS = 8                 # кандидатов на строку (2 ряда по 4)
+PER_ROW = 4
+ROWS_PER_SHEET = 3        # строк сценария на лист
+TW, TH = 372, 209         # крупные превью — Claude лучше видит, что в кадре, и водяные знаки
+SHEET_W = 14 + PER_ROW * (TW + 8) + 6
 
 
 class NeedChoices(Exception):
@@ -41,13 +42,38 @@ def collect(finder, spec, taken):
     else:
         query, visual = spec["query"], spec["visual"]
     pool, seen_pool = [], set()
-    for c in finder._candidates(visual, finder._variants(query)):   # источники опрашиваются по мере надобности
-        if c.get("thumb") and c["url"] not in taken and c["url"] not in seen_pool:
-            seen_pool.add(c["url"])
-            pool.append(c)
-            if len(pool) >= 24:
-                break
-    if visual != "photo":
+    planned = [q for q in spec.get("queries") or [] if q]
+    if planned:
+        # режиссёрский план: по 3 лучших кадра на каждый точный запрос, потом запрос из сценария;
+        # без обрезанных «на 2 слова» запросов — они и давали «просто лес» и «просто стену»
+        groups = []
+        for q in planned + [query]:
+            g = []
+            for c in finder._candidates(visual, [q]):
+                if c.get("thumb") and c["url"] not in taken and c["url"] not in seen_pool:
+                    seen_pool.add(c["url"])
+                    g.append(c)
+                    if len(g) >= 4:
+                        break
+            groups.append(g)
+        for k in range(4):                         # по очереди из каждого запроса
+            for g in groups:
+                if k < len(g):
+                    pool.append(g[k])
+        if len(pool) < CANDS:                      # мало — фото этих предметов (они есть почти всегда)
+            for q in planned[:2]:
+                for c in finder._candidates("photo", [q])[:3]:
+                    if c.get("thumb") and c["url"] not in taken and c["url"] not in seen_pool:
+                        seen_pool.add(c["url"])
+                        pool.append(c)
+    else:
+        for c in finder._candidates(visual, finder._variants(query)):   # источники опрашиваются по мере надобности
+            if c.get("thumb") and c["url"] not in taken and c["url"] not in seen_pool:
+                seen_pool.add(c["url"])
+                pool.append(c)
+                if len(pool) >= 24:
+                    break
+    if visual != "photo" and not planned:
         pool.sort(key=lambda c: (0 if c["kind"] == "video" else 1, -_overlap(query, c.get("tags", ""))))
     seen = {c["url"] for c in out}
     for c in pool:
@@ -87,27 +113,32 @@ def make_sheets(lines, out_dir, log=print, prefix="кадры_лист"):
     f_small = extras._font(19, extras.SEMI_FONTS)
     f_num = extras._font(26, extras.SMALL_CAPS_FONTS)
     sheets = []
-    row_h = 52 + TH + 16
+    def row_h(ln):
+        rows = max(1, -(-len(ln["cands"]) // PER_ROW))
+        return 82 + rows * (TH + 8) + 12
     for si in range(0, len(lines), ROWS_PER_SHEET):
         chunk = lines[si:si + ROWS_PER_SHEET]
-        img = Image.new("RGB", (SHEET_W, 20 + row_h * len(chunk)), (18, 22, 32))
+        img = Image.new("RGB", (SHEET_W, 20 + sum(row_h(ln) for ln in chunk)), (18, 22, 32))
         d = ImageDraw.Draw(img)
         y = 14
         for ln in chunk:
             head = f"{ln['no']}.  нужно до {ln['n']}  ·  «{ln['text']}»"
             if ln.get("person"):
                 head = f"{ln['no']}.  ЧЕЛОВЕК: {ln['person']}  ·  «{ln['text']}»"
-            head = textwrap.shorten(head, 150, placeholder="…»")
-            d.text((14, y), head, font=f_head, fill=(240, 240, 245))
-            d.text((14, y + 27), f"запрос: {ln['query']}", font=f_small, fill=(150, 165, 195))
-            x, ty = 14, y + 52
+            for k, part in enumerate(textwrap.wrap(head, 105)[:2]):
+                d.text((14, y + k * 27), part, font=f_head, fill=(240, 240, 245))
+            show = ln.get("show") or ln["query"]
+            d.text((14, y + 56), textwrap.shorten(f"В КАДРЕ: {show}", 120, placeholder="…"), font=f_small,
+                   fill=(255, 205, 120))
             for k, c in enumerate(ln["cands"]):
+                x = 14 + (k % PER_ROW) * (TW + 8)
+                ty = y + 82 + (k // PER_ROW) * (TH + 8)
                 t = thumbs.get(c["thumb"])
                 if t is not None:
                     img.paste(t, (x, ty))
                 else:
                     d.rectangle([x, ty, x + TW, ty + TH], fill=(40, 44, 56))
-                    d.text((x + 70, ty + 50), "нет превью", font=f_small, fill=(160, 160, 170))
+                    d.text((x + 100, ty + 80), "нет превью", font=f_small, fill=(160, 160, 170))
                 d.rectangle([x, ty, x + 40, ty + 34], fill=(35, 87, 232))
                 d.text((x + (9 if k < 9 else 3), ty + 2), str(k + 1), font=f_num, fill=(255, 255, 255))
                 kind = "видео" if c["kind"] == "video" else ("человек" if c.get("person") else "фото")
@@ -115,10 +146,9 @@ def make_sheets(lines, out_dir, log=print, prefix="кадры_лист"):
                 tw = d.textlength(tag, font=f_small)
                 d.rectangle([x + TW - tw - 12, ty + TH - 26, x + TW, ty + TH], fill=(0, 0, 0))
                 d.text((x + TW - tw - 6, ty + TH - 25), tag, font=f_small, fill=(230, 230, 230))
-                x += TW + 8
             if not ln["cands"]:
-                d.text((x, ty + 50), "кандидатов не нашлось — оставьте «-»", font=f_head, fill=(255, 140, 140))
-            y += row_h
+                d.text((14, y + 120), "кандидатов не нашлось", font=f_head, fill=(255, 140, 140))
+            y += row_h(ln)
         p = out_dir / f"{prefix}_{si // ROWS_PER_SHEET + 1:02d}.jpg"
         img.save(p, quality=90)
         sheets.append(p.name)
