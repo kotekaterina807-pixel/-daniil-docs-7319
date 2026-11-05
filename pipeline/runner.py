@@ -104,8 +104,15 @@ def _pick_music(niche):
     return random.choice(files) if files else None
 
 
-def _grade(niche, mood):
+OLD_LOOK = ("eq=saturation=0.74:contrast=1.07:gamma=0.97,"
+            "colorbalance=rs=0.05:gs=0.015:bs=-0.06:rm=0.03:bm=-0.04:rh=0.02:bh=-0.03,"
+            "noise=alls=7:allf=t,vignette=PI/4.6")    # «староватая» плёнка: тёплый выцветший цвет, зерно, виньетка
+
+
+def _grade(niche, mood, old_look=False):
     parts = [g for g in (niche.get("grade", ""), MOOD_GRADE.get(mood, "")) if g]
+    if old_look:
+        parts.append(OLD_LOOK)
     return ",".join(parts) or "null"
 
 
@@ -244,9 +251,18 @@ def step_build(cfg, niche, project, log=print, stop_flag=lambda: False, progress
         span = (b["end"] - b["start"]) / SR
         specs = list(s.get("shots") or [(s["visual"], s["query"])])
         sents = b["sents"] or [(0.0, span, s["text"])]
-        k = len(specs)
-        ranges, texts = [], []
-        for i in range(k):
+        if cfg.get("visual_check") == "claude_code":
+            # кадры строго под речь: единица — фраза (длинное предложение делится по запятым),
+            # смена кадра — в паузе перед словами, строки кадров сценария — подсказки для этих фраз
+            units = _speech_units(sents, b["pauses"], span)
+            specs, ranges, texts = _assign_specs(specs, units)
+            k = len(specs)
+        else:
+            k = len(specs)
+            ranges, texts = None, None
+        if ranges is None:
+            ranges, texts = [], []
+        for i in range(k if not texts else 0):
             if k <= len(sents):
                 i0, i1 = i * len(sents) // k, (i + 1) * len(sents) // k - 1
                 t0 = 0.0 if i == 0 else sents[i0][0]
@@ -262,6 +278,8 @@ def step_build(cfg, niche, project, log=print, stop_flag=lambda: False, progress
             length = max(0.1, t1 - t0)
             n = max(1, round(length / shot_sec), math.ceil(length / max_shot - 1e-6))
             n = min(n, max(1, int(length / min_shot)))
+            if cfg.get("visual_check") == "claude_code":
+                n = 2 if length >= 6.0 else 1         # фраза ≈ кадр; длинная — два кадра
             spec = {"visual": vis, "query": query, "t0": t0, "t1": t1, "n": n, "text": txt}
             if vis == "person":
                 parts = [x.strip() for x in query.split("|")]
@@ -417,6 +435,14 @@ def step_build(cfg, niche, project, log=print, stop_flag=lambda: False, progress
             items = list(spec.get("items") or [])
             t0, t1 = spec["t0"], spec["t1"]
             length = t1 - t0
+            if spec.get("auto_person") and any(it.get("person") for it in items) and cfg.get("show_labels", True) \
+                    and length >= 1.8 and seg_start + t0 + 0.1 >= busy_until[0]:
+                nm = spec["auto_person"][1]               # фото названного во фразе человека — подпись с именем
+                lp = shots_dir / f"label2_{_key(nm, str(accent))}.png"
+                extras.make_label(nm, lp, accent)
+                dur = min(LABEL_SEC - 1, length - 0.2)
+                add_overlay(lp, seg_start + t0 + 0.1, dur, "label")
+                busy_until[0] = seg_start + t0 + 0.1 + dur
             if spec["visual"] == "person":
                 has_photo = any(it.get("person") for it in items)
                 if not has_photo:
@@ -507,7 +533,7 @@ def step_build(cfg, niche, project, log=print, stop_flag=lambda: False, progress
         fr = max(3, min(fr, int(sh["frames"] * 0.4), int(nxt["frames"] * 0.4)))
         sh["trans"], sh["tail"] = "fade", fr
     for i, sh in enumerate(shots):
-        g = _grade(niche, sh["mood"])
+        g = _grade(niche, sh["mood"], bool(cfg.get("old_look", True)))
         if sh.get("darken"):
             g = (g + "," if g != "null" else "") + DARKEN
         sh["grade"] = g
@@ -594,6 +620,11 @@ def _choose_in_chat(cfg, project, finder, seg_blocks, jobs, vis_cache, log, chec
                 spec["queries"] = pl["queries"]
                 if spec["visual"] == "person":
                     spec["fill_query"] = pl["queries"][0]
+            if pl.get("source") == "архив" and spec["visual"] == "stock":
+                spec["visual"] = "archive"            # старые фото, гравюры, картины той эпохи
+            if pl.get("people") and spec["visual"] != "person":
+                spec["auto_person"] = pl["people"][0]  # названный во фразе человек — его фото в кандидаты
+                seg_blocks[bi]["specs"][si]["auto_person"] = spec["auto_person"]
             if spec["visual"] != "person" and spec["n"] < 2 and spec.get("t1", 0) - spec.get("t0", 0) >= 5:
                 spec["n"] = 2                     # минимум два разных кадра на обычную фразу
             cands = review.collect(finder, spec, taken)
@@ -602,7 +633,8 @@ def _choose_in_chat(cfg, project, finder, seg_blocks, jobs, vis_cache, log, chec
             keep = ("kind", "url", "thumb", "duration", "source", "page", "title", "author", "license", "person", "local")
             lines.append({"no": no, "sig": sig[no - 1], "text": spec["text"], "query": q, "n": spec["n"],
                           "show": pl.get("show", ""),
-                          "person": spec.get("shown", "") if spec["visual"] == "person" else "",
+                          "person": spec.get("shown", "") if spec["visual"] == "person"
+                          else (spec["auto_person"][1] if spec.get("auto_person") else ""),
                           "cands": [{k: c.get(k) for k in keep} for c in cands]})
             progress(0.10 + 0.25 * no / len(jobs), f"Поиск кадров {no}/{len(jobs)}")
         review.save_review(rev_path, lines)
@@ -748,3 +780,73 @@ def _calm_videos(project, seg_blocks, log):
             if len(keep) != len(items):
                 sp["items"] = keep
     log(f"  Проверка на быстрые кадры: роликов {len(vids)}, убрано {dropped}, замедлено {slowed}.")
+
+
+def _speech_units(sents, pauses, span):
+    """Фразы озвучки: предложения, длинные (>6.5 с) — делятся по запятым/тире на части от ~2.5 с.
+    Границы притягиваются к паузам речи, кадр меняется чуть раньше слов."""
+    units = []
+    for a, b, txt in sents:
+        if b - a <= 6.5:
+            units.append([a, b, txt])
+            continue
+        parts = [x for x in re.split(r"(?<=[,;:])\s+|\s+(?=[—–]\s)", txt) if x.strip()]
+        merged = []
+        for x in parts:                            # слишком короткие кусочки склеиваем
+            if merged and (len(merged[-1]) < 35 or len(x) < 18):
+                merged[-1] += " " + x
+            else:
+                merged.append(x)
+        if len(merged) <= 1:
+            units.append([a, b, txt])
+            continue
+        total = sum(len(x) for x in merged)
+        t, acc = a, 0
+        for j, x in enumerate(merged):
+            acc += len(x)
+            end = b if j == len(merged) - 1 else a + (b - a) * acc / total
+            if j < len(merged) - 1:               # к ближайшей паузе в пределах 0.7 с
+                near = [pt for pt, ln in pauses if abs(pt - end) <= 0.7 and a + 1.5 < pt < b - 1.5]
+                if near:
+                    end = min(near, key=lambda pt: abs(pt - end))
+            if end - t >= 2.2 or j == len(merged) - 1:
+                units.append([t, end, x])
+                t = end
+            else:
+                merged[j + 1] = x + " " + merged[j + 1] if j + 1 < len(merged) else x
+    if units:
+        units[0][0] = 0.0
+        units[-1][1] = span
+        for i in range(1, len(units)):            # смена кадра на 0.25 с раньше слов
+            cut = max(units[i - 1][0] + 1.5, units[i][0] - 0.25)
+            units[i - 1][1] = units[i][0] = cut
+    return units
+
+
+def _assign_specs(script_specs, units):
+    """Строки кадров сценария → фразы. [человек] — к фразе, где звучит его имя; остальные — по порядку."""
+    n = len(units)
+    vis = [["stock", ""] for _ in range(n)]
+    persons = {}
+    others = [(v, q) for v, q in script_specs if v != "person"]
+    for j, (v, q) in enumerate(others):            # подсказки по порядку
+        u = min(n - 1, j * n // max(1, len(others)))
+        if not vis[u][1] or v == "archive":
+            vis[u] = [v if v in ("archive", "photo", "stock") else "stock", q]
+    for v, q in script_specs:
+        if v != "person":
+            continue
+        parts = [x.strip() for x in q.split("|")]
+        shown = parts[1] if len(parts) > 1 and parts[1] else parts[0]
+        stems = [w[:max(3, len(w) - 2)].lower() for w in shown.split() if len(w) > 2]
+        u = next((i for i, (_, _, t) in enumerate(units) if any(st in t.lower() for st in stems[-1:])), None)
+        if u is None:
+            u = next((i for i, (_, _, t) in enumerate(units) if any(st in t.lower() for st in stems)), None)
+        if u is not None and u not in persons:
+            persons[u] = q
+    for i in range(n):                             # фразы без подсказки — подсказка соседней
+        if not vis[i][1]:
+            vis[i][1] = next((vis[j][1] for j in list(range(i - 1, -1, -1)) + list(range(i + 1, n)) if vis[j][1]),
+                             "dark atmosphere")
+    specs = [("person", persons[i]) if i in persons else (vis[i][0], vis[i][1]) for i in range(n)]
+    return specs, [(a, b) for a, b, _ in units], [t for _, _, t in units]

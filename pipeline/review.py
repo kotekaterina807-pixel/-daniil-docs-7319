@@ -42,6 +42,14 @@ def collect(finder, spec, taken):
     else:
         query, visual = spec["query"], spec["visual"]
     pool, seen_pool = [], set()
+    if spec.get("auto_person"):                    # во фразе назван человек — его фото первыми
+        en, ru = spec["auto_person"]
+        for c in finder._person_photos(en, ru):
+            if c.get("thumb") and c["url"] not in taken and c["url"] not in seen_pool:
+                seen_pool.add(c["url"])
+                pool.append(dict(c, person=en))
+                if len(pool) >= 2:
+                    break
     planned = [q for q in spec.get("queries") or [] if q]
     if planned:
         # режиссёрский план: по 3 лучших кадра на каждый точный запрос, потом запрос из сценария;

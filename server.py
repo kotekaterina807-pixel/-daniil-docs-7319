@@ -332,7 +332,7 @@ PUBLIC_KEYS = ["pixabay_key", "pexels_key", "proxy_url", "lumean_key", "lumean_a
                "tts_provider", "edge_voice", "anthropic_key", "openai_key", "elevenlabs_key", "elevenlabs_voice_id",
                "music_volume", "shot_seconds", "show_labels", "theme", "sound_done", "open_folder_after",
                "default_niche", "update_repo", "language", "visual_check", "eleven_speed", "eleven_stability", "eleven_style",
-               "tg_token", "tg_chat_id", "tg_send"]
+               "tg_token", "tg_chat_id", "tg_send", "old_look"]
 
 
 class Handler(BaseHTTPRequestHandler):
