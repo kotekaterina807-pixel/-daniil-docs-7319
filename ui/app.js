@@ -408,6 +408,7 @@ function pasteChoices(pid) {
 
 // ---------- проекты ----------
 const ICON = {
+  send: '<svg viewBox="0 0 24 24"><path d="M21 3 3 10.5l7 2.5 2.5 7z"/><path d="m21 3-11 10"/></svg>',
   folder: '<svg viewBox="0 0 24 24"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></svg>',
   doc: '<svg viewBox="0 0 24 24"><path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z"/><path d="M14 3v5h5M9 13h6M9 17h4"/></svg>',
   redo: '<svg viewBox="0 0 24 24"><path d="M20 12a8 8 0 1 1-2.3-5.6M20 4v5h-5"/></svg>',
@@ -449,6 +450,7 @@ function renderProjects() {
             : `<button class="btn small ${p.ready ? "primary" : ""}" data-act="${p.ready ? "video" : "rebuild"}">${p.ready ? "Смотреть" : "Собрать"}</button>`}
           <span class="spacer"></span>
           <button class="ibtn" data-act="desc" title="Описание для YouTube" ${p.has_description ? "" : "disabled"}>${ICON.text}</button>
+          ${p.ready ? `<button class="ibtn" data-act="tg" title="Отправить в Telegram">${ICON.send}</button>` : ""}
           <button class="ibtn" data-act="project" title="Открыть папку">${ICON.folder}</button>
           <button class="ibtn" data-act="script" title="Открыть сценарий">${ICON.doc}</button>
           ${p.ready ? `<button class="ibtn" data-act="rebuild" title="Пересобрать">${ICON.redo}</button>` : ""}
@@ -480,6 +482,10 @@ $("#projects").addEventListener("click", async (e) => {
     if (act === "video") openPlayer(p);
     else if (act === "choose") { showChoose(id, (p.sheets || []).length); pasteChoices(id); }
     else if (["project", "script"].includes(act)) await api("/api/open", { what: act, id });
+    else if (act === "tg") {
+      if (!S.cfg.tg_chat_id) { toast("Сначала подключите Telegram: Параметры → Сервисы и ключи", "err", 6000); return; }
+      await api("/api/tg_send", { project: id }); toast("Отправляю в Telegram… Ход — в журнале на «Главной»", "ok", 5000);
+    }
     else if (act === "rebuild") {
       await api("/api/rebuild", { id }); toast("Сборка началась", "ok"); go("home");
     } else if (act === "desc") {
@@ -742,6 +748,19 @@ $("#libList").addEventListener("click", async (e) => {
     } catch (err) { toast(err.message, "err"); }
   }
 });
+function tgStatus() {
+  const el = $("#tgStatus"); if (!el) return;
+  el.textContent = S.cfg.tg_chat_id ? "Подключено — видео будут приходить в ваш чат с ботом" : (S.cfg.tg_token ? "Токен есть — нажмите «Подключить»" : "Не подключено");
+}
+$("#tgConnectBtn").onclick = async () => {
+  try {
+    const r = await api("/api/tg_connect", {});
+    if (r.ok) { S.cfg.tg_chat_id = r.chat; toast(`Telegram подключён: бот @${r.bot}. Проверьте сообщение в чате.`, "ok", 6000); }
+    else toast(r.error, "err", 9000);
+  } catch (e) { toast(e.message, "err"); }
+  tgStatus();
+};
+setInterval(tgStatus, 2000);
 $("#ccLoginBtn").onclick = () => api("/api/claude_login", {}).then((r) => toast(r.message || "Открываю Claude Code…", r.warn ? "err" : undefined, 9000)).catch((e) => toast(e.message, "err", 9000));
 $("#elLibBtn").onclick = () => api("/api/open_url", { url: "https://elevenlabs.io/app/voice-library" }).catch((e) => toast(e.message, "err"));
 $("#elUsageBtn").onclick = loadUsage;

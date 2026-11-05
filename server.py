@@ -171,7 +171,8 @@ def run_job(kind, fn):
 # ---------------- проекты ----------------
 def _project_info(d: Path):
     data = runner._load_json(d / "script.json", {}) if (d / "script.json").exists() else {}
-    videos = [p for p in d.glob("*.mp4") if p.name != "video_only.mp4" and not p.name.endswith(".part.mp4")]
+    videos = [p for p in d.glob("*.mp4") if p.name != "video_only.mp4" and not p.name.endswith(".part.mp4")
+              and not p.name.endswith("_telegram.mp4")]
     video = max(videos, key=lambda p: p.stat().st_mtime) if videos else None
     dur = 0.0
     nar = d / "narration.wav"
@@ -330,7 +331,8 @@ def make_shortcut(quiet=False):
 PUBLIC_KEYS = ["pixabay_key", "pexels_key", "proxy_url", "lumean_key", "lumean_ai_model",
                "tts_provider", "edge_voice", "anthropic_key", "openai_key", "elevenlabs_key", "elevenlabs_voice_id",
                "music_volume", "shot_seconds", "show_labels", "theme", "sound_done", "open_folder_after",
-               "default_niche", "update_repo", "language", "visual_check", "eleven_speed", "eleven_stability", "eleven_style"]
+               "default_niche", "update_repo", "language", "visual_check", "eleven_speed", "eleven_stability", "eleven_style",
+               "tg_token", "tg_chat_id", "tg_send"]
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -626,9 +628,36 @@ class Handler(BaseHTTPRequestHandler):
         if p == "/api/claude_login":
             from pipeline import claude_code
             return self._send(200, claude_code.open_login(config.load_config()))
+        if p == "/api/tg_connect":
+            from pipeline import telegram
+            cfg = config.load_config()
+            try:
+                bot = telegram.bot_name(cfg.get("tg_token", ""))
+                chat, who = telegram.find_chat(cfg["tg_token"])
+            except telegram.TgError as e:
+                return self._send(200, {"ok": False, "error": str(e)})
+            if not chat:
+                return self._send(200, {"ok": False, "need_start": True, "bot": bot,
+                                        "error": f"Откройте бота @{bot} в Telegram и нажмите «Start», потом снова «Подключить»."})
+            cfg["tg_chat_id"] = chat
+            config.save_config(cfg)
+            try:
+                telegram.send_text(cfg, "✅ DocuStudio подключена. Сюда будут приходить готовые видео.")
+            except telegram.TgError as e:
+                return self._send(200, {"ok": False, "error": str(e)})
+            return self._send(200, {"ok": True, "bot": bot, "who": who, "chat": chat})
+        if p == "/api/tg_send":
+            name = str(data.get("project", ""))
+            proj = config.OUTPUT_DIR / name
+            final = _final_video(proj) if name and proj.is_dir() and proj.resolve().parent == config.OUTPUT_DIR.resolve() else None
+            if not final:
+                return self._send(404, {"error": "В проекте нет готового видео."})
+            threading.Thread(target=_tg_send_bg, args=(final, name), daemon=True).start()
+            return self._send(200, {"ok": True})
         if p == "/api/open_url":
             url = str(data.get("url") or "")
-            if not url.startswith(("https://elevenlabs.io/", "https://console.anthropic.com/", "https://platform.claude.com/", "https://lumean.app/")):
+            if not url.startswith(("https://elevenlabs.io/", "https://console.anthropic.com/", "https://platform.claude.com/",
+                                   "https://lumean.app/", "https://t.me/BotFather")):
                 return self._send(400, {"error": "Этот адрес открыть нельзя"})
             import webbrowser
             webbrowser.open(url)
@@ -778,6 +807,22 @@ def _tokens_left():
         return None
 
 
+def _final_video(project):
+    vids = [p for p in Path(project).glob("*.mp4") if p.name != "video_only.mp4"
+            and not p.name.endswith(".part.mp4") and not p.name.endswith("_telegram.mp4")]
+    return max(vids, key=lambda p: p.stat().st_mtime) if vids else None
+
+
+def _tg_send_bg(path, title):
+    from pipeline import telegram
+    try:
+        t = runner._load_json(Path(path).parent / "script.json", {}).get("title") or title
+        msg = telegram.send_video(config.load_config(), path, f"🎬 {t}", JOB.add_log)
+        JOB.add_log("Telegram: " + msg)
+    except Exception as e:
+        JOB.add_log(f"Telegram: не отправилось — {e}")
+
+
 def _build(project, npath):
     """Сборка проекта. Если нужен выбор кадров в чате — возвращает это как результат, а не ошибку."""
     from pipeline import review
@@ -789,6 +834,10 @@ def _build(project, npath):
     except review.NeedChoices as e:
         JOB.add_log("Кадры-кандидаты собраны. Отправьте листы Claude в чат и вставьте его ответ в программу.")
         return {"project": project.name, "need_choices": True, "sheets": e.sheets, "lines": e.lines}
+    final = _final_video(project)
+    cfg = config.load_config()
+    if final and cfg.get("tg_send", True) and cfg.get("tg_token") and cfg.get("tg_chat_id"):
+        threading.Thread(target=_tg_send_bg, args=(final, project.name), daemon=True).start()
     after = _tokens_left()
     if before is not None and after is not None:
         JOB.add_log(f"Озвучка: потрачено токенов Lumean {max(0, before - after):,}, осталось {after:,}".replace(",", " "))

@@ -3,7 +3,7 @@ import json
 import os
 from pathlib import Path
 
-VERSION = "6.0 (05.11.2026)"
+VERSION = "6.1 (05.11.2026)"
 CONFIG_REV = 8      # при смене — обновляются настройки монтажа у уже сохранённых конфигов
 ROOT = Path(__file__).resolve().parent.parent
 CONFIG_PATH = ROOT / "config.json"
@@ -36,7 +36,10 @@ DEFAULTS = {
     "max_shot_seconds": 7.0,           # обычно кадр не длиннее этого
     "show_labels": True,               # всплывающие надписи (места, люди, даты)
     "visual_check": "claude_code",     # claude_code — Claude Code по подписке; claude — Claude по API; chat — листы в чат; none — без проверки
-    "claude_code_model": "sonnet",     # модель Claude Code для проверки кадров
+    "claude_code_model": "sonnet",
+    "tg_token": "",                    # бот Telegram для отправки готовых видео (@BotFather)
+    "tg_chat_id": "",                  # ваш чат с ботом — программа узнаёт сама после «Start»
+    "tg_send": True,                   # отправлять каждое готовое видео     # модель Claude Code для проверки кадров
     "strict_visuals": True,            # каждый кадр проверяется нейросетью по смыслу и на водяные знаки
     "vision_model": "claude-sonnet-5-5",   # Claude проверяет кадры по смыслу
     "min_relevance": 8,                # порог соответствия смыслу (0–10)
