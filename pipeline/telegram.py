@@ -76,7 +76,7 @@ def light_copy(src, log=print):
     """Копия до ~48 МБ: битрейт под длину ролика, разрешение — сколько позволяет битрейт."""
     src = Path(src)
     dur = max(1.0, _duration(src))
-    total_kbit = 46 * 1024 * 8                  # с запасом
+    total_kbit = int(LIMIT * 0.9 * 8 / 1024)      # с запасом под лимит
     v_kbps = int(total_kbit / dur) - 96
     if v_kbps < 120:
         return None                              # слишком длинный — даже лёгкая копия не влезет
