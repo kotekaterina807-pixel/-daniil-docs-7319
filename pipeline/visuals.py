@@ -24,7 +24,9 @@ BLOCK_WORDS = re.compile(
     r"twitch|facebook|vk\.com|subscribe|youtube[ _-]?channel|film[ _-]?still|video[ _-]?still|frame[ _-]?from|trailer|poster|"
     r"advertis|\bpromo|copyright|©|getty|shutterstock|alamy|istock|depositphotos|123rf|dreamstime|"
     r"pond5|storyblocks|envato|green[ _-]?screen|chroma|lower[ _-]?third|template|mock[ _-]?up|"
-    r"\bintro\b|\boutro\b|typography|lettering|\btext\b|\btitle\b",
+    r"\bintro\b|\boutro\b|typography|lettering|\btext\b|\btitle\b|"
+    r"time[ _-]?lapse|timelapse|hyper[ _-]?lapse|\bfast\b|\bspeed\b|speeding|motion[ _-]?blur|\bracing\b|"
+    r"\bstrobe|\bflicker|\bglitch|\bshaky|\brush\b|\bzoom[ _-]?in\b",
     re.I)
 
 
@@ -371,26 +373,52 @@ class VisualFinder:
             self.credits.append(item)
         return True
 
-    def _person_photos(self, person):
-        """Фото конкретного человека: главное фото статьи Википедии (en, ru), затем файлы архива,
-        где в названии есть его фамилия. Только свободные лицензии."""
-        surname = person.split()[-1].lower()
+    def _wiki_title(self, name, lang):
+        """Точное название статьи Википедии о человеке (поиск по имени)."""
+        def fetch():
+            try:
+                r = self._get(f"https://{lang}.wikipedia.org/w/api.php",
+                              {"action": "query", "format": "json", "list": "search", "srsearch": name,
+                               "srlimit": 3, "srnamespace": 0})
+                hits = (r.json().get("query") or {}).get("search") or []
+                return [h.get("title", "") for h in hits if h.get("title")]
+            except Exception:
+                return []
+        return self._cached(("wt", lang, name), fetch)
+
+    def _person_photos(self, person, alt=""):
+        """Фото конкретного человека: главное фото его статьи в Википедии (en — по английскому имени,
+        ru — по русскому), затем файлы архива, где в названии есть его фамилия. Только свободные лицензии."""
+        names = [n for n in dict.fromkeys([person.strip(), (alt or "").strip()]) if n]
+        surnames = {n.split()[-1].lower().strip(",") for n in names}
+        for n in names:                                   # «Дятлов, Игорь» → фамилия первой
+            if "," in n:
+                surnames.add(n.split(",")[0].lower())
         seen, out = set(), []
-        for c in self._wiki_page_image(person, "en") + self._wiki_page_image(person, "ru"):
-            if c["url"] not in seen:
+
+        def add(cands, need_name=False):
+            for c in cands:
+                text = (c.get("title", "") + " " + c.get("page", "")).lower()
+                if c["url"] in seen or (need_name and not any(sn in text for sn in surnames)):
+                    continue
                 seen.add(c["url"])
                 out.append(c)
-        for q in (person, f"{person} portrait", f"{person} photograph"):
-            for c in self._wikimedia(q):
-                text = (c.get("title", "") + " " + c.get("page", "")).lower()
-                if surname in text and c["url"] not in seen:
-                    seen.add(c["url"])
-                    out.append(c)
+        for n in names:
+            lang_order = ("ru", "en") if re.search("[а-яё]", n, re.I) else ("en", "ru")
+            for lang in lang_order:
+                add(self._wiki_page_image(n, lang))
+                for t in self._wiki_title(n, lang)[:2]:
+                    if any(sn in t.lower() for sn in surnames):
+                        add(self._wiki_page_image(t, lang))
+        for n in names:
+            for q in (n, f"{n} portrait", f"{n} photograph"):
+                add(self._wikimedia(q), need_name=True)
         return out
 
     def find_person(self, person, narration="", topic=""):
         """Одно фото человека или пусто."""
-        pool = [c for c in self._person_photos(person) if c["url"] not in self.used and c.get("thumb")][:6]
+        pool = [c for c in self._person_photos(person, getattr(self, "person_alt", {}).get(person, ""))
+                if c["url"] not in self.used and c.get("thumb")][:6]
         found = []
         if pool:
             order = vision.judge(self.cfg, narration or person, topic, pool, self.log, person=person)

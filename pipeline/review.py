@@ -15,9 +15,9 @@ from PIL import Image, ImageDraw, ImageOps
 from . import extras
 from .visuals import UA, _overlap
 
-CANDS = 8                 # кандидатов на строку
-ROWS_PER_SHEET = 5
-TW, TH = 228, 128         # размер превью на листе
+CANDS = 6                 # кандидатов на строку
+ROWS_PER_SHEET = 4
+TW, TH = 304, 171         # размер превью на листе (крупнее — Claude лучше видит детали и водяные знаки)
 SHEET_W = 1920
 
 
@@ -34,7 +34,7 @@ def collect(finder, spec, taken):
     """До CANDS кандидатов для строки: сначала видео, без повторов по всему видео."""
     out = []
     if spec["visual"] == "person":
-        for c in finder._person_photos(spec["query"])[:3]:
+        for c in finder._person_photos(spec["query"], spec.get("shown", ""))[:4]:
             if c["url"] not in taken and c.get("thumb"):
                 out.append(dict(c, person=True))
         query, visual = spec.get("fill_query") or "dark atmosphere", "stock"
@@ -95,6 +95,8 @@ def make_sheets(lines, out_dir, log=print, prefix="кадры_лист"):
         y = 14
         for ln in chunk:
             head = f"{ln['no']}.  нужно до {ln['n']}  ·  «{ln['text']}»"
+            if ln.get("person"):
+                head = f"{ln['no']}.  ЧЕЛОВЕК: {ln['person']}  ·  «{ln['text']}»"
             head = textwrap.shorten(head, 150, placeholder="…»")
             d.text((14, y), head, font=f_head, fill=(240, 240, 245))
             d.text((14, y + 27), f"запрос: {ln['query']}", font=f_small, fill=(150, 165, 195))

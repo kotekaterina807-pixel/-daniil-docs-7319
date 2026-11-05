@@ -236,6 +236,7 @@ def step_build(cfg, niche, project, log=print, stop_flag=lambda: False, progress
             finder.used.add(item.get("url", ""))
     shot_sec = float(cfg.get("shot_seconds", 2.0))
     max_shot = float(cfg.get("max_shot_seconds", 3.2))
+    min_shot = max(3.0, shot_sec * 0.8)          # короче кадр не бывает: частые склейки режут глаз
     seg_blocks = [b for b in blocks if b["type"] == "seg"]
     jobs = []
     for bi, b in enumerate(seg_blocks):
@@ -260,7 +261,7 @@ def step_build(cfg, niche, project, log=print, stop_flag=lambda: False, progress
         for i, ((vis, query), (t0, t1), txt) in enumerate(zip(specs, ranges, texts)):
             length = max(0.1, t1 - t0)
             n = max(1, round(length / shot_sec), math.ceil(length / max_shot - 1e-6))
-            n = min(n, max(1, int(length / 2.0)))
+            n = min(n, max(1, int(length / min_shot)))
             spec = {"visual": vis, "query": query, "t0": t0, "t1": t1, "n": n, "text": txt}
             if vis == "person":
                 name, _, shown = query.partition("|")
@@ -271,6 +272,8 @@ def step_build(cfg, niche, project, log=print, stop_flag=lambda: False, progress
             b["specs"].append(spec)
             jobs.append((bi, len(b["specs"]) - 1))
 
+    finder.person_alt = {sp["query"]: sp.get("shown", "") for b in seg_blocks for sp in b["specs"]
+                         if sp["visual"] == "person"}
     mode = cfg.get("visual_check", "claude")
     if mode == "auto":
         mode = "claude"
@@ -328,6 +331,7 @@ def step_build(cfg, niche, project, log=print, stop_flag=lambda: False, progress
     finder.credits = [c for v in vis_cache.values() for c in v.get("credits", [])
                       if any(c.get("url") == it.get("url") for b in seg_blocks for sp in b["specs"]
                              for it in sp.get("items", []))]
+    _calm_videos(project, seg_blocks, log)
     for b in seg_blocks:
         b["items"] = [it for sp in b["specs"] for it in sp.get("items", [])]
     st = vision.stats()
@@ -416,11 +420,12 @@ def step_build(cfg, niche, project, log=print, stop_flag=lambda: False, progress
             lim = max_shot * 1.5
             n = spec["n"]
             if items:
-                k = len(items)
+                k = min(len(items), max(1, int(length / min_shot)))   # лишние кадры не берём — без мельтешения
+                items = items[:k]
                 n = k if length / k <= lim else max(k, math.ceil(length / lim - 1e-6))
             pauses = [(t - t0, ln) for t, ln in b["pauses"] if t0 < t < t1]
             bounds = [x - t0 for x in b["sent_bounds"] if t0 < x < t1]
-            cuts = timing.cut_points(length, n, pauses, bounds, min_shot=2.0)
+            cuts = timing.cut_points(length, n, pauses, bounds, min_shot=min_shot)
             edges = [0.0] + cuts + [length]
             fixed = [0.0]
             for a_, b_ in zip(edges, edges[1:]):
@@ -436,7 +441,7 @@ def step_build(cfg, niche, project, log=print, stop_flag=lambda: False, progress
                 zoom_flip = not zoom_flip
                 shots.append({
                     "kind": it["kind"] if it else "black", "src": it["path"] if it else "",
-                    "clip_dur": (it or {}).get("duration", 0), "offset_n": uses,
+                    "clip_dur": (it or {}).get("duration", 0), "offset_n": uses, "speed": (it or {}).get("speed", 1.0),
                     "s": b["start"] + int((t0 + edges[j]) * SR), "e": b["start"] + int((t0 + edges[j + 1]) * SR),
                     "mood": s.get("mood", "normal"), "first_of_seg": first_in_seg, "zoom_in": zoom_flip,
                 })
@@ -541,6 +546,7 @@ def _choose_in_chat(cfg, project, finder, seg_blocks, jobs, vis_cache, log, chec
                 f"фото человека: {spec['query']}, затем — {spec.get('fill_query', '')}"
             keep = ("kind", "url", "thumb", "duration", "source", "page", "title", "author", "license", "person", "local")
             lines.append({"no": no, "sig": sig[no - 1], "text": spec["text"], "query": q, "n": spec["n"],
+                          "person": spec.get("shown", "") if spec["visual"] == "person" else "",
                           "cands": [{k: c.get(k) for k in keep} for c in cands]})
             progress(0.10 + 0.25 * no / len(jobs), f"Поиск кадров {no}/{len(jobs)}")
         review.save_review(rev_path, lines)
@@ -631,3 +637,43 @@ def _choose_with_claude_code(cfg, project, finder, lines, rev_path, ch_path, top
         log(f"  Без подходящих кадров осталось строк: {empty} — их закроют соседние кадры.")
     review.save_review(rev_path, lines)
     ch_path.write_text(json.dumps({str(k): v for k, v in choices.items()}, ensure_ascii=False), encoding="utf-8")
+
+
+MOTION_SLOW = 6.0      # выше — ролик проигрывается медленнее (см. render.motion_score)
+MOTION_DROP = 11.0     # выше — ролик убирается, если у строки есть другие кадры
+
+
+def _calm_videos(project, seg_blocks, log):
+    """Быстрые и резкие ролики (таймлапсы, тряска, мелькание) режут глаз: замеряем движение,
+    слишком быстрые убираем, умеренно быстрые замедляем."""
+    cache_path = project / "motion.json"
+    try:
+        cache = json.loads(cache_path.read_text(encoding="utf-8"))
+    except Exception:
+        cache = {}
+    vids = {it["path"] for b in seg_blocks for sp in b["specs"] for it in sp.get("items", [])
+            if it.get("kind") == "video" and it.get("path")}
+    todo = [p for p in vids if p not in cache]
+    if todo:
+        from concurrent.futures import ThreadPoolExecutor
+        with ThreadPoolExecutor(max_workers=4) as ex:
+            for p, sc in zip(todo, ex.map(render.motion_score, todo)):
+                cache[p] = round(sc, 2)
+        _save_json(cache_path, cache)
+    slowed = dropped = 0
+    for b in seg_blocks:
+        for sp in b["specs"]:
+            items = sp.get("items") or []
+            score = lambda it: cache.get(it.get("path"), 0) if it.get("kind") == "video" else 0
+            keep = [it for it in items if score(it) <= MOTION_DROP]
+            if not keep and items:                        # все быстрые — оставляем самый спокойный
+                keep = [min(items, key=score)]
+            dropped += len(items) - len(keep)
+            for it in keep:
+                sc = score(it)
+                if sc > MOTION_SLOW:
+                    it["speed"] = round(max(0.5, MOTION_SLOW / sc), 2)
+                    slowed += 1
+            if len(keep) != len(items):
+                sp["items"] = keep
+    log(f"  Проверка на быстрые кадры: роликов {len(vids)}, убрано {dropped}, замедлено {slowed}.")

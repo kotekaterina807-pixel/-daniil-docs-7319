@@ -141,12 +141,33 @@ def render_image_shot(src, total, out, grade, zoom_in=True, label=None):
     _pipe(_kb_frames(base, total, zoom_in, amp), total, out, chain, extra)
 
 
-def render_video_shot(src, total, out, grade, label=None, clip_dur=0, offset_n=0):
+def motion_score(path, seconds=8):
+    """Насколько «быстрый» ролик: медиана разницы соседних кадров (8 кадров/с, 96×54, лёгкое размытие).
+    Ориентиры: спокойный кадр 0–3, плавная панорама 3–6, быстрая камера/таймлапс 7 и выше."""
+    import numpy as np
+    w, h = 96, 54
+    try:
+        p = subprocess.run([ffmpeg_exe(), "-hide_banner", "-loglevel", "error", "-t", str(seconds), "-i", str(path),
+                            "-vf", f"fps=8,scale={w}:{h},gblur=sigma=1,format=gray", "-f", "rawvideo", "-"],
+                           capture_output=True, timeout=120, creationflags=_NO_WINDOW)
+        a = np.frombuffer(p.stdout, dtype=np.uint8)
+        n = a.size // (w * h)
+        if n < 3:
+            return 0.0
+        f = a[: n * w * h].reshape(n, h, w).astype(np.int16)
+        return float(np.median(np.abs(np.diff(f, axis=0)).mean(axis=(1, 2))))
+    except Exception:
+        return 0.0
+
+
+def render_video_shot(src, total, out, grade, label=None, clip_dur=0, offset_n=0, speed=1.0):
     need = total / FPS
     slow = 1.0
     start = 0.0
     if clip_dur and clip_dur < need:
         slow = min(1.6, need / clip_dur)                # короткий ролик слегка замедляем, а не зацикливаем
+    if speed and speed < 0.99:
+        slow = min(2.0, max(slow, 1.0 / speed))         # быстрый ролик — проигрываем медленнее
     elif clip_dur and offset_n:
         # повторное использование ролика — берём другой его участок
         free = max(clip_dur - need, 0)
@@ -199,7 +220,7 @@ def render_shots(shots, workers, log=print, on_progress=lambda d, t: None):
                 render_card(s["src"], n, tmp)
             elif s["kind"] == "video":
                 render_video_shot(s["src"], n, tmp, s["grade"], s.get("label"), s.get("clip_dur", 0),
-                                 s.get("offset_n", 0))
+                                 s.get("offset_n", 0), s.get("speed", 1.0))
             elif s["kind"] == "image" and s["src"]:
                 render_image_shot(s["src"], n, tmp, s["grade"], s.get("zoom_in", True), s.get("label"))
             else:
