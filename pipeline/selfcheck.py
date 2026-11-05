@@ -174,7 +174,7 @@ def run_all(cfg, log=print):
         checks.append(lambda: _claude(cfg))
     if cfg.get("visual_check") == "claude_code":
         checks.append(lambda: _claude_code(cfg))
-    checks += [lambda: _pixabay(cfg), _wikimedia]
+    checks += [lambda: _pixabay(cfg), _wikimedia, _archives]
     out = []
     for fn in checks:
         try:
