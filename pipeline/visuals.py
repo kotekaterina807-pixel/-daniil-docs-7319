@@ -12,7 +12,25 @@ import requests
 
 from . import library, vision
 
-UA = {"User-Agent": "YTDocVideoGenerator/1.0 (personal YouTube documentary tool)"}
+UA = {"User-Agent": "DocuStudio/6.5 (personal documentary video tool; https://github.com/kotekaterina807-pixel/-daniil-docs-7319)"}
+
+_DIRECT = requests.Session()
+_DIRECT.trust_env = False                       # без прокси программы
+
+
+def _direct_retry(url, params, timeout, r):
+    """Некоторые архивы (Openverse, Библиотека Конгресса, Met) не пускают адреса прокси-серверов
+    и отвечают 403/410. Тогда тот же запрос — напрямую, с домашнего интернета: эти архивы из России открыты."""
+    import os as _os
+    if r is not None and r.status_code in (401, 403, 410) and (_os.environ.get("HTTPS_PROXY") or _os.environ.get("https_proxy")):
+        try:
+            r2 = _DIRECT.get(url, params=params, headers=UA, timeout=timeout)
+            if r2.status_code < 400:
+                return r2
+        except requests.RequestException:
+            pass
+    return r
+
 
 # Только материалы без авторских прав: общественное достояние и CC0.
 # CC BY / CC BY-SA и «Copyrighted free use» отбрасываются.
@@ -80,7 +98,7 @@ class VisualFinder:
                     if wait > 0:
                         time.sleep(wait)
                     self._last_pb = time.time()
-            r = requests.get(url, params=params, headers=UA, timeout=timeout)
+            r = _direct_retry(url, params, timeout, requests.get(url, params=params, headers=UA, timeout=timeout))
             if r.status_code == 429:
                 time.sleep(15 * (attempt + 1))
                 continue
@@ -539,6 +557,8 @@ class VisualFinder:
         for attempt in range(3):
             try:
                 with requests.get(item["url"], headers=UA, stream=True, timeout=60) as r:
+                    if r.status_code in (401, 403, 410):
+                        r = _DIRECT.get(item["url"], headers=UA, stream=True, timeout=60)
                     r.raise_for_status()
                     with open(tmp, "wb") as f:
                         for chunk in r.iter_content(1 << 16):

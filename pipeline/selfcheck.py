@@ -13,7 +13,7 @@ from PIL import Image
 from . import llm, render, tts
 from .config import ROOT, ffmpeg_exe
 
-UA = {"User-Agent": "YTDocVideoGenerator/1.0 (personal YouTube documentary tool)"}
+UA = {"User-Agent": "DocuStudio/6.5 (personal documentary video tool; https://github.com/kotekaterina807-pixel/-daniil-docs-7319)"}
 
 
 def _ffmpeg():
@@ -39,7 +39,8 @@ def _disk():
 
 def _proxy(cfg):
     name = "Прокси программы"
-    url = str(cfg.get("proxy_url", "")).strip()
+    import re as _re
+    url = _re.sub(r"//([^:@/]+):([^@/]+)@", lambda m: "//" + m.group(1)[:2] + "•••:•••@", str(cfg.get("proxy_url", "")).strip())
     try:
         r = requests.get("https://ipinfo.io/json", headers=UA, timeout=20)
         d = r.json()
@@ -96,11 +97,17 @@ def _archives():
                                ("Internet Archive", "https://archive.org/advancedsearch.php", {"q": "ship", "rows": 1, "output": "json"})):
         try:
             r = requests.get(url, params=params, headers=UA, timeout=20)
-            res.append((label, r.status_code == 200, f"ответ {r.status_code}"))
+            how = ""
+            if r.status_code in (401, 403, 410):          # не пускают прокси — пробуем напрямую
+                s2 = requests.Session()
+                s2.trust_env = False
+                r = s2.get(url, params=params, headers=UA, timeout=20)
+                how = " (напрямую, без прокси)"
+            res.append((label, r.status_code == 200, f"ответ {r.status_code}{how}"))
         except requests.RequestException as e:
             res.append((label, False, type(e).__name__))
     ok = all(x[1] for x in res)
-    msg = "; ".join(f"{l}: {'работает' if o else 'недоступен (' + m + ')'}" for l, o, m in res)
+    msg = "; ".join(f"{l}: {('работает' + (' напрямую' if 'напрямую' in m else '')) if o else 'недоступен (' + m + ')'}" for l, o, m in res)
     return (name, ok, msg, False)
 
 
