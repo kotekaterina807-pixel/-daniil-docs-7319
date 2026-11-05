@@ -30,7 +30,7 @@ PORTS = list(range(8765, 8785))
 _NO_WINDOW = 0x08000000 if os.name == "nt" else 0
 
 # Файлы и папки пользователя — обновление их не трогает
-KEEP = {"config.json", "output", "footage", "music", "voice_samples", ".venv", ".ui_profile",
+KEEP = {"config.json", "output", "footage", "music", "voice_samples", ".venv", ".ui_profile", ".ui_webview",
         ".ui_port", ".ui_token", "error_log.txt"}
 
 SAMPLE_TEXT = ("В декабре тысяча девятисотого года с маяка на крошечном острове исчезли три смотрителя. "
@@ -297,8 +297,8 @@ def schedule_restart():
     def go():
         time.sleep(0.8)
         exe = sys.executable
-        subprocess.Popen([exe, str(ROOT / "app.py"), "--no-window"], cwd=str(ROOT),
-                         creationflags=_NO_WINDOW)
+        args = [exe, str(ROOT / "app.py")] + (["--reopen"] if STATE.get("native") else ["--no-window"])
+        subprocess.Popen(args, cwd=str(ROOT), creationflags=_NO_WINDOW)
         os._exit(0)
     threading.Thread(target=go, daemon=True).start()
 
@@ -946,6 +946,58 @@ def open_window(url):
     return False
 
 
+def _native_available():
+    if os.name != "nt" or os.environ.get("DOCUSTUDIO_BROWSER_WINDOW"):
+        return False
+    try:
+        import webview  # noqa: F401  (pywebview — окно программы на движке WebView2)
+        return True
+    except Exception:
+        return False
+
+
+def _set_window_icon(title):
+    """Иконка DocuStudio в заголовке и на панели задач (по умолчанию была бы иконка Python)."""
+    try:
+        import ctypes
+        u = ctypes.windll.user32
+        ico = str(ROOT / "app.ico")
+        for _ in range(40):
+            hwnd = u.FindWindowW(None, title)
+            if hwnd:
+                for size, kind in ((32, 1), (16, 0)):       # ICON_BIG / ICON_SMALL
+                    h = u.LoadImageW(None, ico, 1, size, size, 0x10)   # IMAGE_ICON, LR_LOADFROMFILE
+                    if h:
+                        u.SendMessageW(hwnd, 0x80, kind, h)    # WM_SETICON
+                return
+            time.sleep(0.25)
+    except Exception:
+        pass
+
+
+def native_window(url):
+    """Настоящее окно приложения DocuStudio (свой процесс, своя иконка на панели задач, звук из программы).
+    Блокирует до закрытия окна. False — не получилось, нужно открыть окно в браузере."""
+    try:
+        import ctypes
+        import webview
+        try:
+            ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID("DocuStudio.App")
+        except Exception:
+            pass
+        title = "DocuStudio"
+        webview.create_window(title, url, width=1280, height=860, min_size=(980, 640),
+                              background_color="#0b1220", text_select=True)
+        threading.Thread(target=_set_window_icon, args=(title,), daemon=True).start()
+        STATE["native"] = True
+        webview.start(gui="edgechromium", private_mode=False, storage_path=str(ROOT / ".ui_webview"))
+        return True
+    except Exception as e:
+        print("Окно приложения не открылось, открываю в браузере:", e, flush=True)
+        STATE["native"] = False
+        return False
+
+
 def _watchdog(srv):
     """Закрывает сервер, когда окно закрыто и ничего не собирается."""
     while True:
@@ -977,17 +1029,34 @@ def main(argv):
         old = int(PORT_FILE.read_text().strip())
     except (OSError, ValueError):
         old = None
-    if old and not no_window and _alive(old):        # программа уже запущена — просто показываем окно
-        open_window(f"http://127.0.0.1:{old}/?t={TOKEN}")
+    if old and not no_window and "--reopen" not in argv and _alive(old):   # уже запущена — просто показываем окно
+        u = f"http://127.0.0.1:{old}/?t={TOKEN}"
+        if not (_native_available() and native_window(u)):
+            open_window(u)
         return
     config.ensure_dirs()
     apply_proxy()
     srv, port = _bind()
     url = f"http://127.0.0.1:{port}/?t={TOKEN}"
     print(f"DocuStudio: {url}", flush=True)
-    if not no_window and "--headless" not in argv:
-        open_window(url)
     STATE["last_seen"] = time.time()
+    want_window = not no_window and "--headless" not in argv
+    if want_window and _native_available():
+        threading.Thread(target=srv.serve_forever, daemon=True).start()
+        threading.Thread(target=_watchdog, args=(srv,), daemon=True).start()
+        if native_window(url):                      # окно закрыто
+            STATE["bye"] = time.time()
+            STATE["last_seen"] = time.time() - 10
+            while True:                             # идёт сборка — дорабатываем, потом сторож закроет программу
+                if not JOB.running and not STATE["restart"]:
+                    srv.shutdown()
+                    os._exit(0)
+                time.sleep(2)
+        open_window(url)                            # не вышло — окно в браузере, как раньше
+        while True:
+            time.sleep(3600)
+    if want_window:
+        open_window(url)
     if "--headless" not in argv:
         threading.Thread(target=_watchdog, args=(srv,), daemon=True).start()
     srv.serve_forever()

@@ -4,3 +4,4 @@ numpy>=1.24
 imageio-ffmpeg>=0.5.1
 edge-tts>=6.1
 pysocks>=1.7
+pywebview>=5.0; sys_platform == "win32"
