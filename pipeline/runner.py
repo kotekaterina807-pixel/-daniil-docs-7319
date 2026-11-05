@@ -378,8 +378,19 @@ def step_build(cfg, niche, project, log=print, stop_flag=lambda: False, progress
         return next((it for it in items if it["kind"] == "video"), items[0] if items else None)
 
     def add_overlay(png, start_sec, dur_sec, anim):
+        """Надписи никогда не накладываются: если место занято, надпись ждёт (до 3 с), иначе пропускается."""
+        if anim in ("label", "title"):
+            busy = [(o["start"] / render.FPS, (o["start"] + o["frames"]) / render.FPS)
+                    for o in overlays if o["anim"] in ("label", "title", "fade")]
+            want = start_sec
+            for a, b in sorted(busy):
+                if start_sec < b + 0.4 and start_sec + dur_sec > a - 0.4:
+                    start_sec = b + 0.4
+            if start_sec - want > 3.0:
+                return False
         overlays.append({"png": str(png), "start": int(round(start_sec * render.FPS)),
                          "frames": max(1, int(round(dur_sec * render.FPS))), "anim": anim})
+        return True
 
     zoom_flip = False
     for b in blocks:
@@ -647,10 +658,11 @@ def _choose_in_chat(cfg, project, finder, seg_blocks, jobs, vis_cache, log, chec
     log("Скачиваю выбранные кадры...")
     picked = [(ln, [ln["cands"][k - 1] for k in choices.get(ln["no"], []) if 0 < k <= len(ln["cands"])])
               for ln in lines]
-    for ln, cs in picked:                         # строка о человеке: его фото показываем всегда, первым
-        ph = next((c for c in ln["cands"] if c.get("person")), None)
-        if ph and not any(c.get("person") for c in cs):
-            cs.insert(0, ph)
+    for ln, cs in picked:                         # строка о человеке: его фото показываем всегда, первыми
+        need = 2 if ln["n"] >= 2 else 1
+        have = [c for c in cs if c.get("person")]
+        for ph in [c for c in ln["cands"] if c.get("person") and c not in cs][:max(0, need - len(have))]:
+            cs.insert(len([c for c in cs if c.get("person")]), ph)
     flat = [c for _, cs in picked for c in cs]
 
     def dl(c):

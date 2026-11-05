@@ -48,7 +48,7 @@ def collect(finder, spec, taken):
             if c.get("thumb") and c["url"] not in taken and c["url"] not in seen_pool:
                 seen_pool.add(c["url"])
                 pool.append(dict(c, person=en))
-                if len(pool) >= 2:
+                if len(pool) >= 3:
                     break
     planned = [q for q in spec.get("queries") or [] if q]
     if planned:
