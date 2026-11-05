@@ -87,10 +87,13 @@ def _wikimedia():
 
 def _archives():
     """Openverse и Библиотека Конгресса — дополнительные свободные архивы фото (без ключей)."""
-    name = "Архивы фото: Openverse и Библиотека Конгресса"
+    name = "Архивы: Openverse, Библиотека Конгресса, Met, Чикаго, Internet Archive"
     res = []
     for label, url, params in (("Openverse", "https://api.openverse.org/v1/images/", {"q": "lighthouse", "page_size": 1}),
-                               ("Библиотека Конгресса", "https://www.loc.gov/photos/", {"q": "lighthouse", "fo": "json", "c": 1, "at": "results"})):
+                               ("Библиотека Конгресса", "https://www.loc.gov/photos/", {"q": "lighthouse", "fo": "json", "c": 1, "at": "results"}),
+                               ("Met", "https://collectionapi.metmuseum.org/public/collection/v1/search", {"q": "ship", "hasImages": "true"}),
+                               ("Чикаго", "https://api.artic.edu/api/v1/artworks/search", {"q": "ship", "limit": 1}),
+                               ("Internet Archive", "https://archive.org/advancedsearch.php", {"q": "ship", "rows": 1, "output": "json"})):
         try:
             r = requests.get(url, params=params, headers=UA, timeout=20)
             res.append((label, r.status_code == 200, f"ответ {r.status_code}"))

@@ -1,3 +1,4 @@
+import os
 """Поиск, проверка и скачивание визуала: видео Pixabay (главный источник), Wikimedia Commons (архив, люди),
 фото Pixabay — только если видео не нашлось."""
 import hashlib
@@ -230,6 +231,126 @@ class VisualFinder:
             return out
         return self._cached(("loc", query), fetch)
 
+    # ---------- Музей Метрополитен (открытый доступ, CC0; без ключа) ----------
+    def _met(self, query, limit=6):
+        if self._down.get("met"):
+            return []
+
+        def fetch():
+            out = []
+            try:
+                r = self._get("https://collectionapi.metmuseum.org/public/collection/v1/search",
+                              {"q": query, "hasImages": "true"})
+                ids = (r.json().get("objectIDs") or [])[:20] if r.status_code == 200 else []
+                for oid in ids:
+                    if len(out) >= limit:
+                        break
+                    o = self._get(f"https://collectionapi.metmuseum.org/public/collection/v1/objects/{oid}", {}).json()
+                    if not o.get("isPublicDomain") or not o.get("primaryImage"):
+                        continue
+                    title = o.get("title") or ""
+                    if ARCHIVE_BLOCK.search(title):
+                        continue
+                    out.append({"kind": "image", "url": o["primaryImage"], "thumb": o.get("primaryImageSmall") or o["primaryImage"],
+                                "source": "The Met (Open Access)", "page": o.get("objectURL") or "",
+                                "title": f"{title} ({o.get('objectDate') or ''})", "author": o.get("artistDisplayName") or "неизвестен",
+                                "license": "CC0", "tags": " ".join([title, o.get("objectName") or "", o.get("culture") or ""])})
+            except requests.ConnectionError as e:
+                self._down["met"] = True
+                self.log(f"  Музей Метрополитен недоступен — дальше без него ({type(e).__name__}).")
+            except Exception as e:
+                self.log(f"  Музей Метрополитен: {e}")
+            return out
+        return self._cached(("met", query), fetch)
+
+    # ---------- Чикагский институт искусств (общественное достояние, CC0; без ключа) ----------
+    def _aic(self, query, limit=8):
+        if self._down.get("aic"):
+            return []
+
+        def fetch():
+            out = []
+            try:
+                r = self._get("https://api.artic.edu/api/v1/artworks/search",
+                              {"q": query, "query[term][is_public_domain]": "true", "limit": 15,
+                               "fields": "id,title,image_id,artist_display,date_display,is_public_domain,thumbnail"})
+                for a in (r.json().get("data") or []) if r.status_code == 200 else []:
+                    if len(out) >= limit:
+                        break
+                    if not a.get("is_public_domain") or not a.get("image_id"):
+                        continue
+                    if ((a.get("thumbnail") or {}).get("width") or 2000) < 900:
+                        continue
+                    title = a.get("title") or ""
+                    base = f"https://www.artic.edu/iiif/2/{a['image_id']}/full"
+                    out.append({"kind": "image", "url": f"{base}/1686,/0/default.jpg", "thumb": f"{base}/400,/0/default.jpg",
+                                "source": "Art Institute of Chicago", "page": f"https://www.artic.edu/artworks/{a['id']}",
+                                "title": f"{title} ({a.get('date_display') or ''})", "author": a.get("artist_display") or "неизвестен",
+                                "license": "CC0", "tags": title})
+            except requests.ConnectionError as e:
+                self._down["aic"] = True
+                self.log(f"  Чикагский институт искусств недоступен — дальше без него ({type(e).__name__}).")
+            except Exception as e:
+                self.log(f"  Чикагский институт искусств: {e}")
+            return out
+        return self._cached(("aic", query), fetch)
+
+    # ---------- Internet Archive: старая кинохроника в общественном достоянии (без ключа) ----------
+    def _ia_video(self, query, limit=4):
+        if self._down.get("ia"):
+            return []
+
+        def secs(v):
+            try:
+                if ":" in str(v):
+                    parts = [float(x) for x in str(v).split(":")]
+                    return sum(x * 60 ** i for i, x in enumerate(reversed(parts)))
+                return float(v)
+            except Exception:
+                return 0.0
+
+        def fetch():
+            out = []
+            try:
+                q = (f"({query}) AND mediatype:(movies) AND "
+                     f"(licenseurl:*publicdomain* OR licenseurl:*zero* OR rights:\"public domain\")")
+                r = self._get("https://archive.org/advancedsearch.php",
+                              {"q": q, "fl[]": ["identifier", "title", "licenseurl"], "rows": 12,
+                               "sort[]": "downloads desc", "output": "json"})
+                docs = ((r.json().get("response") or {}).get("docs") or []) if r.status_code == 200 else []
+                for d in docs:
+                    if len(out) >= limit:
+                        break
+                    ident, title = d.get("identifier"), d.get("title") or ""
+                    if not ident or ARCHIVE_BLOCK.search(title):
+                        continue
+                    lic = str(d.get("licenseurl") or "public domain")
+                    meta = self._get(f"https://archive.org/metadata/{ident}", {}).json()
+                    files = [f for f in meta.get("files") or [] if str(f.get("name", "")).lower().endswith(".mp4")]
+                    files.sort(key=lambda f: (0 if "h.264" in str(f.get("format", "")).lower() else 1,
+                                              -int(f.get("height") or 0)))
+                    f = next((f for f in files if int(f.get("size") or 0) < 900 * 1024 * 1024), None)
+                    if not f:
+                        continue
+                    dur = secs(f.get("length"))
+                    if dur < 20:
+                        continue
+                    start = round(min(dur * 0.3, max(0.0, dur - 20)), 1)   # без заставок в начале фильма
+                    url = f"https://archive.org/download/{ident}/{requests.utils.quote(f['name'])}"
+                    out.append({"kind": "video", "url": url, "thumb": f"https://archive.org/services/img/{ident}",
+                                "duration": 14, "segment": [start, 14], "source": "Internet Archive (общественное достояние)",
+                                "page": f"https://archive.org/details/{ident}", "title": title,
+                                "author": (meta.get("metadata") or {}).get("creator") or "неизвестен",
+                                "license": "Public Domain" if "publicdomain" in lic or "public" in lic.lower() else "CC0",
+                                "tags": title})
+            except requests.ConnectionError as e:
+                self._down["ia"] = True
+                self.log(f"  Internet Archive недоступен — дальше без него ({type(e).__name__}).")
+            except Exception as e:
+                self.log(f"  Internet Archive: {e}")
+            return out
+        return self._cached(("ia", query), fetch)
+
     def _wiki_page_image(self, name, lang):
         """Главное фото статьи Википедии о человеке — только если файл лежит в Commons со свободной лицензией."""
         def fetch():
@@ -401,6 +522,20 @@ class VisualFinder:
         if path.exists() and path.stat().st_size > 1000:
             return path
         tmp = path.with_suffix(ext + ".part")
+        if item.get("segment"):                    # из длинного архивного фильма — только нужный кусок
+            start, dur = item["segment"]
+            import subprocess
+            from .config import ffmpeg_exe
+            try:
+                subprocess.run([ffmpeg_exe(), "-y", "-hide_banner", "-loglevel", "error", "-ss", str(start),
+                                "-i", item["url"], "-t", str(dur), "-an", "-c:v", "libx264", "-preset", "veryfast",
+                                "-crf", "18", "-f", "mp4", str(tmp)], timeout=300, check=True,
+                               creationflags=0x08000000 if os.name == "nt" else 0)
+                tmp.replace(path)
+                return path
+            except Exception:
+                tmp.unlink(missing_ok=True)
+                return None
         for attempt in range(3):
             try:
                 with requests.get(item["url"], headers=UA, stream=True, timeout=60) as r:
@@ -419,11 +554,12 @@ class VisualFinder:
         """Сначала ВИДЕО по всем вариантам запроса, фото — только если видео не хватило.
         archive — реальное фото места/документа: Wikimedia, затем видео, затем фото Pixabay."""
         if visual == "archive":
-            order = [self._wikimedia, self._loc, self._openverse, self._stock, self._pixabay_photos]
+            order = [self._wikimedia, self._loc, self._ia_video, self._met, self._aic, self._openverse,
+                     self._stock, self._pixabay_photos]
         elif visual == "photo":
-            order = [self._pixabay_photos, self._wikimedia, self._openverse, self._stock]
+            order = [self._pixabay_photos, self._wikimedia, self._met, self._aic, self._openverse, self._stock]
         else:
-            order = [self._stock, self._pixabay_photos, self._wikimedia]
+            order = [self._stock, self._ia_video, self._pixabay_photos, self._wikimedia, self._met]
         for src in order:
             for q in queries:
                 yield from src(q)

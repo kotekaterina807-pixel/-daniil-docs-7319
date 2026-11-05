@@ -641,7 +641,7 @@ def _choose_in_chat(cfg, project, finder, seg_blocks, jobs, vis_cache, log, chec
             cands = review.collect(finder, spec, taken)
             q = spec["query"] if spec["visual"] != "person" else \
                 f"фото человека: {spec['query']}, затем — {spec.get('fill_query', '')}"
-            keep = ("kind", "url", "thumb", "duration", "source", "page", "title", "author", "license", "person", "local")
+            keep = ("kind", "url", "thumb", "duration", "source", "page", "title", "author", "license", "person", "local", "segment")
             lines.append({"no": no, "sig": sig[no - 1], "text": spec["text"], "query": q, "n": spec["n"],
                           "show": pl.get("show", ""),
                           "person": spec.get("shown", "") if spec["visual"] == "person"
@@ -690,7 +690,7 @@ def _choose_with_claude_code(cfg, project, finder, lines, rev_path, ch_path, top
     """Листы с кандидатами смотрит Claude Code по подписке. Где подходящего нет — новый запрос и второй круг."""
     from concurrent.futures import ThreadPoolExecutor
     from . import claude_code, review
-    keep = ("kind", "url", "thumb", "duration", "source", "page", "title", "author", "license", "person", "local")
+    keep = ("kind", "url", "thumb", "duration", "source", "page", "title", "author", "license", "person", "local", "segment")
     by_no = {ln["no"]: ln for ln in lines}
     choices = {}
 
