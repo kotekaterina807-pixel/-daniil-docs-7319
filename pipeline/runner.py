@@ -264,11 +264,12 @@ def step_build(cfg, niche, project, log=print, stop_flag=lambda: False, progress
             n = min(n, max(1, int(length / min_shot)))
             spec = {"visual": vis, "query": query, "t0": t0, "t1": t1, "n": n, "text": txt}
             if vis == "person":
-                name, _, shown = query.partition("|")
-                spec["query"], spec["shown"] = name.strip(), (shown.strip() or name.strip())
-                # остальное время этой строки — кадры по соседней строке сценария
+                parts = [x.strip() for x in query.split("|")]
+                spec["query"] = parts[0]
+                spec["shown"] = parts[1] if len(parts) > 1 and parts[1] else parts[0]
+                # если фото человека нет — кадры по теме этого человека (3-е поле строки), иначе по соседней строке
                 other = next((q for v, q in specs[i + 1:] + specs[:i][::-1] if v != "person"), "dark atmosphere")
-                spec["fill_query"] = other
+                spec["fill_query"] = parts[2] if len(parts) > 2 and parts[2] else other
             b["specs"].append(spec)
             jobs.append((bi, len(b["specs"]) - 1))
 
@@ -397,6 +398,19 @@ def step_build(cfg, niche, project, log=print, stop_flag=lambda: False, progress
             last_label = seg_start
             busy_until[0] = seg_start + 0.3 + min(LABEL_SEC, span - 0.4)
         first_in_seg = True
+        # строки без кадров не показывают чужие ролики повторно: их время забирает соседняя строка
+        # (предыдущая в абзаце, иначе следующая), её кадры просто идут дольше
+        specs_ = b["specs"]
+        for si, spec in enumerate(specs_):
+            if spec.get("items"):
+                continue
+            prev = next((x for x in specs_[:si][::-1] if x.get("items")), None)
+            nxt = next((x for x in specs_[si + 1:] if x.get("items")), None)
+            host = prev or nxt
+            if host:
+                host["t0"], host["t1"] = min(host["t0"], spec["t0"]), max(host["t1"], spec["t1"])
+                spec["_merged"] = True
+        reserve = [it for x in specs_ for it in (x.get("items") or [])[max(1, int((x["t1"] - x["t0"]) / min_shot)):]]
         for si, spec in enumerate(b["specs"]):
             items = list(spec.get("items") or [])
             t0, t1 = spec["t0"], spec["t1"]
@@ -409,27 +423,32 @@ def step_build(cfg, niche, project, log=print, stop_flag=lambda: False, progress
                     dur = min(LABEL_SEC - 1, length - 0.2)
                     add_overlay(lp, seg_start + t0 + 0.1, dur, "label")
                     busy_until[0] = seg_start + t0 + 0.1 + dur
-            if not items:                              # строка без кадров — берём соседние
-                items = next((list(x.get("items")) for x in b["specs"][si + 1:] + b["specs"][:si][::-1]
-                              if x.get("items")), [])
-                if not items and last_item[0]:
-                    items = [last_item[0]]
+            if not items:
+                if spec.get("_merged"):                 # время этой строки уже отдано соседней
+                    continue
+                items = [last_item[0]] if last_item[0] else []
             # отрезки: в паузах речи, не длиннее max_shot (если кадр один — можно до 2×max_shot)
             # без повторов: отрезков столько, сколько разных кадров; один кадр повторяется
             # (другим участком) только если иначе он шёл бы дольше 1,5×max_shot
             lim = max_shot * 1.5
+            long_lim = max_shot * 2.2                   # один ролик может идти дольше, лишь бы не повторяться
             n = spec["n"]
             if items:
                 k = min(len(items), max(1, int(length / min_shot)))   # лишние кадры не берём — без мельтешения
                 items = items[:k]
-                n = k if length / k <= lim else max(k, math.ceil(length / lim - 1e-6))
+                while length / len(items) > lim and reserve:          # мало кадров — добираем одобренные из этой сцены
+                    extra = reserve.pop(0)
+                    if all(extra["path"] != x["path"] for x in items) and not use_count.get(extra["path"]):
+                        items.append(extra)
+                k = len(items)
+                n = k if length / k <= long_lim else max(k, math.ceil(length / long_lim - 1e-6))
             pauses = [(t - t0, ln) for t, ln in b["pauses"] if t0 < t < t1]
             bounds = [x - t0 for x in b["sent_bounds"] if t0 < x < t1]
             cuts = timing.cut_points(length, n, pauses, bounds, min_shot=min_shot)
             edges = [0.0] + cuts + [length]
             fixed = [0.0]
             for a_, b_ in zip(edges, edges[1:]):
-                parts = max(1, math.ceil((b_ - a_) / lim - 1e-6))
+                parts = max(1, math.ceil((b_ - a_) / long_lim - 1e-6))
                 fixed += [a_ + (b_ - a_) * (q + 1) / parts for q in range(parts)]
             edges = fixed
             for j in range(len(edges) - 1):
@@ -616,25 +635,36 @@ def _choose_with_claude_code(cfg, project, finder, lines, rev_path, ch_path, top
     for no, ks in picks.items():
         if no in by_no:
             choices[no] = [k for k in ks if 1 <= k <= len(by_no[no]["cands"])]
-    retry = [by_no[no] for no in by_no if not choices.get(no) and queries.get(no)]
-    if retry:
-        log(f"  Подходящих нет в {len(retry)} строках — ищу по новым запросам Claude...")
-        taken = {c["url"] for ln in lines for k in choices.get(ln["no"], []) for c in [ln["cands"][k - 1]]}
+    found = [ln for ln in lines if ln.get("person") and any(c.get("person") for c in ln["cands"])]
+    missing = [ln["person"] for ln in lines if ln.get("person") and ln not in found]
+    if missing:
+        log("  Фото не найдено в свободных источниках: " + ", ".join(dict.fromkeys(missing)) +
+            " — вместо него кадры по теме этого человека.")
+    for rnd in (1, 2):                                   # до двух дополнительных кругов поиска
+        retry = [by_no[no] for no in by_no if len(choices.get(no, [])) < by_no[no]["n"] and queries.get(no)]
+        if not retry:
+            break
+        log(f"  Круг {rnd + 1}: не хватает подходящих кадров в {len(retry)} строках — ищу по запросам Claude...")
+        taken = {c["url"] for ln in lines for c in ln["cands"]}
         for ln in retry:
             check_stop()
-            q = queries[ln["no"]]
-            spec = {"visual": "video", "query": q, "n": ln["n"], "text": ln["text"]}
-            ln["cands"] = [{k: c.get(k) for k in keep} for c in review.collect(finder, spec, taken)]
-            ln["query"] = q
-        retry = [ln for ln in retry if ln["cands"]]
-        if retry:
-            picks2, _ = ask(retry, "кадры_повтор", "Второй круг")
-            for no, ks in picks2.items():
-                if no in by_no:
-                    choices[no] = [k for k in ks if 1 <= k <= len(by_no[no]["cands"])]
-    empty = sum(1 for no in by_no if not choices.get(no))
-    if empty:
-        log(f"  Без подходящих кадров осталось строк: {empty} — их закроют соседние кадры.")
+            kept = [ln["cands"][k - 1] for k in choices.get(ln["no"], [])]
+            spec = {"visual": "stock", "query": queries[ln["no"]], "n": ln["n"], "text": ln["text"]}
+            new = [{k: c.get(k) for k in keep} for c in review.collect(finder, spec, taken)]
+            ln["cands"] = kept + new[: max(2, review.CANDS - len(kept))]
+            ln["query"] = queries[ln["no"]]
+            choices[ln["no"]] = list(range(1, len(kept) + 1))
+        retry = [ln for ln in retry if len(ln["cands"]) > len(choices.get(ln["no"], []))]
+        if not retry:
+            break
+        picks2, queries = ask(retry, f"кадры_круг{rnd + 1}", f"Круг {rnd + 1}")
+        for no, ks in picks2.items():
+            if no in by_no:
+                ks = [k for k in ks if 1 <= k <= len(by_no[no]["cands"])]
+                choices[no] = list(dict.fromkeys(choices.get(no, []) + ks))
+    short = sum(1 for no in by_no if not choices.get(no))
+    if short:
+        log(f"  Строк без своих кадров: {short} — их время займут соседние кадры той же сцены (без повторов).")
     review.save_review(rev_path, lines)
     ch_path.write_text(json.dumps({str(k): v for k, v in choices.items()}, ensure_ascii=False), encoding="utf-8")
 
