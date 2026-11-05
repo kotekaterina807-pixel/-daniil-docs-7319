@@ -416,6 +416,10 @@ class Handler(BaseHTTPRequestHandler):
                 return self._file(ROOT / "app.ico")
             if not self._authorized(q):
                 return self._send(403, {"error": "нет доступа"})
+            if p == "/api/ping":                     # для второго запуска: открыто ли уже окно
+                seen = STATE.get("last_seen") or 0
+                open_ = seen > (STATE.get("bye") or 0) and time.time() - seen < 90
+                return self._send(200, {"ok": True, "window_open": open_})
             STATE["last_seen"] = time.time()
             if p == "/api/state":
                 since = int(q.get("since", ["0"])[0] or 0)
@@ -906,6 +910,36 @@ def _bind():
     return srv, port
 
 
+def _ping(port):
+    """None — программа не запущена; иначе True/False — открыто ли её окно (не обновляет «последний визит»)."""
+    import urllib.request
+    try:
+        with urllib.request.urlopen(f"http://127.0.0.1:{port}/api/ping?t={TOKEN}", timeout=2) as r:
+            return bool(json.loads(r.read().decode("utf-8")).get("window_open"))
+    except Exception:
+        return None
+
+
+def _focus_existing(title="DocuStudio"):
+    """Выводит уже открытое окно программы на передний план. True — окно найдено."""
+    if os.name != "nt":
+        return False
+    try:
+        import ctypes
+        u = ctypes.windll.user32
+        hwnd = u.FindWindowW(None, title)
+        if not hwnd:
+            return False
+        if u.IsIconic(hwnd):
+            u.ShowWindow(hwnd, 9)                    # SW_RESTORE — из свёрнутого
+        else:
+            u.ShowWindow(hwnd, 5)                    # SW_SHOW
+        u.SetForegroundWindow(hwnd)
+        return True
+    except Exception:
+        return False
+
+
 def _alive(port):
     import urllib.request
     try:
@@ -1029,7 +1063,10 @@ def main(argv):
         old = int(PORT_FILE.read_text().strip())
     except (OSError, ValueError):
         old = None
-    if old and not no_window and "--reopen" not in argv and _alive(old):   # уже запущена — просто показываем окно
+    state = _ping(old) if old and not no_window and "--reopen" not in argv else None
+    if state is not None:                            # программа уже запущена
+        if state and _focus_existing():
+            return                                   # окно уже открыто — поднимаем его, второе не открываем
         u = f"http://127.0.0.1:{old}/?t={TOKEN}"
         if not (_native_available() and native_window(u)):
             open_window(u)
