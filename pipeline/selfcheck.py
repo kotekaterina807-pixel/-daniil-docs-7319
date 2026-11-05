@@ -85,6 +85,22 @@ def _wikimedia():
         return (name, False, f"недоступен ({type(e).__name__}) — архивные фото брать не получится", False)
 
 
+def _archives():
+    """Openverse и Библиотека Конгресса — дополнительные свободные архивы фото (без ключей)."""
+    name = "Архивы фото: Openverse и Библиотека Конгресса"
+    res = []
+    for label, url, params in (("Openverse", "https://api.openverse.org/v1/images/", {"q": "lighthouse", "page_size": 1}),
+                               ("Библиотека Конгресса", "https://www.loc.gov/photos/", {"q": "lighthouse", "fo": "json", "c": 1, "at": "results"})):
+        try:
+            r = requests.get(url, params=params, headers=UA, timeout=20)
+            res.append((label, r.status_code == 200, f"ответ {r.status_code}"))
+        except requests.RequestException as e:
+            res.append((label, False, type(e).__name__))
+    ok = all(x[1] for x in res)
+    msg = "; ".join(f"{l}: {'работает' if o else 'недоступен (' + m + ')'}" for l, o, m in res)
+    return (name, ok, msg, False)
+
+
 def _eleven(cfg):
     name = "Озвучка ElevenLabs"
     if not str(cfg.get("elevenlabs_key", "")).strip():

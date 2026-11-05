@@ -87,9 +87,9 @@ class VisualFinder:
 
     # ---------- Wikimedia ----------
     @staticmethod
-    def _wm_item(p):
+    def _wm_item(p, min_w=1000, min_h=560):
         info = (p.get("imageinfo") or [{}])[0]
-        if info.get("width", 0) < 1000 or info.get("height", 0) < 560:
+        if info.get("width", 0) < min_w or info.get("height", 0) < min_h:
             return None
         meta = info.get("extmetadata") or {}
         lic = (meta.get("LicenseShortName") or {}).get("value", "")
@@ -141,6 +141,85 @@ class VisualFinder:
             return out
         return self._cached(("wm", query), fetch)
 
+    # ---------- Openverse (CC0 и общественное достояние; без ключа) ----------
+    def _openverse(self, query, min_w=1000):
+        if self._down.get("ov"):
+            return []
+
+        def fetch():
+            out = []
+            try:
+                r = self._get("https://api.openverse.org/v1/images/",
+                              {"q": query, "license": "cc0,pdm", "page_size": 20, "mature": "false"})
+                if r.status_code != 200:
+                    return out
+                for it in r.json().get("results") or []:
+                    if (it.get("width") or 0) < min_w or not it.get("url"):
+                        continue
+                    lic = (it.get("license") or "").lower()
+                    if lic not in ("cc0", "pdm"):
+                        continue
+                    tags = " ".join(t.get("name", "") for t in it.get("tags") or [] if isinstance(t, dict))
+                    if BLOCK_WORDS.search((it.get("title") or "") + " " + tags):
+                        continue
+                    out.append({
+                        "kind": "image", "url": it["url"], "thumb": it.get("thumbnail") or it["url"],
+                        "source": f"Openverse ({it.get('source') or it.get('provider') or 'архив'})",
+                        "page": it.get("foreign_landing_url") or "", "title": it.get("title") or "",
+                        "author": it.get("creator") or "неизвестен",
+                        "license": "CC0" if lic == "cc0" else "Public Domain", "tags": (it.get("title") or "") + " " + tags,
+                    })
+            except requests.ConnectionError as e:
+                self._down["ov"] = True
+                self.log(f"  Openverse недоступен с этого компьютера — дальше без него ({type(e).__name__}).")
+            except Exception as e:
+                self.log(f"  Openverse: {e}")
+            return out
+        return self._cached(("ov", query, min_w), fetch)
+
+    # ---------- Библиотека Конгресса США (только «без известных ограничений»; без ключа) ----------
+    def _loc(self, query, limit=6):
+        if self._down.get("loc"):
+            return []
+
+        def fetch():
+            out = []
+            try:
+                r = self._get("https://www.loc.gov/photos/", {"q": query, "fo": "json", "c": 15, "at": "results"})
+                if r.status_code != 200:
+                    return out
+                for res in r.json().get("results") or []:
+                    if len(out) >= limit:
+                        break
+                    fmt = " ".join(res.get("original_format") or []).lower()
+                    imgs = [u.split("#")[0] for u in res.get("image_url") or []]
+                    page = res.get("url") or res.get("id") or ""
+                    if not imgs or "collection" in fmt or "web page" in fmt or not page:
+                        continue
+                    time.sleep(0.6)                       # бережно к сайту библиотеки
+                    try:
+                        it = self._get(page.rstrip("/") + "/", {"fo": "json", "at": "item"}).json().get("item") or {}
+                    except Exception:
+                        continue
+                    rights = it.get("rights_advisory") or it.get("rights_information") or ""
+                    rights = " ".join(rights) if isinstance(rights, list) else str(rights)
+                    if not re.search(r"no known restrictions|public domain|no copyright", rights, re.I):
+                        continue
+                    title = res.get("title") or ""
+                    if BLOCK_WORDS.search(title):
+                        continue
+                    thumb = next((u for u in imgs if u.endswith("r.jpg")), imgs[0])
+                    out.append({"kind": "image", "url": imgs[-1], "thumb": thumb, "source": "Library of Congress",
+                                "page": page, "title": title, "author": "Library of Congress",
+                                "license": "No known restrictions", "tags": title})
+            except requests.ConnectionError as e:
+                self._down["loc"] = True
+                self.log(f"  Библиотека Конгресса недоступна с этого компьютера — дальше без неё ({type(e).__name__}).")
+            except Exception as e:
+                self.log(f"  Библиотека Конгресса: {e}")
+            return out
+        return self._cached(("loc", query), fetch)
+
     def _wiki_page_image(self, name, lang):
         """Главное фото статьи Википедии о человеке — только если файл лежит в Commons со свободной лицензией."""
         def fetch():
@@ -168,7 +247,7 @@ class VisualFinder:
                     p2 = dict(p)
                     p2["imageinfo"] = [dict(info, width=max(info.get("width", 0), 1000),
                                             height=max(info.get("height", 0), 560))]
-                    it = self._wm_item(p2)
+                    it = self._wm_item(p2, 400, 400)
                     if it:
                         out.append(it)
                 return out
@@ -330,9 +409,9 @@ class VisualFinder:
         """Сначала ВИДЕО по всем вариантам запроса, фото — только если видео не хватило.
         archive — реальное фото места/документа: Wikimedia, затем видео, затем фото Pixabay."""
         if visual == "archive":
-            order = [self._wikimedia, self._stock, self._pixabay_photos]
+            order = [self._wikimedia, self._loc, self._openverse, self._stock, self._pixabay_photos]
         elif visual == "photo":
-            order = [self._pixabay_photos, self._wikimedia, self._stock]
+            order = [self._pixabay_photos, self._wikimedia, self._openverse, self._stock]
         else:
             order = [self._stock, self._pixabay_photos, self._wikimedia]
         for src in order:
@@ -413,6 +492,12 @@ class VisualFinder:
         for n in names:
             for q in (n, f"{n} portrait", f"{n} photograph"):
                 add(self._wikimedia(q), need_name=True)
+        latin = [n for n in names if not re.search("[а-яё]", n, re.I)]
+        for n in latin:                                  # дальше — Библиотека Конгресса и Openverse
+            if len(out) >= 6:
+                break
+            add(self._loc(n), need_name=True)
+            add(self._openverse(n, min_w=400), need_name=True)
         return out
 
     def find_person(self, person, narration="", topic=""):
