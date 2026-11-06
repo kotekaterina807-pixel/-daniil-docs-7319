@@ -332,7 +332,7 @@ PUBLIC_KEYS = ["pixabay_key", "pexels_key", "proxy_url", "lumean_key", "lumean_a
                "tts_provider", "edge_voice", "anthropic_key", "openai_key", "elevenlabs_key", "elevenlabs_voice_id",
                "music_volume", "shot_seconds", "show_labels", "theme", "sound_done", "open_folder_after",
                "default_niche", "update_repo", "language", "visual_check", "eleven_speed", "eleven_stability", "eleven_style",
-               "tg_token", "tg_chat_id", "tg_send", "old_look"]
+               "tg_token", "tg_chat_id", "tg_send", "old_look", "report_repo", "report_token", "report_send"]
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -646,6 +646,20 @@ class Handler(BaseHTTPRequestHandler):
             except telegram.TgError as e:
                 return self._send(200, {"ok": False, "error": str(e)})
             return self._send(200, {"ok": True, "bot": bot, "who": who, "chat": chat})
+        if p == "/api/report_check":
+            from pipeline import report
+            try:
+                repo = report.check(config.load_config())
+                return self._send(200, {"ok": True, "repo": repo})
+            except Exception as e:
+                return self._send(200, {"ok": False, "error": str(e)})
+        if p == "/api/report_send":
+            name = str(data.get("project", ""))
+            proj = config.OUTPUT_DIR / name
+            if not name or not proj.is_dir() or proj.resolve().parent != config.OUTPUT_DIR.resolve():
+                return self._send(404, {"error": "Проект не найден."})
+            threading.Thread(target=_report_bg, args=(proj, list(JOB.log)), daemon=True).start()
+            return self._send(200, {"ok": True})
         if p == "/api/tg_send":
             name = str(data.get("project", ""))
             proj = config.OUTPUT_DIR / name
@@ -657,7 +671,7 @@ class Handler(BaseHTTPRequestHandler):
         if p == "/api/open_url":
             url = str(data.get("url") or "")
             if not url.startswith(("https://elevenlabs.io/", "https://console.anthropic.com/", "https://platform.claude.com/",
-                                   "https://lumean.app/", "https://t.me/BotFather")):
+                                   "https://lumean.app/", "https://t.me/BotFather", "https://github.com/")):
                 return self._send(400, {"error": "Этот адрес открыть нельзя"})
             import webbrowser
             webbrowser.open(url)
@@ -841,12 +855,25 @@ def _build(project, npath):
     after = _tokens_left()
     if before is not None and after is not None:
         JOB.add_log(f"Озвучка: потрачено токенов Lumean {max(0, before - after):,}, осталось {after:,}".replace(",", " "))
+    if cfg.get("report_send", True) and cfg.get("report_repo") and cfg.get("report_token"):
+        threading.Thread(target=_report_bg, args=(project, list(JOB.log)), daemon=True).start()
     if config.load_config().get("open_folder_after"):
         try:
             _open_path(project)
         except Exception:
             pass
     return {"project": project.name}
+
+
+def _report_bg(project, lines):
+    from pipeline import report
+    try:
+        cfg = dict(config.load_config(), _version=config.VERSION)
+        folder = report.send(cfg, project, [str(x.get("msg", x)) if isinstance(x, dict) else str(x) for x in lines],
+                             JOB.add_log)
+        JOB.add_log(f"Отчёт для Claude отправлен в GitHub: {folder}")
+    except Exception as e:
+        JOB.add_log(f"Отчёт для Claude не отправился: {e}")
 
 
 def _niche_path(niche_id):

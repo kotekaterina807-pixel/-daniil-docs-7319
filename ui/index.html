@@ -371,6 +371,20 @@
             <div><b>Отправлять каждое готовое видео</b><p class="muted small">Видео больше 50 МБ уходит лёгкой копией (лимит ботов Telegram), полное — в папке проекта</p></div>
             <label class="switch"><input type="checkbox" data-key="tg_send"><span></span></label>
           </div>
+          <h3 class="sec">Отчёты для Claude — проверка готовых видео</h3>
+          <div class="set-row">
+            <div><b>Закрытый репозиторий GitHub</b><p class="muted small">владелец/название, например kotekaterina807-pixel/docustudio-reports. Туда после каждой сборки уходит раскадровка и кадры видео — Claude смотрит их сам</p></div>
+            <input class="input" data-key="report_repo" placeholder="владелец/название" style="max-width:340px">
+          </div>
+          <div class="key-row" data-k="report_token" data-label="Ключ доступа GitHub" data-secret="1" data-hint="только к этому репозиторию, право Contents: Read and write"></div>
+          <div class="set-row">
+            <div><b>Отправлять отчёт после каждой сборки</b><p class="muted small" id="repStatus">Ключи программы и само видео не отправляются</p></div>
+            <div class="row gap">
+              <button class="btn ghost small" data-url="https://github.com/settings/personal-access-tokens/new">Создать ключ</button>
+              <button class="btn ghost small" id="repCheckBtn">Проверить</button>
+              <label class="switch"><input type="checkbox" data-key="report_send"><span></span></label>
+            </div>
+          </div>
           <h3 class="sec">Claude Code — проверка кадров по подписке</h3>
           <div class="set-row">
             <div><b>Вход в Claude Code</b><p class="muted small">Откроется окно Claude Code, уже с прокси программы. Выберите «Claude account with subscription», войдите в браузере, затем введите /exit. Делается один раз</p></div>

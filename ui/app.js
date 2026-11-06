@@ -761,6 +761,13 @@ $("#tgConnectBtn").onclick = async () => {
   tgStatus();
 };
 setInterval(tgStatus, 2000);
+$("#repCheckBtn").onclick = async () => {
+  try {
+    const r = await api("/api/report_check", {});
+    toast(r.ok ? `GitHub: доступ к ${r.repo} есть, отчёты будут уходить туда` : r.error, r.ok ? "ok" : "err", 8000);
+    $("#repStatus").textContent = r.ok ? `Подключено: ${r.repo}` : r.error;
+  } catch (e) { toast(e.message, "err"); }
+};
 $("#ccLoginBtn").onclick = () => api("/api/claude_login", {}).then((r) => toast(r.message || "Открываю Claude Code…", r.warn ? "err" : undefined, 9000)).catch((e) => toast(e.message, "err", 9000));
 $("#elLibBtn").onclick = () => api("/api/open_url", { url: "https://elevenlabs.io/app/voice-library" }).catch((e) => toast(e.message, "err"));
 $("#elUsageBtn").onclick = loadUsage;
