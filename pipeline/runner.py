@@ -308,6 +308,11 @@ def step_build(cfg, niche, project, log=print, stop_flag=lambda: False, progress
                 other = next((q for v, q in specs[i + 1:] + specs[:i][::-1] if v != "person"), "dark atmosphere")
                 spec["fill_query"] = parts[2] if len(parts) > 2 and parts[2] else other
                 spec["role"] = parts[3] if len(parts) > 3 else ""
+            if vis == "document":
+                parts = [x.strip() for x in query.split("|")]
+                spec["doc_text"], spec["doc_head"] = parts[0], (parts[1] if len(parts) > 1 else "")
+                b["specs"].append(spec)                   # лист с текстом делается сам — подбирать нечего
+                continue
             b["specs"].append(spec)
             jobs.append((bi, len(b["specs"]) - 1))
 
@@ -451,6 +456,12 @@ def step_build(cfg, niche, project, log=print, stop_flag=lambda: False, progress
         # строки без кадров не показывают чужие ролики повторно: их время забирает соседняя строка
         # (предыдущая в абзаце, иначе следующая), её кадры просто идут дольше
         specs_ = b["specs"]
+        for spec in specs_:                        # листы с текстом — заранее, у них свои кадры
+            if spec["visual"] == "document" and not spec.get("items"):
+                try:
+                    spec["items"] = [_document_item(spec, b, shots_dir, max(0.5, spec["t1"] - spec["t0"]), spec["t0"])]
+                except Exception as e:
+                    log(f"  Лист с текстом не получился ({e}) — будет обычный кадр.")
         for si, spec in enumerate(specs_):
             if spec.get("items"):
                 continue
@@ -530,6 +541,8 @@ def step_build(cfg, niche, project, log=print, stop_flag=lambda: False, progress
                     "clip_dur": (it or {}).get("duration", 0), "offset_n": uses, "speed": (it or {}).get("speed", 1.0),
                     "s": b["start"] + int((t0 + edges[j]) * SR), "e": b["start"] + int((t0 + edges[j + 1]) * SR),
                     "mood": s.get("mood", "normal"), "first_of_seg": first_in_seg, "zoom_in": zoom_flip,
+                    "_qa": {"blk": b, "spec": spec, "a": t0 + edges[j], "b": t0 + edges[j + 1],
+                            "url": (it or {}).get("url", "")},
                 })
                 first_in_seg = False
     shots[-1]["e"] = pos
@@ -540,6 +553,11 @@ def step_build(cfg, niche, project, log=print, stop_flag=lambda: False, progress
     reused = sum(1 for v in use_count.values() if v > 1)
     log(f"  Кадров в монтаже: {len(shots)} (в среднем {total_sec / max(1, len(shots)):.1f} с), "
         f"повторно использовано роликов: {reused}.")
+
+    if cfg.get("visual_check") == "claude_code" and cfg.get("qa_check", True):
+        _quality_check(cfg, project, shots, finder, script.get("topic", ""), log, progress)
+    for sh in shots:
+        sh.pop("_qa", None)
 
     # ---------- 5. переходы (только плавный наплыв), кадры, хвосты под переходы ----------
     for i, sh in enumerate(shots):
@@ -708,6 +726,7 @@ def _choose_in_chat(cfg, project, finder, seg_blocks, jobs, vis_cache, log, chec
                               "duration": c.get("duration") or 0, "person": bool(c.get("person"))})
                 credits.append(c)
         seg_blocks[bi]["specs"][si]["items"] = items
+        seg_blocks[bi]["specs"][si]["_cands"] = ln["cands"]      # запасные варианты — для контроля качества
     vis_cache["chat"] = {"items": [it for b in seg_blocks for sp in b["specs"] for it in sp.get("items", [])],
                          "credits": credits}
     _save_json(project / "visuals.json", vis_cache)
@@ -899,7 +918,7 @@ def _assign_specs(script_specs, units):
     n = len(units)
     vis = [["stock", ""] for _ in range(n)]
     persons = {}
-    others = [(v, q) for v, q in script_specs if v != "person"]
+    others = [(v, q) for v, q in script_specs if v not in ("person", "document")]
     for j, (v, q) in enumerate(others):            # подсказки по порядку
         u = min(n - 1, j * n // max(1, len(others)))
         if not vis[u][1] or v == "archive":
@@ -919,7 +938,20 @@ def _assign_specs(script_specs, units):
         if not vis[i][1]:
             vis[i][1] = next((vis[j][1] for j in list(range(i - 1, -1, -1)) + list(range(i + 1, n)) if vis[j][1]),
                              "dark atmosphere")
-    specs = [("person", persons[i]) if i in persons else (vis[i][0], vis[i][1]) for i in range(n)]
+    docs = {}
+    for i, (_, _, t) in enumerate(units):          # цитата в «кавычках» из речи — лист с этим текстом
+        m = re.search(r"«([^»]{14,})»", t)
+        if m and len(m.group(1).split()) >= 3:
+            docs[i] = m.group(1).strip()
+    for v, q in script_specs:                      # [документ] из сценария — к самой похожей фразе
+        if v != "document":
+            continue
+        body = q.split("|")[0]
+        bw = {align.norm(w) for w in body.split()}
+        best = max(range(n), key=lambda i: len(bw & {align.norm(w) for w in units[i][2].split()}))
+        docs[best] = q
+    specs = [("person", persons[i]) if i in persons else ("document", docs[i]) if i in docs
+             else (vis[i][0], vis[i][1]) for i in range(n)]
     return specs, [(a, b) for a, b, _ in units], [t for _, _, t in units]
 
 
@@ -939,3 +971,55 @@ def _name_spoken(pp, text):
     words = [align.norm(w) for w in text.split()]
     stems = _stems(pp[1]) + _stems(pp[0])
     return any(w.startswith(st) for w in words for st in stems if st)
+
+
+def _quality_check(cfg, project, shots, finder, topic, log, progress):
+    """Каждый кадр — с точными словами, которые звучат в этот момент; Claude Code меняет неподходящие."""
+    from . import qa
+    used = {sh["_qa"]["url"] for sh in shots if sh.get("_qa") and sh["_qa"].get("url")}
+    entries = []
+    for sh in shots:
+        q = sh.get("_qa")
+        if not q or sh["kind"] not in ("video", "image") or not sh.get("src"):
+            continue
+        if str(q.get("url", "")).startswith(("doc:", "card:")):
+            continue                                   # листы с текстом и карточки людей — сделаны программой
+        rec = q["blk"].get("words")
+        if rec:
+            said = " ".join(w for st, en, w in rec if q["a"] - 0.1 <= st < q["b"])
+        else:
+            said = q["spec"].get("text", "")
+        if not said.strip():
+            said = q["spec"].get("text", "")
+        alts = [c for c in q["spec"].get("_cands") or [] if c.get("url") not in used]
+        alts.sort(key=lambda c: 0 if c.get("person") and q["spec"]["visual"] == "person" else 1)
+        entries.append({"no": len(entries) + 1, "time": sh["s"] / SR, "said": said[:220], "shot": sh,
+                        "alts": alts[:3]})
+    try:
+        qa.check(cfg, project, entries, finder, topic, log,
+                 lambda f, msg: progress(0.42 + 0.03 * f, msg))
+    except Exception as e:
+        log(f"  Контроль качества не выполнен ({e}) — монтирую как есть.")
+
+
+def _document_item(spec, b, shots_dir, length, t0):
+    """Старый лист, на котором слова печатаются ровно тогда, когда их произносит диктор."""
+    text = spec["doc_text"]
+    words = text.split()
+    reveal = None
+    rec = b.get("words")
+    if rec:
+        sub = [(st - t0, en - t0, w) for st, en, w in rec if t0 - 0.3 <= st < t0 + length]
+        reveal = align.chunk_starts(words, sub, length) if sub else None
+        if reveal and words:
+            first = next((st for st, _, w in sub if w.startswith(align.norm(words[0])[:4])), None)
+            if first is not None:                      # первое слово — когда диктор его говорит
+                shift = max(0.0, first) - reveal[0]
+                reveal = [r + shift for r in reveal]
+    if not reveal:
+        step = max(0.15, (length - 0.6) / max(1, len(words)))
+        reveal = [0.3 + i * step for i in range(len(words))]
+    out = shots_dir / f"doc_{_key(text, spec.get('doc_head', ''), f'{length:.2f}', str(reveal[:3]))}.mp4"
+    if not out.exists():
+        extras.make_document_clip(text, spec.get("doc_head", ""), reveal, length, out, seed=text)
+    return {"path": str(out), "kind": "video", "url": "doc:" + text[:60], "duration": length + 0.5}

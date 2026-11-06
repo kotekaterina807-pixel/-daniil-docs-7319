@@ -11,6 +11,8 @@ HEADER = """# СЦЕНАРИЙ. Можно править в Блокноте и
 #   [stock] запрос         — ВИДЕО (Pixabay), запрос на английском: что должно быть видно в кадре
 #   [archive] запрос       — архивное фото реального места/документа (Wikimedia), запрос на английском
 #   [photo] запрос         — фото (Pixabay, затем Wikimedia) — только если видео не бывает
+#   [документ] текст на листе | заголовок  — старый лист, текст печатается слово за словом под голос
+#                  (цитаты в «кавычках» из речи диктора становятся такими листами автоматически)
 #   [человек] Имя Фамилия | Имя по-русски | запрос, если фото нет | кто он  — фото этого человека
 #                  (если фото нет в свободных источниках — карточка с инициалами, именем и «кто он»)
 #                  (имя на английском, как в Википедии; третье поле — кадры по его теме, например vintage airplane);
@@ -65,7 +67,7 @@ def apply_text(script: dict, text: str) -> dict:
         shots = []
         for ln in block:
             m = re.match(r"^\[(archive|stock|photo|фото|видео|архив)\]\s*(.*)$", ln.strip(), re.I)
-            tag = re.match(r"^\[(надпись|человек|переход)\]\s*(.*)$", ln.strip(), re.I)
+            tag = re.match(r"^\[(надпись|человек|переход|документ)\]\s*(.*)$", ln.strip(), re.I)
             if m:
                 kind = {"фото": "photo", "видео": "stock", "архив": "archive"}.get(m.group(1).lower(),
                                                                                m.group(1).lower())
@@ -74,6 +76,9 @@ def apply_text(script: dict, text: str) -> dict:
                 name, val = tag.group(1).lower(), tag.group(2).strip()
                 if name == "надпись":
                     label = val
+                elif name == "документ":
+                    if val:
+                        shots.append(("document", val))
                 elif name == "человек":
                     if val:
                         person = person or val

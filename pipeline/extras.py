@@ -337,3 +337,101 @@ def make_person_card(name, out_path, accent=(200, 30, 30), sub="", variant=0):
         _draw_tracked(d, (cx - total / 2, 725), st, f_sub, (190, 196, 210), 4)
     d.rectangle([cx - 60, 710 if not sub else 790, cx + 60, 713 if not sub else 793], fill=tuple(accent))
     img.save(out_path, quality=92)
+
+
+TYPE_FONTS = [
+    r"C:\Windows\Fonts\cour.ttf",                     # Courier New — пишущая машинка, есть кириллица
+    "/usr/share/fonts/truetype/dejavu/DejaVuSansMono.ttf",
+    "/usr/share/fonts/truetype/liberation/LiberationMono-Regular.ttf",
+]
+TYPE_BOLD = [r"C:\Windows\Fonts\courbd.ttf", "/usr/share/fonts/truetype/dejavu/DejaVuSansMono-Bold.ttf"]
+
+
+def _paper(W, H, seed):
+    """Старый лист бумаги на тёмном столе: желтоватый, с зерном, пятнами и потемневшими краями."""
+    import random
+    import numpy as np
+    rnd = random.Random(seed)
+    rs = np.random.RandomState(abs(hash(seed)) % (2 ** 31))
+    desk = np.zeros((H, W, 3), np.float32)
+    desk[:] = (28, 22, 18)
+    desk += rs.normal(0, 6, (H, W, 1))
+    pw, ph = int(W * 0.62), int(H * 0.86)
+    px, py = (W - pw) // 2, (H - ph) // 2
+    paper = np.zeros((ph, pw, 3), np.float32)
+    paper[:] = (222, 208, 176)
+    paper += rs.normal(0, 7, (ph, pw, 1))
+    yy, xx = np.mgrid[0:ph, 0:pw]
+    edge = np.minimum.reduce([xx, yy, pw - 1 - xx, ph - 1 - yy]).astype(np.float32)
+    paper *= (0.78 + 0.22 * np.clip(edge / 90.0, 0, 1))[..., None]
+    for _ in range(3):                                  # пятна
+        cx, cy, r = rnd.randint(0, pw), rnd.randint(0, ph), rnd.randint(60, 180)
+        d = np.sqrt((xx - cx) ** 2 + (yy - cy) ** 2)
+        paper *= (1 - 0.08 * np.clip(1 - d / r, 0, 1))[..., None]
+    fold = int(ph * rnd.uniform(0.45, 0.55))           # сгиб листа
+    paper[fold - 2:fold + 2] *= 0.86
+    desk[py:py + ph, px:px + pw] = paper
+    img = Image.fromarray(np.clip(desk, 0, 255).astype("uint8"))
+    return img, (px, py, pw, ph)
+
+
+def make_document_clip(text, head, reveal, length, out_mp4, seed=""):
+    """Видео: старый документ, на котором текст печатается слово за словом ровно под голос диктора.
+    reveal — время (с) появления каждого слова от начала кадра."""
+    import subprocess
+    import tempfile
+    from .config import ffmpeg_exe
+    W, H = 1920, 1080
+    base, (px, py, pw, ph) = _paper(W, H, seed or text)
+    words = text.split()
+    f = _font(52, TYPE_FONTS)
+    fh = _font(34, TYPE_BOLD)
+    margin = 90
+    # раскладка слов по строкам
+    d0 = ImageDraw.Draw(base)
+    lines, cur = [], []
+    for i, w in enumerate(words):
+        test = " ".join(x for _, x in cur + [(i, w)])
+        if cur and d0.textlength(test, font=f) > pw - 2 * margin:
+            lines.append(cur)
+            cur = []
+        cur.append((i, w))
+    if cur:
+        lines.append(cur)
+    lh = 74
+    top = py + (ph - len(lines) * lh) // 2 + (30 if head else 0)
+    pos = {}
+    for li, ln in enumerate(lines):
+        x = px + margin
+        for i, w in ln:
+            pos[i] = (x, top + li * lh)
+            x += d0.textlength(w + " ", font=f)
+    if head:
+        d0.text((px + margin, top - 90), head.upper(), font=fh, fill=(120, 40, 30))
+        d0.line([px + margin, top - 44, px + pw - margin, top - 44], fill=(120, 40, 30), width=2)
+    tmp = Path(tempfile.mkdtemp())
+    reveal = list(reveal) + [length] * (len(words) - len(reveal))
+    steps = sorted(set([0.0] + [max(0.0, min(length - 0.05, t)) for t in reveal]))
+    frames = []
+    for k, t in enumerate(steps):
+        im = base.copy()
+        d = ImageDraw.Draw(im)
+        for i, w in enumerate(words):
+            if reveal[i] <= t + 1e-6:
+                x, y = pos[i]
+                d.text((x, y), w, font=f, fill=(38, 30, 24))
+        p = tmp / f"{k:04d}.png"
+        im.save(p)
+        frames.append((p, t))
+    lst = tmp / "list.txt"
+    with open(lst, "w", encoding="utf-8") as fh_:
+        for k, (p, t) in enumerate(frames):
+            nxt = frames[k + 1][1] if k + 1 < len(frames) else length
+            fh_.write(f"file '{p.as_posix()}'\nduration {max(0.04, nxt - t):.3f}\n")
+        fh_.write(f"file '{frames[-1][0].as_posix()}'\n")
+    subprocess.run([ffmpeg_exe(), "-y", "-hide_banner", "-loglevel", "error", "-f", "concat", "-safe", "0",
+                    "-i", str(lst), "-vf", "fps=30,zoompan=z='min(1.06,1+0.0005*on)':x='iw/2-(iw/zoom/2)':"
+                    "y='ih/2-(ih/zoom/2)':d=1:s=1920x1080:fps=30,format=yuv420p", "-c:v", "libx264", "-preset", "veryfast",
+                    "-crf", "18", str(out_mp4)], check=True, timeout=600,
+                   creationflags=0x08000000 if os.name == "nt" else 0)
+    return out_mp4
