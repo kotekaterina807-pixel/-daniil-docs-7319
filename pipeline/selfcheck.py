@@ -109,6 +109,19 @@ def _archives():
     return (name, ok, msg, False)
 
 
+def _word_sync(cfg):
+    name = "Синхронизация кадров по словам (распознавание речи)"
+    try:
+        import vosk  # noqa: F401
+    except Exception:
+        return (name, False, "пакет vosk не установлен — нажмите «Обновить программу»", True)
+    from .align import MODELS, _models_dir
+    m = MODELS.get(cfg.get("language", "ru"))
+    if m and (_models_dir() / m).exists():
+        return (name, True, f"готово, модель {m}", False)
+    return (name, True, f"модель {m} (~45 МБ) скачается сама при первой сборке", False)
+
+
 def _eleven(cfg):
     name = "Озвучка ElevenLabs"
     if not str(cfg.get("elevenlabs_key", "")).strip():
@@ -182,7 +195,7 @@ def run_all(cfg, log=print):
         checks.append(lambda: _claude(cfg))
     if cfg.get("visual_check") == "claude_code":
         checks.append(lambda: _claude_code(cfg))
-    checks += [lambda: _pixabay(cfg), _wikimedia, _archives]
+    checks += [lambda: _pixabay(cfg), _wikimedia, _archives, lambda: _word_sync(cfg)]
     out = []
     for fn in checks:
         try:

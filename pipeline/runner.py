@@ -9,7 +9,7 @@ import re
 import wave
 from pathlib import Path
 
-from . import extras, render, script_format, script_gen, timing, tts
+from . import align, extras, render, script_format, script_gen, timing, tts
 from .config import MUSIC_DIR, OUTPUT_DIR, ensure_dirs, ffmpeg_exe, lang
 from . import library
 from .visuals import VisualFinder
@@ -196,6 +196,7 @@ def step_build(cfg, niche, project, log=print, stop_flag=lambda: False, progress
     narration = project / "narration.wav"
     pos = 0
     subs, chapter_starts, blocks = [], [], []
+    synced = [0]
     pause = int(PAUSE_SEC * SR)
     with wave.open(str(narration), "wb") as out:
         out.setnchannels(1)
@@ -217,15 +218,31 @@ def step_build(cfg, niche, project, log=print, stop_flag=lambda: False, progress
                     n = w.getnframes()
                     out.writeframes(w.readframes(n))
                 out.writeframes(b"\x00\x00" * pause)
-                sents, pauses, _ = timing.sentence_times(s["text"], s["audio"])
+                sents, pauses, dur_s = timing.sentence_times(s["text"], s["audio"])
+                rec = None
+                if cfg.get("word_sync", True):            # точное время каждого слова — по распознаванию речи
+                    try:
+                        rec = align.words(s["audio"], cfg.get("language", "ru"), log)
+                        if rec and len(sents) > 1:
+                            st = align.chunk_starts([t for _, _, t in sents], rec, dur_s)
+                            if st:
+                                ends = st[1:] + [dur_s]
+                                sents = [(a, max(a + 0.3, b), t) for a, b, (_, _, t) in zip(st, ends, sents)]
+                        if rec:
+                            synced[0] += 1
+                    except Exception as e:
+                        log(f"  Синхронизация по словам: {e}")
+                        rec = None
                 for a, b, t in sents:
                     subs.append({"text": t, "start": pos / SR + a, "end": pos / SR + b})
                 blocks.append({"type": "seg", "seg": s, "chapter": ci, "start": pos, "end": pos + n + pause,
                                "pauses": pauses, "sent_bounds": [b for _, b, _ in sents[:-1]],
-                               "sents": sents})
+                               "sents": sents, "words": rec})
                 pos += n + pause
     total_sec = pos / SR
     log(f"Длительность видео: {total_sec / 60:.1f} мин.")
+    if synced[0]:
+        log(f"  Кадры привязаны к словам диктора (распознавание речи): абзацев {synced[0]}.")
 
     # ---------- 3. подбор кадров: своя строка кадра — под своё предложение ----------
     log("Подбираю кадры под каждое предложение и проверяю их по смыслу...")
@@ -254,8 +271,10 @@ def step_build(cfg, niche, project, log=print, stop_flag=lambda: False, progress
         if cfg.get("visual_check") == "claude_code":
             # кадры строго под речь: единица — фраза (длинное предложение делится по запятым),
             # смена кадра — в паузе перед словами, строки кадров сценария — подсказки для этих фраз
-            units = _speech_units(sents, b["pauses"], span)
+            units = _speech_units(sents, b["pauses"], span, b.get("words"))
             specs, ranges, texts = _assign_specs(specs, units)
+            if b.get("words"):                       # фото человека — ровно на его имени
+                ranges = _person_on_name(specs, ranges, b["words"])
             k = len(specs)
         else:
             k = len(specs)
@@ -794,7 +813,25 @@ def _calm_videos(project, seg_blocks, log):
     log(f"  Проверка на быстрые кадры: роликов {len(vids)}, убрано {dropped}, замедлено {slowed}.")
 
 
-def _speech_units(sents, pauses, span):
+def _person_on_name(specs, ranges, rec):
+    ranges = [list(r) for r in ranges]
+    for i, (v, q) in enumerate(specs):
+        if v != "person" or i == 0:
+            continue
+        parts = [x.strip() for x in q.split("|")]
+        shown = parts[1] if len(parts) > 1 and parts[1] else parts[0]
+        stems = [w[:max(3, len(w) - 2)] for w in shown.split() if len(w) > 2]
+        t = None
+        for st in stems[::-1]:                       # сначала фамилия
+            t = align.word_time(rec, st, ranges[i][0], ranges[i][1])
+            if t is not None:
+                break
+        if t is not None and t - 0.25 > ranges[i][0] + 0.8 and t - 0.25 < ranges[i][1] - 1.0:
+            ranges[i - 1][1] = ranges[i][0] = t - 0.25
+    return [tuple(r) for r in ranges]
+
+
+def _speech_units(sents, pauses, span, rec=None):
     """Фразы озвучки: предложения, длинные (>6.5 с) — делятся по запятым/тире на части от ~2.5 с.
     Границы притягиваются к паузам речи, кадр меняется чуть раньше слов."""
     units = []
@@ -812,6 +849,19 @@ def _speech_units(sents, pauses, span):
         if len(merged) <= 1:
             units.append([a, b, txt])
             continue
+        if rec:                                    # части предложения — по распознанным словам
+            sub = [(st - a, en - a, w) for st, en, w in rec if a - 0.3 <= st < b]
+            starts = align.chunk_starts(merged, sub, b - a)
+            if starts:
+                bounds = [a + x for x in starts] + [b]
+                for j, x in enumerate(merged):
+                    t0_, t1_ = bounds[j], bounds[j + 1]
+                    if j > 0 and t1_ - t0_ < 2.2:          # слишком короткая часть — к предыдущей
+                        units[-1][1] = t1_
+                        units[-1][2] += " " + x
+                    else:
+                        units.append([t0_, t1_, x])
+                continue
         total = sum(len(x) for x in merged)
         t, acc = a, 0
         for j, x in enumerate(merged):
