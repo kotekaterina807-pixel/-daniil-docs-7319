@@ -229,6 +229,9 @@ class VisualFinder:
             out = []
             try:
                 r = self._get("https://www.loc.gov/photos/", {"q": query, "fo": "json", "c": 15, "at": "results"})
+                if r.status_code in (401, 403, 410):
+                    self._down["loc"] = True             # сайт закрыт для этого подключения — не тратим время
+                    return out
                 if r.status_code != 200:
                     return out
                 for res in r.json().get("results") or []:
@@ -273,6 +276,9 @@ class VisualFinder:
             try:
                 r = self._get("https://collectionapi.metmuseum.org/public/collection/v1/search",
                               {"q": query, "hasImages": "true"})
+                if r.status_code in (401, 403, 410):
+                    self._down["met"] = True
+                    return out
                 ids = (r.json().get("objectIDs") or [])[:20] if r.status_code == 200 else []
                 for oid in ids:
                     if len(out) >= limit:

@@ -38,7 +38,16 @@ def check(cfg):
     if r.status_code in (401, 403):
         raise ReportError("GitHub не принял ключ доступа — создайте его заново (права Contents: Read and write).")
     if r.status_code == 404:
-        raise ReportError("Репозиторий не найден или ключ не даёт к нему доступа.")
+        try:
+            u = requests.get(f"{API}/user", headers=_h(token), timeout=20)
+        except requests.RequestException:
+            u = None
+        name = repo.split("/")[1]
+        if u is not None and u.status_code == 200:
+            raise ReportError(f"Ключ рабочий, но доступа к репозиторию «{repo}» у него нет. На GitHub откройте ключ → "
+                              f"Repository access → Only select repositories → выберите {name}; Permissions → Contents: "
+                              f"Read and write → Update. Также проверьте, что название репозитория написано без ошибок.")
+        raise ReportError("GitHub не принял ключ — создайте его заново и вставьте целиком.")
     d = r.json()
     if not d.get("private"):
         raise ReportError("Репозиторий открытый — для отчётов нужен ЗАКРЫТЫЙ (Private).")

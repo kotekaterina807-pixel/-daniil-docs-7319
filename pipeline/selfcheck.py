@@ -104,8 +104,14 @@ def _archives():
             res.append((label, r.status_code == 200, f"ответ {r.status_code}{how}" if r.status_code == 200 else detail))
         except requests.RequestException as e:
             res.append((label, False, type(e).__name__))
-    ok = all(x[1] for x in res)
-    msg = "; ".join(f"{l}: {('работает' + (' напрямую' if 'напрямую' in m else '')) if o else 'недоступен (' + m + ')'}" for l, o, m in res)
+    good = [l for l, o, m in res if o]
+    bad = [l for l, o, m in res if not o]
+    ok = len(good) >= 3
+    msg = "работают: " + (", ".join(good) or "нет")
+    if bad:
+        msg += "; закрыты для вашего подключения: " + ", ".join(bad) + (
+            " — программа их просто пропускает, это не мешает сборке" if ok else
+            " — проверьте прокси/VPN, архивных фото будет мало")
     return (name, ok, msg, False)
 
 
