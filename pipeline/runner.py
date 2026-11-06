@@ -298,7 +298,7 @@ def step_build(cfg, niche, project, log=print, stop_flag=lambda: False, progress
             n = max(1, round(length / shot_sec), math.ceil(length / max_shot - 1e-6))
             n = min(n, max(1, int(length / min_shot)))
             if cfg.get("visual_check") == "claude_code":
-                n = 2 if length >= 6.0 else 1         # фраза ≈ кадр; длинная — два кадра
+                n = 2 if length >= 5.0 else 1         # фраза ≈ кадр; от 5 с — два кадра
             spec = {"visual": vis, "query": query, "t0": t0, "t1": t1, "n": n, "text": txt}
             if vis == "person":
                 parts = [x.strip() for x in query.split("|")]
@@ -641,6 +641,11 @@ def _choose_in_chat(cfg, project, finder, seg_blocks, jobs, vis_cache, log, chec
                 if plan:
                     _save_json(plan_path, {"sig": sig, "plan": {str(k): v for k, v in plan.items()}})
                     log(f"  План готов: {len(plan)} фраз.")
+        heroes = []                                # герои истории — люди из строк [человек] сценария
+        for b_ in seg_blocks:
+            for sp_ in b_["specs"]:
+                if sp_["visual"] == "person":
+                    heroes.append((sp_["query"], sp_.get("shown", "")))
         lines = []
         for no, (bi, si) in enumerate(jobs, 1):
             check_stop()
@@ -653,8 +658,12 @@ def _choose_in_chat(cfg, project, finder, seg_blocks, jobs, vis_cache, log, chec
             if pl.get("source") == "архив" and spec["visual"] == "stock":
                 spec["visual"] = "archive"            # старые фото, гравюры, картины той эпохи
             if pl.get("people") and spec["visual"] != "person":
-                spec["auto_person"] = pl["people"][0]  # названный во фразе человек — его фото в кандидаты
-                seg_blocks[bi]["specs"][si]["auto_person"] = spec["auto_person"]
+                # фото человека — только героя истории (есть строка [человек] в сценарии) и только во фразе,
+                # где звучит его имя: никаких фото «заранее» и случайных людей, о которых ничего не сказано
+                cand = next((pp for pp in pl["people"] if _is_hero(pp, heroes) and _name_spoken(pp, spec["text"])), None)
+                if cand:
+                    spec["auto_person"] = cand
+                    seg_blocks[bi]["specs"][si]["auto_person"] = cand
             if spec["visual"] != "person" and spec["n"] < 2 and spec.get("t1", 0) - spec.get("t0", 0) >= 5:
                 spec["n"] = 2                     # минимум два разных кадра на обычную фразу
             cands = review.collect(finder, spec, taken)
@@ -912,3 +921,21 @@ def _assign_specs(script_specs, units):
                              "dark atmosphere")
     specs = [("person", persons[i]) if i in persons else (vis[i][0], vis[i][1]) for i in range(n)]
     return specs, [(a, b) for a, b, _ in units], [t for _, _, t in units]
+
+
+def _stems(name):
+    return [align.norm(w)[:max(3, len(align.norm(w)) - 2)] for w in name.replace(",", " ").split() if len(align.norm(w)) > 2]
+
+
+def _is_hero(pp, heroes):
+    en, ru = pp
+    for h_en, h_ru in heroes:
+        if (en and h_en and _stems(en)[-1:] == _stems(h_en)[-1:]) or (ru and h_ru and _stems(ru)[-1:] == _stems(h_ru)[-1:]):
+            return True
+    return False
+
+
+def _name_spoken(pp, text):
+    words = [align.norm(w) for w in text.split()]
+    stems = _stems(pp[1]) + _stems(pp[0])
+    return any(w.startswith(st) for w in words for st in stems if st)

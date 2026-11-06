@@ -56,6 +56,13 @@ BLOCK_WORDS = re.compile(
     re.I)
 
 
+NOT_PORTRAIT = re.compile(
+    r"memorial|monument|statue|plaque|grave|tomb|headstone|cemetery|bust\b|sculpture|stamp|coin|medal|"
+    r"stained[ _-]?glass|church|window|signature|autograph|mural|graffiti|памятник|мемориал|могил|надгроб|"
+    r"бюст|скульптур|марка|табличк|доска",
+    re.I)
+
+
 # Для архивных фото (Wikimedia и т.п.) — только явные признаки чужих знаков и стоков. Слова вроде
 # «copyright», «title», «text» в описаниях архивов встречаются у любых свободных фото
 # («No known copyright restrictions», «Title: …») и раньше отсекали почти все портреты людей.
@@ -651,6 +658,8 @@ class VisualFinder:
         def add(cands, need_name=False):
             for c in cands:
                 text = (c.get("title", "") + " " + c.get("page", "")).lower()
+                if NOT_PORTRAIT.search(text + " " + c.get("tags", "")):
+                    continue                            # памятники, таблички, могилы, марки — не фото человека
                 if c["url"] in seen or (need_name and not any(sn in text for sn in surnames)):
                     continue
                 seen.add(c["url"])
