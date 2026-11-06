@@ -145,6 +145,7 @@ def check(cfg, project, entries, finder, topic, log, progress=None):
         for v in ex.map(one, names):
             verdicts.update(v)
     by_no = {e["no"]: e for e in entries}
+    verdicts = {k: v for k, v in verdicts.items() if k in by_no}
     replaced, bad = 0, []
     used = set()
     for no, v in sorted(verdicts.items()):
