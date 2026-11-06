@@ -36,6 +36,13 @@ PROMPT = """Ты — строгий редактор документально�
 7: ok
 8: 2      ← кадр плохой, лучше запасной вариант 2
 9: плохо  ← кадр плохой, и запасные тоже не подходят
+{draw}"""
+
+DRAW = """
+Если кадр плохой и запасные не подходят — опиши по-английски картинку, которую художник нарисует ВМЕСТО него,
+ровно про эти слова диктора: место, время года и суток, эпоха, предметы, действие, ракурс. Лица реальных людей
+не рисуем: люди — со спины, силуэтом, издалека или в капюшонах/масках. Без надписей. Формат:
+9: плохо | draw: two climbers in 1920s wool clothing seen from behind on a snowy ridge, clouds parting, Everest
 """
 
 
@@ -106,6 +113,9 @@ def _sheets(entries, out_dir, prefix="проверка"):
     return names
 
 
+PROMPTS = {}          # номер кадра → что нарисовать (из последнего ответа Claude)
+
+
 def parse(text):
     out = {}
     for line in (text or "").splitlines():
@@ -115,6 +125,10 @@ def parse(text):
         no, _, verdict = line.partition(":")
         if not no.strip().isdigit():
             continue
+        verdict, _, draw = verdict.partition("|")
+        draw = draw.strip()
+        if draw.lower().startswith("draw:"):
+            PROMPTS[int(no)] = draw[5:].strip()
         v = verdict.strip().lower()
         if v.startswith("ok") or v.startswith("ок"):
             out[int(no)] = "ok"
@@ -134,12 +148,16 @@ def check(cfg, project, entries, finder, topic, log, progress=None):
     for e in entries:
         e["frame_img"] = _frame(e["shot"], tmp / f"{e['no']}.jpg")
     names = _sheets(entries, project)
+    from . import illustrate
+    draw_on = illustrate.available(cfg)
     log(f"Контроль качества: Claude Code проверяет каждый кадр ({len(entries)} шт., листов {len(names)})...")
     verdicts = {}
     done = [0]
+    PROMPTS.clear()
 
     def one(name):
-        ans = claude_code.run(cfg, PROMPT.format(sheet=name, topic=topic or "документальное видео"), project)
+        ans = claude_code.run(cfg, PROMPT.format(sheet=name, topic=topic or "документальное видео",
+                                                 draw=DRAW if draw_on else ""), project)
         done[0] += 1
         if progress:
             progress(done[0] / len(names), f"Контроль качества: лист {done[0]}/{len(names)}")
@@ -149,6 +167,7 @@ def check(cfg, project, entries, finder, topic, log, progress=None):
             verdicts.update(v)
     by_no = {e["no"]: e for e in entries}
     verdicts = {k: v for k, v in verdicts.items() if k in by_no}
+    prompts = {k: v for k, v in PROMPTS.items() if k in by_no}
     replaced, bad = 0, []
     used = set()
     for no, v in sorted(verdicts.items()):
@@ -169,7 +188,34 @@ def check(cfg, project, entries, finder, topic, log, progress=None):
                 replaced += 1
                 continue
         bad.append(no)
-    report = {"checked": len(entries), "answered": len(verdicts), "replaced": replaced, "bad_left": bad,
+    drawn = 0
+    if draw_on and bad:                               # нет подходящего кадра — рисуем ровно про эти слова
+        from concurrent.futures import ThreadPoolExecutor as _TP
+        jobs = [(no, prompts.get(no)) for no in bad if prompts.get(no)]
+        log(f"  Рисую кадры, которых нет ни в архивах, ни в интернете: {len(jobs)} шт. (Leonardo)...")
+        stop = [False]
+
+        def paint(job):
+            no, prompt = job
+            if stop[0]:
+                return no, None
+            try:
+                return no, illustrate.generate(cfg, prompt, project / "_drawn" / f"{no}_{abs(hash(prompt)) % 10**8}.jpg", log)
+            except illustrate.IllustrateError:
+                stop[0] = True
+                return no, None
+        (project / "_drawn").mkdir(exist_ok=True)
+        with _TP(max_workers=3) as ex:
+            for no, path in ex.map(paint, jobs):
+                if path:
+                    by_no[no]["shot"].update({"kind": "image", "src": str(path), "clip_dur": 0, "offset_n": 0,
+                                              "speed": 1.0, "person": False})
+                    bad.remove(no)
+                    drawn += 1
+        if drawn:
+            log(f"  Нарисовано кадров: {drawn}.")
+    report = {"checked": len(entries), "answered": len(verdicts), "replaced": replaced, "bad_left": bad, "drawn": drawn,
+              "prompts": {str(k): v for k, v in prompts.items()},
               "verdicts": {str(k): v for k, v in verdicts.items()},
               "said": {str(e["no"]): e["said"] for e in entries}}
     (project / "проверка.json").write_text(json.dumps(report, ensure_ascii=False, indent=1), encoding="utf-8")

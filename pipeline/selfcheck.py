@@ -207,6 +207,18 @@ def _people_photos(cfg):
     return (name, bool(wiki or web), msg, False)
 
 
+def _leonardo(cfg):
+    name = "Рисованные кадры — Leonardo AI"
+    from . import illustrate
+    if not str(cfg.get("leonardo_key", "")).strip():
+        return (name, True, "не подключено (необязательно) — кадры только из архивов и интернета", False)
+    try:
+        illustrate.check(cfg)
+        return (name, True, f"работает, модель {illustrate._model.get('name') or cfg.get('leonardo_model')}", False)
+    except Exception as e:
+        return (name, False, str(e)[:250], False)
+
+
 def _music():
     name = "Музыка и звуки"
     from .config import MUSIC_DIR, SFX_DIR
@@ -242,7 +254,7 @@ def run_all(cfg, log=print):
         checks.append(lambda: _claude(cfg))
     if cfg.get("visual_check") == "claude_code":
         checks.append(lambda: _claude_code(cfg))
-    checks += [lambda: _pixabay(cfg), _wikimedia, _archives, lambda: _people_photos(cfg), _music, lambda: _word_sync(cfg), lambda: _report(cfg)]
+    checks += [lambda: _pixabay(cfg), _wikimedia, _archives, lambda: _people_photos(cfg), lambda: _leonardo(cfg), _music, lambda: _word_sync(cfg), lambda: _report(cfg)]
     out = []
     for fn in checks:
         try:

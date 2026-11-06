@@ -3,7 +3,7 @@ import json
 import os
 from pathlib import Path
 
-VERSION = "7.9 (06.11.2026)"
+VERSION = "8.0 (06.11.2026)"
 CONFIG_REV = 10      # при смене — обновляются настройки монтажа у уже сохранённых конфигов
 ROOT = Path(__file__).resolve().parent.parent
 CONFIG_PATH = ROOT / "config.json"
@@ -44,6 +44,8 @@ DEFAULTS = {
     "old_look": True,
     "word_sync": True,
     "qa_check": True,
+    "leonardo_key": "",              # необязательно: рисует кадры, которых нет ни в архивах, ни в интернете
+    "ai_images": True,
     "report_repo": "",                 # закрытый репозиторий GitHub для отчётов Claude (владелец/название)
     "report_token": "",                # ключ GitHub только к этому репозиторию (Contents: Read and write)
     "report_send": True,               # отправлять отчёт после каждой сборки                  # контроль качества: Claude Code проверяет каждый кадр перед монтажом                 # кадры по точному времени слов (распознавание озвучки, Vosk, офлайн)                  # «староватая» картинка: выцветший тёплый цвет, зерно плёнки, виньетка                   # отправлять каждое готовое видео     # модель Claude Code для проверки кадров

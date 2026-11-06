@@ -336,7 +336,7 @@ def make_shortcut(quiet=False):
 
 
 # ---------------- HTTP ----------------
-PUBLIC_KEYS = ["pixabay_key", "pexels_key", "proxy_url", "lumean_key", "lumean_ai_model",
+PUBLIC_KEYS = ["leonardo_key", "ai_images", "pixabay_key", "pexels_key", "proxy_url", "lumean_key", "lumean_ai_model",
                "tts_provider", "edge_voice", "anthropic_key", "openai_key", "elevenlabs_key", "elevenlabs_voice_id",
                "music_volume", "shot_seconds", "show_labels", "theme", "sound_done", "open_folder_after",
                "default_niche", "update_repo", "language", "visual_check", "eleven_speed", "eleven_stability", "eleven_style",
@@ -679,7 +679,7 @@ class Handler(BaseHTTPRequestHandler):
         if p == "/api/open_url":
             url = str(data.get("url") or "")
             if not url.startswith(("https://elevenlabs.io/", "https://console.anthropic.com/", "https://platform.claude.com/",
-                                   "https://lumean.app/", "https://t.me/BotFather", "https://github.com/")):
+                                   "https://lumean.app/", "https://t.me/BotFather", "https://github.com/", "https://app.leonardo.ai/")):
                 return self._send(400, {"error": "Этот адрес открыть нельзя"})
             import webbrowser
             webbrowser.open(url)
