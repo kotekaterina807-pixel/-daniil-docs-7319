@@ -138,6 +138,13 @@ class VisualFinder:
                 pass
         raise err
 
+    def _diag(self, person, msg):
+        """Почему для человека нашлось/не нашлось фото — попадает в журнал и в отчёт для Claude."""
+        with self._lock:
+            d = self.__dict__.setdefault("person_diag", {}).setdefault(person, [])
+            if msg not in d:
+                d.append(msg)
+
     def _cached(self, key, fn):
         with self._lock:
             if key in self._cache:
@@ -202,6 +209,55 @@ class VisualFinder:
                 self.log(f"  Wikimedia: {e}")
             return out
         return self._cached(("wm", query), fetch)
+
+    # ---------- Поиск картинок в интернете (DuckDuckGo, без ключа) ----------
+    STOCK_SITES = re.compile(r"getty|shutterstock|alamy|istock|dreamstime|depositphotos|123rf|pond5|stock\.adobe|"
+                             r"bigstock|agefotostock|superstock|granger|bridgemanimages|pinterest|facebook|"
+                             r"instagram|tiktok|youtube|ytimg|vk\.com|userapi|aliexpress|amazon|ebay|etsy|"
+                             r"redbubble|teepublic|zazzle|fineartamerica|pixels\.com|mediastorehouse", re.I)
+
+    def _web_images(self, query, min_w=500):
+        """Картинки из интернета по запросу — как поиск картинок в браузере. Стоковые агентства с водяными
+        знаками и магазины отбрасываются; каждую картинку дальше смотрит Claude (смысл, знаки, надписи)."""
+        if self._down.get("web"):
+            return []
+
+        def fetch():
+            out = []
+            try:
+                s = requests.Session()
+                s.headers.update(BROWSER_UA)
+                s.headers["Accept"] = "text/html,application/json;q=0.9,*/*;q=0.8"
+                page = s.get("https://duckduckgo.com/", params={"q": query, "iax": "images", "ia": "images"}, timeout=20)
+                m = re.search(r"vqd=[\"']?([\d-]+)", page.text)
+                if not m:
+                    return out
+                s.headers["Referer"] = "https://duckduckgo.com/"
+                r = s.get("https://duckduckgo.com/i.js", params={"l": "wt-wt", "o": "json", "q": query, "vqd": m.group(1),
+                                                                  "f": ",,,,,", "p": "1"}, timeout=20)
+                if r.status_code != 200:
+                    return out
+                for res in (r.json().get("results") or [])[:40]:
+                    url, src = res.get("image") or "", (res.get("url") or "") + " " + (res.get("source") or "")
+                    w, h = int(res.get("width") or 0), int(res.get("height") or 0)
+                    title = res.get("title") or ""
+                    if not url.startswith("http") or w < min_w or h < 300:
+                        continue
+                    if self.STOCK_SITES.search(url + " " + src) or ARCHIVE_BLOCK.search(title):
+                        continue
+                    if re.search(r"\.(svg|gif)(\?|$)", url, re.I):
+                        continue
+                    dom = re.sub(r"^https?://(www\.)?", "", res.get("url") or url).split("/")[0]
+                    out.append({"kind": "image", "url": url, "thumb": res.get("thumbnail") or url, "web": True,
+                                "source": "Интернет: " + dom, "page": res.get("url") or "", "title": title,
+                                "author": dom, "license": "из интернета", "tags": title})
+            except requests.ConnectionError as e:
+                self._down["web"] = True
+                self.log(f"  Поиск картинок в интернете недоступен — дальше без него ({type(e).__name__}).")
+            except Exception as e:
+                self.log(f"  Поиск картинок в интернете: {e}")
+            return out
+        return self._cached(("web", query, min_w), fetch)
 
     # ---------- Openverse (CC0 и общественное достояние; без ключа) ----------
     def _openverse(self, query, min_w=1000):
@@ -418,15 +474,17 @@ class VisualFinder:
                 pages = (r.json().get("query") or {}).get("pages") or {}
                 fname = next((p.get("pageimage") for p in pages.values() if p.get("pageimage")), None)
                 if not fname:
+                    self._diag(name, f"Википедия {lang}: у статьи нет фото")
                     return []
-                r = self._get("https://commons.wikimedia.org/w/api.php",
-                              {"action": "query", "format": "json", "titles": "File:" + fname,
-                               "prop": "imageinfo|categories", "iiprop": "url|size|extmetadata",
-                               "iiurlwidth": 1920, "cllimit": "max"})
-                pages = (r.json().get("query") or {}).get("pages") or {}
+                q = {"action": "query", "format": "json", "titles": "File:" + fname,
+                     "prop": "imageinfo|categories", "iiprop": "url|size|extmetadata", "iiurlwidth": 1920, "cllimit": "max"}
+                pages = (self._get("https://commons.wikimedia.org/w/api.php", q).json().get("query") or {}).get("pages") or {}
+                if all("missing" in p for p in pages.values()):
+                    # старые фото часто лежат не в Commons, а в самой Википедии (с пометкой «общественное достояние»)
+                    pages = (self._get(f"https://{lang}.wikipedia.org/w/api.php", q).json().get("query") or {}).get("pages") or {}
                 out = []
                 for p in pages.values():
-                    if "missing" in p:
+                    if "imageinfo" not in p:
                         continue
                     info = (p.get("imageinfo") or [{}])[0]
                     if info.get("width", 0) < 400:
@@ -438,8 +496,14 @@ class VisualFinder:
                     it = self._wm_item(p2, 400, 400)
                     if it:
                         out.append(it)
+                    else:
+                        lic = ((info.get("extmetadata") or {}).get("LicenseShortName") or {}).get("value", "?")
+                        self._diag(name, f"Википедия {lang}: фото {fname} не взято (лицензия «{lic}»)")
+                if out:
+                    self._diag(name, f"Википедия {lang}: фото найдено")
                 return out
-            except requests.ConnectionError:
+            except requests.ConnectionError as e:
+                self._diag(name, f"Википедия {lang}: нет связи ({type(e).__name__})")
                 return []
             except Exception as e:
                 self.log(f"  Википедия ({lang}): {e}")
@@ -595,16 +659,30 @@ class VisualFinder:
                 return None
         for attempt in range(3):
             try:
-                with requests.get(item["url"], headers=UA, stream=True, timeout=60) as r:
+                hdr = dict(BROWSER_UA, Referer=item.get("page") or "") if item.get("web") else UA
+                with requests.get(item["url"], headers=hdr, stream=True, timeout=60) as r:
                     if r.status_code in (401, 403, 410):
                         r = _DIRECT.get(item["url"], headers=UA, stream=True, timeout=60)
                     r.raise_for_status()
                     with open(tmp, "wb") as f:
                         for chunk in r.iter_content(1 << 16):
                             f.write(chunk)
+                if item["kind"] == "image":            # сайт мог отдать страницу вместо картинки
+                    from PIL import Image as _I
+                    conv = None
+                    with _I.open(tmp) as im:
+                        im.load()
+                        if im.width < 300 or im.height < 250:
+                            raise ValueError("слишком маленькая картинка")
+                        if im.mode not in ("RGB", "L") or (im.format or "").upper() not in ("JPEG", "PNG"):
+                            conv = im.convert("RGB")
+                    if conv is not None:
+                        conv.save(tmp, "JPEG", quality=92)
                 tmp.replace(path)
                 return path
             except Exception:
+                if item.get("web"):                    # чужой сайт не отдал картинку — повторять бесполезно
+                    break
                 time.sleep(3)
         tmp.unlink(missing_ok=True)
         return None
@@ -614,9 +692,9 @@ class VisualFinder:
         archive — реальное фото места/документа: Wikimedia, затем видео, затем фото Pixabay."""
         if visual == "archive":
             order = [self._wikimedia, self._loc, self._ia_video, self._met, self._aic, self._openverse,
-                     self._stock, self._pixabay_photos]
+                     self._stock, self._pixabay_photos, self._web_images]
         elif visual == "photo":
-            order = [self._pixabay_photos, self._wikimedia, self._met, self._aic, self._openverse, self._stock]
+            order = [self._pixabay_photos, self._wikimedia, self._met, self._aic, self._openverse, self._web_images, self._stock]
         else:
             order = [self._stock, self._ia_video, self._pixabay_photos, self._wikimedia, self._met]
         for src in order:
@@ -723,6 +801,15 @@ class VisualFinder:
                 break
             add(self._loc(n), need_name=True)
             add(self._openverse(n, min_w=400), need_name=True)
+        before = len(out)
+        for n in names:                                  # и поиск фото в интернете — как в браузере
+            if len(out) >= 8:
+                break
+            add(self._web_images(f"{n} photo", min_w=300), need_name=True)
+        if len(out) > before:
+            self._diag(person, f"интернет: фото {len(out) - before}")
+        if not out:
+            self._diag(person, "ни в одном источнике нет фото с полным именем")
         return out
 
     def find_person(self, person, narration="", topic=""):

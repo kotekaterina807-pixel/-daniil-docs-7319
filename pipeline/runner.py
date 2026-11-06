@@ -260,7 +260,7 @@ def step_build(cfg, niche, project, log=print, stop_flag=lambda: False, progress
             finder.used.add(item.get("url", ""))
     shot_sec = float(cfg.get("shot_seconds", 2.0))
     max_shot = float(cfg.get("max_shot_seconds", 3.2))
-    min_shot = max(3.0, shot_sec * 0.8)          # короче кадр не бывает: частые склейки режут глаз
+    min_shot = max(2.4, shot_sec * 0.8)          # короче кадр не бывает: частые склейки режут глаз
     seg_blocks = [b for b in blocks if b["type"] == "seg"]
     jobs = []
     for bi, b in enumerate(seg_blocks):
@@ -558,29 +558,53 @@ def step_build(cfg, niche, project, log=print, stop_flag=lambda: False, progress
     if cfg.get("visual_check") == "claude_code" and cfg.get("qa_check", True):
         _quality_check(cfg, project, shots, finder, script.get("topic", ""), log, progress)
         # кадр забракован, а замены нет — его время отдаём соседнему кадру (лучше дольше хороший, чем плохой)
-        kept, dropped, carry = [], 0, None
-        for sh in shots:
+        def stretchable(x, extra):
+            # карточки людей, листы с текстом и фото людей не растягиваем; и никакой кадр — дольше 8 с
+            return (x.get("_qa") and not x.get("_bad") and not x.get("person")
+                    and not str(x["_qa"].get("url", "")).startswith(("card:", "doc:"))
+                    and (x["e"] - x["s"] + extra) / SR <= 8.0)
+        kept, dropped = [], 0
+        for i, sh in enumerate(shots):
             if sh.get("_bad"):
-                if kept and kept[-1].get("_qa") and not kept[-1].get("_bad"):
-                    kept[-1]["e"] = sh["e"]                       # предыдущий хороший кадр идёт дольше
+                extra = sh["e"] - sh["s"]
+                nxt = shots[i + 1] if i + 1 < len(shots) else None
+                if kept and stretchable(kept[-1], extra):
+                    kept[-1]["e"] = sh["e"]
                     dropped += 1
                     continue
-                if carry is None:
-                    carry = sh                                    # иначе — следующий хороший начнётся раньше
+                if nxt is not None and stretchable(nxt, extra):
+                    nxt["s"] = sh["s"]
+                    dropped += 1
                     continue
-            if carry is not None and not sh.get("_bad") and sh.get("_qa"):
-                sh["s"] = carry["s"]
-                carry = None
-                dropped += 1
-            elif carry is not None:
-                kept.append(carry)
-                carry = None
             kept.append(sh)
-        if carry is not None:
-            kept.append(carry)
         shots = kept
         if dropped:
             log(f"  Убрано плохих кадров без замены: {dropped} — их время заняли соседние кадры.")
+    # фото/карточка человека — 3–5 секунд: успеть увидеть лицо и прочитать имя, но не висеть 15 секунд
+    for i, sh in enumerate(shots):
+        if not sh.get("person") or (sh["e"] - sh["s"]) / SR <= 5.0:
+            continue
+        cut = sh["s"] + int(4.5 * SR)
+        nxt = shots[i + 1] if i + 1 < len(shots) else None
+        if nxt is not None and not nxt.get("person") and (nxt["e"] - cut) / SR <= 9.0:
+            nxt["s"] = cut                                   # следующий кадр начинается раньше
+            sh["e"] = cut
+        else:                                                # иначе после фото — другой кадр этой же сцены
+            blk = (sh.get("_qa") or {}).get("blk")
+            pool = [x for x in shots if x is not sh and not x.get("person") and x.get("src")
+                    and x["kind"] in ("video", "image") and (x.get("_qa") or {}).get("blk") is blk
+                    and not str((x.get("_qa") or {}).get("url", "")).startswith(("card:", "doc:"))]
+            if not pool:
+                pool = [x for x in shots if not x.get("person") and x.get("src") and x["kind"] in ("video", "image")
+                        and not str((x.get("_qa") or {}).get("url", "")).startswith(("card:", "doc:"))]
+            if pool:
+                src = min(pool, key=lambda x: abs(x["s"] - sh["s"]))
+                extra = dict(src, s=cut, e=sh["e"], offset_n=int(src.get("offset_n", 0)) + 1, first_of_seg=False,
+                             person=False)
+                extra["_qa"] = dict(src.get("_qa") or {})
+                sh["e"] = cut
+                shots.append(extra)
+    shots.sort(key=lambda x: x["s"])
     # подпись с именем — только пока на экране фото/карточка этого человека
     for o in list(overlays):
         if not o.get("person"):
@@ -816,6 +840,8 @@ def _choose_with_claude_code(cfg, project, finder, lines, rev_path, ch_path, top
     if missing:
         log("  Фото не найдено в свободных источниках: " + ", ".join(dict.fromkeys(missing)) +
             " — вместо фото будет карточка с именем и кадры по его теме.")
+    for who, notes in (getattr(finder, "person_diag", {}) or {}).items():
+        log(f"    Поиск фото «{who}»: " + "; ".join(notes[:6]))
     for rnd in (1, 2):                                   # до двух дополнительных кругов поиска
         retry = [by_no[no] for no in by_no if len(choices.get(no, [])) < by_no[no]["n"] and queries.get(no)]
         if not retry:
@@ -990,7 +1016,7 @@ def _assign_specs(script_specs, units):
     docs = {}
     for i, (_, _, t) in enumerate(units):          # цитата в «кавычках» из речи — лист с этим текстом
         m = re.search(r"«([^»]{14,})»", t)
-        if m and len(m.group(1).split()) >= 3:
+        if m and len(m.group(1).split()) >= 6:                # короткая фраза на листе — 2 секунды «Потому» на экране, смысла нет
             docs[i] = m.group(1).strip()
     for v, q in script_specs:                      # [документ] из сценария — к самой похожей фразе
         if v != "document":

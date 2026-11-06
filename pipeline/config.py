@@ -3,8 +3,8 @@ import json
 import os
 from pathlib import Path
 
-VERSION = "7.7 (06.11.2026)"
-CONFIG_REV = 9      # при смене — обновляются настройки монтажа у уже сохранённых конфигов
+VERSION = "7.8 (06.11.2026)"
+CONFIG_REV = 10      # при смене — обновляются настройки монтажа у уже сохранённых конфигов
 ROOT = Path(__file__).resolve().parent.parent
 CONFIG_PATH = ROOT / "config.json"
 NICHES_DIR = ROOT / "niches"
@@ -32,8 +32,8 @@ DEFAULTS = {
     "eleven_style": 0.35,
     "edge_voice": "ru-RU-DmitryNeural",
     "music_volume": 0.12,              # громкость фоновой музыки (0..1)
-    "shot_seconds": 4.5,               # средняя длина одного кадра, сек
-    "max_shot_seconds": 7.0,           # обычно кадр не длиннее этого
+    "shot_seconds": 3.2,               # средняя длина одного кадра, сек
+    "max_shot_seconds": 5.0,           # обычно кадр не длиннее этого
     "show_labels": True,               # всплывающие надписи (места, люди, даты)
     "visual_check": "claude_code",     # claude_code — Claude Code по подписке; claude — Claude по API; chat — листы в чат; none — без проверки
     "claude_code_model": "sonnet",

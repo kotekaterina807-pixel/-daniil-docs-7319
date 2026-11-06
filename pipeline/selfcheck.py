@@ -193,6 +193,20 @@ def _claude_code(cfg):
         return (name, False, str(e)[:300], True)
 
 
+def _people_photos(cfg):
+    """Фото людей: Википедия и поиск картинок в интернете (на примере Джорджа Мэллори)."""
+    name = "Фото людей: Википедия и поиск в интернете"
+    import tempfile
+    from .visuals import VisualFinder
+    f = VisualFinder(cfg, None, tempfile.mkdtemp(), log=lambda m: None)
+    wiki = f._wiki_page_image("George Mallory", "en")
+    web = f._web_images("George Mallory photo", min_w=300)
+    notes = "; ".join((getattr(f, "person_diag", {}) or {}).get("George Mallory", []))
+    msg = f"Википедия: {'работает' if wiki else 'фото не получено' + (' (' + notes + ')' if notes else '')}; " \
+          f"поиск в интернете: {'работает, картинок ' + str(len(web)) if web else 'не отвечает'}"
+    return (name, bool(wiki or web), msg, False)
+
+
 def _report(cfg):
     name = "Отчёты для Claude (GitHub)"
     from . import report
@@ -211,7 +225,7 @@ def run_all(cfg, log=print):
         checks.append(lambda: _claude(cfg))
     if cfg.get("visual_check") == "claude_code":
         checks.append(lambda: _claude_code(cfg))
-    checks += [lambda: _pixabay(cfg), _wikimedia, _archives, lambda: _word_sync(cfg), lambda: _report(cfg)]
+    checks += [lambda: _pixabay(cfg), _wikimedia, _archives, lambda: _people_photos(cfg), lambda: _word_sync(cfg), lambda: _report(cfg)]
     out = []
     for fn in checks:
         try:
