@@ -601,8 +601,8 @@ async function loadVoices() {
         <button class="ibtn danger" data-del title="Убрать из списка">${ICON.trash}</button></div>`;
     }).join("") + (EL.voices.length > 1 ? '<p class="muted small drag-hint">Перетащите голос на первое место — он станет голосом диктора</p>' : "");
   }
-  elRange($("#elSpeed"), S.cfg.eleven_speed ?? 0.9, "#elSpeedVal");
-  elRange($("#elStab"), S.cfg.eleven_stability ?? 0.45, "#elStabVal");
+  elRange($("#elSpeed"), S.cfg.eleven_speed ?? 1.05, "#elSpeedVal");
+  elRange($("#elStab"), S.cfg.eleven_stability ?? 0.35, "#elStabVal");
   if (d.has_key) loadUsage();
 }
 async function loadUsage() {
@@ -773,7 +773,7 @@ $("#elLibBtn").onclick = () => api("/api/open_url", { url: "https://elevenlabs.i
 $("#elUsageBtn").onclick = loadUsage;
 $("#elSpeed").addEventListener("input", (e) => elRange(e.target, e.target.value, "#elSpeedVal"));
 $("#elSpeed").addEventListener("change", (e) => save({ eleven_speed: parseFloat(e.target.value) }));
-$("#elSpeedReset").onclick = () => { elRange($("#elSpeed"), 0.9, "#elSpeedVal"); save({ eleven_speed: 0.9 }); };
+$("#elSpeedReset").onclick = () => { elRange($("#elSpeed"), 1.05, "#elSpeedVal"); save({ eleven_speed: 1.05 }); };
 $("#elStab").addEventListener("input", (e) => elRange(e.target, e.target.value, "#elStabVal"));
 $("#elStab").addEventListener("change", (e) => save({ eleven_stability: parseFloat(e.target.value) }));
 $("#sampleText").addEventListener("change", (e) => { try { localStorage.setItem("ds-sample", e.target.value.trim()); } catch (err) {} });

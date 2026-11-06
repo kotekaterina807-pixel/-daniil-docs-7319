@@ -95,7 +95,7 @@ def el_error(r):
 
 def _el_speed(cfg):
     try:
-        return max(0.7, min(1.2, float(str(cfg.get("eleven_speed", "0.9")).replace(",", "."))))
+        return max(0.7, min(1.2, float(str(cfg.get("eleven_speed", "1.05")).replace(",", "."))))
     except ValueError:
         return 0.9
 
@@ -108,8 +108,8 @@ def _elevenlabs(cfg, text, out_mp3, prev_text, next_text, log, voice=None):
     body = {
         "text": text,
         "model_id": cfg.get("elevenlabs_model", "eleven_multilingual_v2"),
-        "voice_settings": {"stability": float(cfg.get("eleven_stability", 0.45)),
-                           "similarity_boost": 0.8, "style": float(cfg.get("eleven_style", 0.2)),
+        "voice_settings": {"stability": float(cfg.get("eleven_stability", 0.35)),
+                           "similarity_boost": 0.8, "style": float(cfg.get("eleven_style", 0.35)),
                            "use_speaker_boost": True, "speed": _el_speed(cfg)},
     }
     if prev_text:

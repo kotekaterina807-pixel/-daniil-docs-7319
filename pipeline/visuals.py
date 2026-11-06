@@ -112,12 +112,31 @@ class VisualFinder:
                     if wait > 0:
                         time.sleep(wait)
                     self._last_pb = time.time()
-            r = _direct_retry(url, params, timeout, requests.get(url, params=params, headers=UA, timeout=timeout))
+            r = _direct_retry(url, params, timeout, self._fetch(url, params, timeout))
             if r.status_code == 429:
                 time.sleep(15 * (attempt + 1))
                 continue
             return r
         return r
+
+    @staticmethod
+    def _fetch(url, params, timeout):
+        """Обрыв связи (прокси моргнул, SSL-сбой) — не повод выключать источник на всю сборку:
+        ещё 2 попытки через прокси, затем напрямую. Ошибка — только если не вышло ни так, ни так."""
+        import os as _os
+        err = None
+        for k in range(3):
+            try:
+                return requests.get(url, params=params, headers=UA, timeout=timeout)
+            except requests.ConnectionError as e:
+                err = e
+                time.sleep(1.5 * (k + 1))
+        if _os.environ.get("HTTPS_PROXY") or _os.environ.get("https_proxy"):
+            try:
+                return _DIRECT.get(url, params=params, headers=UA, timeout=timeout)
+            except requests.RequestException:
+                pass
+        raise err
 
     def _cached(self, key, fn):
         with self._lock:
@@ -660,13 +679,31 @@ class VisualFinder:
             if "," in n:
                 surnames.add(n.split(",")[0].lower())
         seen, out = set(), []
+        # полное имя: фамилия отдельным словом (не «Irvine-Smith») + имя или инициал.
+        # Иначе находились однофамильцы: «Stella Mallory» вместо Джорджа Мэллори.
+        full = []
+        for n in names:
+            parts = [x.strip(",.").lower() for x in n.replace(",", " ").split() if x.strip(",.")]
+            if len(parts) >= 2:
+                sur, first = (parts[0], parts[1]) if "," in n else (parts[-1], parts[0])
+                full.append((sur, first))
+
+        def name_ok(text):
+            t = text.replace("_", " ").replace("%20", " ")
+            for sur, first in full:
+                if not re.search(rf"(?<![\w-]){re.escape(sur)}(?![\w-])", t):
+                    continue
+                if re.search(rf"(?<![\w-]){re.escape(first)}(?![\w-])", t) or \
+                        re.search(rf"(?<![\w-]){re.escape(first[0])}\.", t):
+                    return True
+            return not full and any(sn in t for sn in surnames)
 
         def add(cands, need_name=False):
             for c in cands:
                 text = (c.get("title", "") + " " + c.get("page", "")).lower()
                 if NOT_PORTRAIT.search(text + " " + c.get("tags", "")):
                     continue                            # памятники, таблички, могилы, марки — не фото человека
-                if c["url"] in seen or (need_name and not any(sn in text for sn in surnames)):
+                if c["url"] in seen or (need_name and not name_ok(text)):
                     continue
                 seen.add(c["url"])
                 out.append(c)
@@ -675,7 +712,7 @@ class VisualFinder:
             for lang in lang_order:
                 add(self._wiki_page_image(n, lang))
                 for t in self._wiki_title(n, lang)[:2]:
-                    if any(sn in t.lower() for sn in surnames):
+                    if name_ok(t.lower()):
                         add(self._wiki_page_image(t, lang))
         for n in names:
             for q in (n, f"{n} portrait", f"{n} photograph"):

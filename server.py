@@ -160,6 +160,14 @@ def run_job(kind, fn):
                     fh.write(time.strftime("%Y-%m-%d %H:%M:%S ") + traceback.format_exc() + "\n")
             except OSError:
                 pass
+            if kind == "build":                         # сборка упала — Claude тоже должен это увидеть
+                try:
+                    c = config.load_config()
+                    projs = sorted((d for d in config.OUTPUT_DIR.iterdir() if d.is_dir()), key=lambda d: d.stat().st_mtime)
+                    if c.get("report_send", True) and c.get("report_repo") and c.get("report_token") and projs:
+                        threading.Thread(target=_report_bg, args=(projs[-1], list(JOB.log)), daemon=True).start()
+                except Exception:
+                    pass
         finally:
             JOB.running = False
             JOB.t_end = time.time()

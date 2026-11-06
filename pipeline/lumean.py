@@ -156,10 +156,10 @@ def _tts_config(cfg, voice_id, language="ru"):
         "language_code": language,
         "advanced_voice_settings": True,
         "prev_next_text": True,
-        "voice_settings": {"stability": float(cfg.get("eleven_stability", 0.45)),
-                           "similarity_boost": 0.8, "style": float(cfg.get("eleven_style", 0.2)),
+        "voice_settings": {"stability": float(cfg.get("eleven_stability", 0.35)),
+                           "similarity_boost": 0.8, "style": float(cfg.get("eleven_style", 0.35)),
                            "use_speaker_boost": True,
-                           "speed": max(0.7, min(1.2, float(cfg.get("eleven_speed", 0.9))))},
+                           "speed": max(0.7, min(1.2, float(cfg.get("eleven_speed", 1.05))))},
     }}
 
 

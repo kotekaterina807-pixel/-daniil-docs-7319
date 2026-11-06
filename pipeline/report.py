@@ -101,6 +101,15 @@ def video_grids(video, out_dir, every=2.0, per=20):
     return grids
 
 
+def _mask(text):
+    """Ключи никогда не уходят в отчёт: key=..., token=..., Bearer ..., логин:пароль@ прокси."""
+    import re
+    text = re.sub(r"(?i)((?:api_?)?key|token|apikey|password|secret)=([^&\s'\"]+)", r"\1=•••", text)
+    text = re.sub(r"(?i)(bearer|bot)\s*[:]?\s*[A-Za-z0-9_\-:.]{12,}", r"\1 •••", text)
+    text = re.sub(r"(?i)(github_pat_|ghp_|sk-|lk-)[A-Za-z0-9_\-]+", r"\1•••", text)
+    return re.sub(r"//[^/@\s:]+:[^/@\s]+@", "//•••:•••@", text)
+
+
 def send(cfg, project, log_lines, log=print):
     """Отправляет отчёт о проекте. Возвращает папку в репозитории."""
     repo = check(cfg)
@@ -122,8 +131,12 @@ def send(cfg, project, log_lines, log=print):
             files += video_grids(video, tmp)
         except Exception as e:
             log(f"  Отчёт: кадры видео не получились ({e}).")
-    (tmp / "журнал.txt").write_text("\n".join(log_lines or []), encoding="utf-8")
+    (tmp / "журнал.txt").write_text(_mask("\n".join(log_lines or [])), encoding="utf-8")
     files.append(tmp / "журнал.txt")
+    err = Path(__file__).resolve().parent.parent / "error_log.txt"       # подробности последних ошибок
+    if err.exists():
+        (tmp / "ошибки.txt").write_text(_mask(err.read_text(encoding="utf-8", errors="replace")[-6000:]), encoding="utf-8")
+        files.append(tmp / "ошибки.txt")
     info = {"project": project.name, "video": video.name if video else None,
             "sent": time.strftime("%Y-%m-%d %H:%M:%S"), "version": cfg.get("_version", "")}
     log(f"  Отчёт для Claude: отправляю {len(files)} файлов в GitHub...")

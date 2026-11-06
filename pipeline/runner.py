@@ -14,7 +14,7 @@ from .config import MUSIC_DIR, OUTPUT_DIR, ensure_dirs, ffmpeg_exe, lang
 from . import library
 from .visuals import VisualFinder
 
-PAUSE_SEC = 0.8      # пауза между абзацами
+PAUSE_SEC = 0.45     # пауза между абзацами (0.8 звучало как допрос — слишком рвано)
 CARD_SEC = 1.8       # название главы поверх видео
 TITLE_SEC = 4.0      # заставка с названием в начале
 LABEL_SEC = 5.0      # сколько держится всплывающая подпись
@@ -401,7 +401,7 @@ def step_build(cfg, niche, project, log=print, stop_flag=lambda: False, progress
     def first_video(items):
         return next((it for it in items if it["kind"] == "video"), items[0] if items else None)
 
-    def add_overlay(png, start_sec, dur_sec, anim):
+    def add_overlay(png, start_sec, dur_sec, anim, person=False):
         """Надписи никогда не накладываются: если место занято, надпись ждёт (до 3 с), иначе пропускается."""
         if anim in ("label", "title"):
             busy = [(o["start"] / render.FPS, (o["start"] + o["frames"]) / render.FPS)
@@ -413,7 +413,7 @@ def step_build(cfg, niche, project, log=print, stop_flag=lambda: False, progress
             if start_sec - want > 3.0:
                 return False
         overlays.append({"png": str(png), "start": int(round(start_sec * render.FPS)),
-                         "frames": max(1, int(round(dur_sec * render.FPS))), "anim": anim})
+                         "frames": max(1, int(round(dur_sec * render.FPS))), "anim": anim, "person": person})
         return True
 
     zoom_flip = False
@@ -482,7 +482,7 @@ def step_build(cfg, niche, project, log=print, stop_flag=lambda: False, progress
                 lp = shots_dir / f"label2_{_key(nm, str(accent))}.png"
                 extras.make_label(nm, lp, accent)
                 dur = min(LABEL_SEC - 1, length - 0.2)
-                add_overlay(lp, seg_start + t0 + 0.1, dur, "label")
+                add_overlay(lp, seg_start + t0 + 0.1, dur, "label", person=True)
                 busy_until[0] = seg_start + t0 + 0.1 + dur
             if spec["visual"] == "person":
                 has_photo = any(it.get("person") for it in items)
@@ -499,7 +499,7 @@ def step_build(cfg, niche, project, log=print, stop_flag=lambda: False, progress
                     lp = shots_dir / f"label2_{_key(spec['shown'], str(accent))}.png"
                     extras.make_label(spec["shown"] + (" | " + spec["role"] if spec.get("role") else ""), lp, accent)
                     dur = min(LABEL_SEC - 1, length - 0.2)
-                    add_overlay(lp, seg_start + t0 + 0.1, dur, "label")
+                    add_overlay(lp, seg_start + t0 + 0.1, dur, "label", person=True)
                     busy_until[0] = max(busy_until[0], seg_start + t0 + 0.1 + dur)
             if not items:
                 if spec.get("_merged"):                 # время этой строки уже отдано соседней
@@ -541,6 +541,7 @@ def step_build(cfg, niche, project, log=print, stop_flag=lambda: False, progress
                     "clip_dur": (it or {}).get("duration", 0), "offset_n": uses, "speed": (it or {}).get("speed", 1.0),
                     "s": b["start"] + int((t0 + edges[j]) * SR), "e": b["start"] + int((t0 + edges[j + 1]) * SR),
                     "mood": s.get("mood", "normal"), "first_of_seg": first_in_seg, "zoom_in": zoom_flip,
+                    "person": bool((it or {}).get("person")),
                     "_qa": {"blk": b, "spec": spec, "a": t0 + edges[j], "b": t0 + edges[j + 1],
                             "url": (it or {}).get("url", "")},
                 })
@@ -556,6 +557,49 @@ def step_build(cfg, niche, project, log=print, stop_flag=lambda: False, progress
 
     if cfg.get("visual_check") == "claude_code" and cfg.get("qa_check", True):
         _quality_check(cfg, project, shots, finder, script.get("topic", ""), log, progress)
+        # кадр забракован, а замены нет — его время отдаём соседнему кадру (лучше дольше хороший, чем плохой)
+        kept, dropped, carry = [], 0, None
+        for sh in shots:
+            if sh.get("_bad"):
+                if kept and kept[-1].get("_qa") and not kept[-1].get("_bad"):
+                    kept[-1]["e"] = sh["e"]                       # предыдущий хороший кадр идёт дольше
+                    dropped += 1
+                    continue
+                if carry is None:
+                    carry = sh                                    # иначе — следующий хороший начнётся раньше
+                    continue
+            if carry is not None and not sh.get("_bad") and sh.get("_qa"):
+                sh["s"] = carry["s"]
+                carry = None
+                dropped += 1
+            elif carry is not None:
+                kept.append(carry)
+                carry = None
+            kept.append(sh)
+        if carry is not None:
+            kept.append(carry)
+        shots = kept
+        if dropped:
+            log(f"  Убрано плохих кадров без замены: {dropped} — их время заняли соседние кадры.")
+    # подпись с именем — только пока на экране фото/карточка этого человека
+    for o in list(overlays):
+        if not o.get("person"):
+            continue
+        a = o["start"] / render.FPS
+        b_ = a + o["frames"] / render.FPS
+        host = next((sh for sh in shots if sh.get("person") and sh["s"] / SR < b_ and sh["e"] / SR > a), None)
+        if not host:
+            overlays.remove(o)
+            continue
+        end = min(b_, host["e"] / SR - 0.15)
+        start = max(a, host["s"] / SR + 0.1)
+        if end - start < 1.2:
+            overlays.remove(o)
+            continue
+        o["start"] = int(round(start * render.FPS))
+        o["frames"] = int(round((end - start) * render.FPS))
+    for o in overlays:
+        o.pop("person", None)
     for sh in shots:
         sh.pop("_qa", None)
 
@@ -1001,8 +1045,12 @@ def _quality_check(cfg, project, shots, finder, topic, log, progress):
         entries.append({"no": len(entries) + 1, "time": sh["s"] / SR, "said": said[:220], "shot": sh,
                         "alts": alts[:3]})
     try:
-        qa.check(cfg, project, entries, finder, topic, log,
-                 lambda f, msg: progress(0.42 + 0.03 * f, msg))
+        rep = qa.check(cfg, project, entries, finder, topic, log,
+                       lambda f, msg: progress(0.42 + 0.03 * f, msg))
+        bad = set(rep.get("bad_left") or [])
+        for e in entries:
+            if e["no"] in bad:
+                e["shot"]["_bad"] = True
     except Exception as e:
         log(f"  Контроль качества не выполнен ({e}) — монтирую как есть.")
 

@@ -3,8 +3,8 @@ import json
 import os
 from pathlib import Path
 
-VERSION = "7.6 (06.11.2026)"
-CONFIG_REV = 8      # при смене — обновляются настройки монтажа у уже сохранённых конфигов
+VERSION = "7.7 (06.11.2026)"
+CONFIG_REV = 9      # при смене — обновляются настройки монтажа у уже сохранённых конфигов
 ROOT = Path(__file__).resolve().parent.parent
 CONFIG_PATH = ROOT / "config.json"
 NICHES_DIR = ROOT / "niches"
@@ -27,9 +27,9 @@ DEFAULTS = {
     "lumean_template_id": "",          # шаблон «DocuStudio» в Lumean (создаётся сам)
     "lumean_ai_model": "",             # модель Claude в Lumean; пусто — самая новая Sonnet
     "eleven_voices": [],               # сохранённые голоса ElevenLabs: [{id, name, desc, preview}]
-    "eleven_speed": 0.9,               # скорость речи ElevenLabs (0.7–1.2)
-    "eleven_stability": 0.45,
-    "eleven_style": 0.2,
+    "eleven_speed": 1.05,               # скорость речи ElevenLabs (0.7–1.2)
+    "eleven_stability": 0.35,
+    "eleven_style": 0.35,
     "edge_voice": "ru-RU-DmitryNeural",
     "music_volume": 0.12,              # громкость фоновой музыки (0..1)
     "shot_seconds": 4.5,               # средняя длина одного кадра, сек
@@ -126,6 +126,12 @@ def load_config() -> dict:
         if int(cfg.get("config_rev", 0) or 0) < 8 and not str(cfg.get("anthropic_key", "")).strip() \
                 and cfg.get("visual_check") in ("claude", "auto"):
             cfg["visual_check"] = "claude_code"       # кадры проверяет Claude по подписке, без оплаты API
+        if int(cfg.get("config_rev", 0) or 0) < 9:     # живее голос: был медленный и ровный
+            if float(cfg.get("eleven_speed", 0.9) or 0.9) <= 0.95:
+                cfg["eleven_speed"] = DEFAULTS["eleven_speed"]
+            if float(cfg.get("eleven_stability", 0.45) or 0.45) >= 0.45:
+                cfg["eleven_stability"] = DEFAULTS["eleven_stability"]
+            cfg["eleven_style"] = DEFAULTS["eleven_style"]
         cfg["config_rev"] = CONFIG_REV
     return cfg
 

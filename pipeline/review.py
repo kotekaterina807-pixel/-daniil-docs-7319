@@ -70,7 +70,7 @@ def collect(finder, spec, taken):
                     pool.append(g[k])
         if len(pool) < CANDS:                      # мало — фото этих предметов (они есть почти всегда)
             for q in planned[:2]:
-                for c in finder._candidates("photo", [q])[:3]:
+                for c in __import__("itertools").islice(finder._candidates("photo", [q]), 3):
                     if c.get("thumb") and c["url"] not in taken and c["url"] not in seen_pool:
                         seen_pool.add(c["url"])
                         pool.append(c)
