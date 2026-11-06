@@ -8,7 +8,14 @@ SENT_SPLIT = re.compile(r"(?<=[.!?…])\s+")
 
 
 def sentences(text):
-    return [s for s in SENT_SPLIT.split(text.strip()) if s]
+    """Предложения; цитата в «кавычках» не разрывается, даже если внутри неё точка."""
+    out = []
+    for s in (x for x in SENT_SPLIT.split(text.strip()) if x):
+        if out and out[-1].count("«") > out[-1].count("»"):
+            out[-1] += " " + s
+        else:
+            out.append(s)
+    return out
 
 
 def find_pauses(wav_path, min_len=0.12):

@@ -864,13 +864,18 @@ def _speech_units(sents, pauses, span, rec=None):
     Границы притягиваются к паузам речи, кадр меняется чуть раньше слов."""
     units = []
     for a, b, txt in sents:
-        if b - a <= 6.5:
+        has_quote = bool(re.search(r"«[^»]{14,}»", txt))
+        if b - a <= 6.5 and not has_quote:
             units.append([a, b, txt])
             continue
-        parts = [x for x in re.split(r"(?<=[,;:])\s+|\s+(?=[—–]\s)", txt) if x.strip()]
+        if has_quote:                              # цитата — отдельный кадр (лист с текстом) ровно на её словах
+            parts = [x for x in re.split(r"\s*(?=«)|(?<=»)\s*", txt) if x.strip()]
+        else:
+            parts = [x for x in re.split(r"(?<=[,;:])\s+|\s+(?=[—–]\s)", txt) if x.strip()]
         merged = []
-        for x in parts:                            # слишком короткие кусочки склеиваем
-            if merged and (len(merged[-1]) < 35 or len(x) < 18):
+        for x in parts:                            # слишком короткие кусочки склеиваем (цитату — никогда)
+            if merged and not x.startswith("«") and not merged[-1].startswith("«") \
+                    and (len(merged[-1]) < 35 or len(x) < 18):
                 merged[-1] += " " + x
             else:
                 merged.append(x)
@@ -884,7 +889,7 @@ def _speech_units(sents, pauses, span, rec=None):
                 bounds = [a + x for x in starts] + [b]
                 for j, x in enumerate(merged):
                     t0_, t1_ = bounds[j], bounds[j + 1]
-                    if j > 0 and t1_ - t0_ < 2.2:          # слишком короткая часть — к предыдущей
+                    if j > 0 and t1_ - t0_ < 2.2 and not x.startswith("«") and not units[-1][2].startswith("«"):
                         units[-1][1] = t1_
                         units[-1][2] += " " + x
                     else:
@@ -899,7 +904,7 @@ def _speech_units(sents, pauses, span, rec=None):
                 near = [pt for pt, ln in pauses if abs(pt - end) <= 0.7 and a + 1.5 < pt < b - 1.5]
                 if near:
                     end = min(near, key=lambda pt: abs(pt - end))
-            if end - t >= 2.2 or j == len(merged) - 1:
+            if end - t >= 2.2 or j == len(merged) - 1 or x.startswith("«") or (j + 1 < len(merged) and merged[j + 1].startswith("«")):
                 units.append([t, end, x])
                 t = end
             else:

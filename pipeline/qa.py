@@ -178,8 +178,8 @@ def check(cfg, project, entries, finder, topic, log, progress=None):
             e["frame_img"] = _frame(e["shot"], tmp / f"{e['no']}_final.jpg")
             e["alts"] = []
         _sheets(entries, project, prefix="раскадровка")
-    except Exception:
-        pass
+    except Exception as e:
+        log(f"  Итоговая раскадровка не сохранилась: {e}")
     for e in entries:
         e.pop("frame_img", None)
     return report
