@@ -535,9 +535,43 @@ def assemble(shots, out, workdir, log=print, group_size=20, on_progress=lambda d
     os.replace(tmp, out)
 
 
-def final_mix(video, narration, music, out, total_sec, music_volume=0.12):
+def _final_mix_sfx(cmd, music, out, total_sec, music_volume, sfx, fade_out_start):
+    cmd = list(cmd)
+    idx = 2
+    parts = ["[1:a]aformat=sample_rates=48000:channel_layouts=stereo,asplit=2[n1][n2]"]
+    mix = ["[n1]"]
+    if music:
+        cmd += ["-stream_loop", "-1", "-i", str(music)]
+        parts.append(f"[{idx}:a]aformat=sample_rates=48000:channel_layouts=stereo,volume={music_volume}[m]")
+        parts.append("[m][n2]sidechaincompress=threshold=0.03:ratio=6:attack=30:release=600[duck]")
+        mix.append("[duck]")
+        idx += 1
+    else:
+        parts.append("[n2]anullsink")
+    for k, e in enumerate(sfx):
+        cmd += ["-stream_loop", "-1", "-i", e["file"]]
+        ms = int(e["at"] * 1000)
+        parts.append(f"[{idx}:a]aformat=sample_rates=48000:channel_layouts=stereo,atrim=0:{e['dur']:.2f},"
+                     f"afade=t=out:st={max(0.0, e['dur'] - 0.4):.2f}:d=0.4,volume={e['vol']},"
+                     f"adelay={ms}|{ms}[s{k}]")
+        mix.append(f"[s{k}]")
+        idx += 1
+    parts.append("".join(mix) + f"amix=inputs={len(mix)}:duration=first:normalize=0,"
+                 f"loudnorm=I=-14:TP=-1.5:LRA=11,afade=t=in:d=1.5,afade=t=out:st={fade_out_start:.2f}:d=3[a]")
+    cmd += ["-filter_complex", ";".join(parts), "-map", "0:v", "-map", "[a]", "-c:v", "copy",
+            "-c:a", "aac", "-b:a", "192k", "-ar", "48000", "-t", f"{total_sec:.3f}",
+            "-movflags", "+faststart", str(out)]
+    _run(cmd)
+
+
+def final_mix(video, narration, music, out, total_sec, music_volume=0.12, sfx=None):
     fade_out_start = max(total_sec - 3, 0)
     cmd = [ffmpeg_exe(), "-y", "-hide_banner", "-loglevel", "error", "-i", str(video), "-i", str(narration)]
+    if sfx:
+        try:
+            return _final_mix_sfx(cmd, music, out, total_sec, music_volume, sfx, fade_out_start)
+        except Exception:
+            pass                                     # звуки не сложились — сводим как раньше
     if music:
         cmd += ["-stream_loop", "-1", "-i", str(music)]
         filt = (f"[1:a]aformat=sample_rates=48000:channel_layouts=stereo,asplit=2[n1][n2];"

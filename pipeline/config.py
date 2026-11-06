@@ -3,12 +3,13 @@ import json
 import os
 from pathlib import Path
 
-VERSION = "7.8 (06.11.2026)"
+VERSION = "7.9 (06.11.2026)"
 CONFIG_REV = 10      # при смене — обновляются настройки монтажа у уже сохранённых конфигов
 ROOT = Path(__file__).resolve().parent.parent
 CONFIG_PATH = ROOT / "config.json"
 NICHES_DIR = ROOT / "niches"
 MUSIC_DIR = ROOT / "music"
+SFX_DIR = ROOT / "sfx"        # звуки: typewriter*.mp3 — печать на листах, whoosh*.mp3 — переход к главе
 OUTPUT_DIR = ROOT / "output"
 
 DEFAULTS = {

@@ -104,6 +104,28 @@ def _pick_music(niche):
     return random.choice(files) if files else None
 
 
+def _sfx_file(kind):
+    from .config import SFX_DIR
+    if not SFX_DIR.exists():
+        return None
+    files = [p for p in SFX_DIR.iterdir() if p.name.lower().startswith(kind) and
+             p.suffix.lower() in (".mp3", ".wav", ".m4a", ".ogg", ".flac")]
+    return random.choice(files) if files else None
+
+
+def _sfx_events(shots):
+    """Звуковые акценты: стук машинки, пока печатается лист, и «вжух» перед новой главой."""
+    tw, wh = _sfx_file("typewriter"), _sfx_file("whoosh")
+    ev = []
+    for sh in shots:
+        t0, t1 = sh["s"] / SR, sh["e"] / SR
+        if tw and Path(str(sh.get("src", ""))).name.startswith("doc_"):
+            ev.append({"file": str(tw), "at": t0 + 0.3, "dur": max(0.5, min(t1 - t0 - 0.6, 8.0)), "vol": 0.35})
+        elif wh and sh.get("role") == "card":
+            ev.append({"file": str(wh), "at": max(0.0, t0 - 0.4), "dur": 2.5, "vol": 0.5})
+    return ev[:30]
+
+
 OLD_LOOK = ("eq=saturation=0.74:contrast=1.07:gamma=0.97,"
             "colorbalance=rs=0.05:gs=0.015:bs=-0.06:rm=0.03:bm=-0.04:rh=0.02:bh=-0.03,"
             "noise=alls=7:allf=t,vignette=PI/4.6")    # «староватая» плёнка: тёплый выцветший цвет, зерно, виньетка
@@ -673,7 +695,10 @@ def step_build(cfg, niche, project, log=print, stop_flag=lambda: False, progress
     music = _pick_music(niche)
     log(f"Свожу звук{' с музыкой: ' + music.name if music else ' (музыки нет: положите mp3 в папку music)'}...")
     final = project / f"{_slug(script.get('title', 'video'))}.mp4"
-    render.final_mix(video_only, narration, music, final, total_sec, float(cfg.get("music_volume", 0.12)))
+    sfx = _sfx_events(shots)
+    if sfx:
+        log(f"  Звуки: {len(sfx)} (печатная машинка на листах, переходы к главам).")
+    render.final_mix(video_only, narration, music, final, total_sec, float(cfg.get("music_volume", 0.12)), sfx=sfx)
 
     # ---------- 6. субтитры, описание, обложки ----------
     extras.write_srt(subs, project / "subtitles.srt")

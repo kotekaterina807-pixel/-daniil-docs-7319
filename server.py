@@ -30,7 +30,7 @@ PORTS = list(range(8765, 8785))
 _NO_WINDOW = 0x08000000 if os.name == "nt" else 0
 
 # Файлы и папки пользователя — обновление их не трогает
-KEEP = {"config.json", "output", "footage", "music", "voice_samples", ".venv", ".ui_profile", ".ui_webview",
+KEEP = {"config.json", "output", "footage", "music", "sfx", "voice_samples", ".venv", ".ui_profile", ".ui_webview",
         ".ui_port", ".ui_token", "error_log.txt"}
 
 SAMPLE_TEXT = ("В декабре тысяча девятисотого года с маяка на крошечном острове исчезли три смотрителя. "

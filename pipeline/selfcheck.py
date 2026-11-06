@@ -207,6 +207,23 @@ def _people_photos(cfg):
     return (name, bool(wiki or web), msg, False)
 
 
+def _music():
+    name = "Музыка и звуки"
+    from .config import MUSIC_DIR, SFX_DIR
+    ext = (".mp3", ".wav", ".m4a", ".ogg", ".flac")
+    for d in (MUSIC_DIR, SFX_DIR):
+        d.mkdir(exist_ok=True)
+    mus = [p for p in MUSIC_DIR.rglob("*") if p.suffix.lower() in ext] if MUSIC_DIR.exists() else []
+    sfx = [p.name.lower() for p in SFX_DIR.iterdir() if p.suffix.lower() in ext] if SFX_DIR.exists() else []
+    tw = sum(n.startswith("typewriter") for n in sfx)
+    wh = sum(n.startswith("whoosh") for n in sfx)
+    if not mus:
+        return (name, False, "нет фоновой музыки — видео звучит пусто. Положите 5–10 треков в папку music "
+                             "(YouTube Studio > Фонотека)", False)
+    return (name, True, f"треков музыки: {len(mus)}; звуки: машинка {tw}, переходы {wh}"
+            + ("" if tw and wh else " — звуки по желанию, папка sfx"), False)
+
+
 def _report(cfg):
     name = "Отчёты для Claude (GitHub)"
     from . import report
@@ -225,7 +242,7 @@ def run_all(cfg, log=print):
         checks.append(lambda: _claude(cfg))
     if cfg.get("visual_check") == "claude_code":
         checks.append(lambda: _claude_code(cfg))
-    checks += [lambda: _pixabay(cfg), _wikimedia, _archives, lambda: _people_photos(cfg), lambda: _word_sync(cfg), lambda: _report(cfg)]
+    checks += [lambda: _pixabay(cfg), _wikimedia, _archives, lambda: _people_photos(cfg), _music, lambda: _word_sync(cfg), lambda: _report(cfg)]
     out = []
     for fn in checks:
         try:
