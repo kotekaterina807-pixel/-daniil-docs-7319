@@ -337,8 +337,7 @@
           <div class="set-row">
             <div><b>Озвучка</b><p class="muted small">Lumean — основной вариант, голос выбирается во вкладке «Голоса»</p></div>
             <div class="select-wrap"><select data-key="tts_provider">
-              <option value="lumean">Lumean (голоса ElevenLabs)</option><option value="elevenlabs">ElevenLabs напрямую</option>
-              <option value="openai">OpenAI</option><option value="edge">Edge (бесплатно)</option></select></div>
+              <option value="lumean">Lumean (голоса ElevenLabs)</option><option value="edge">Edge (бесплатно, запасной)</option></select></div>
           </div>
         </div>
       </div>
@@ -350,26 +349,6 @@
           <div class="key-row" data-k="pixabay_key" data-label="Ключ Pixabay" data-secret="1" data-hint="видео и фото"></div>
           <div class="row gap" style="margin:6px 0 4px">
             <button class="btn ghost small" data-url="https://lumean.app/developers">Открыть ключи Lumean</button>
-          </div>
-          <h3 class="sec">Дополнительно — не нужны, если есть ключ Lumean</h3>
-          <div class="key-row" data-k="elevenlabs_key" data-label="Ключ ElevenLabs (напрямую)" data-secret="1" data-hint="только если озвучка «ElevenLabs напрямую»"></div>
-          <div class="key-row" data-k="anthropic_key" data-label="Ключ Claude (напрямую)" data-secret="1" data-hint="без него Claude работает через Lumean"></div>
-          <div class="key-row" data-k="pexels_key" data-label="Ключ Pexels" data-secret="1"></div>
-          <div class="key-row" data-k="openai_key" data-label="Ключ OpenAI" data-secret="1"></div>
-          <h3 class="sec">Подключение</h3>
-          <div class="key-row" data-k="proxy_url" data-label="Прокси только для программы" data-hint="порт из VPN-приложения, например 127.0.0.1:10808 · пусто — как обычно"></div>
-          <h3 class="sec">Telegram — готовые видео сразу в телефон</h3>
-          <div class="key-row" data-k="tg_token" data-label="Токен бота Telegram" data-secret="1" data-hint="создайте бота в @BotFather и вставьте его токен"></div>
-          <div class="set-row">
-            <div><b>Подключение</b><p class="muted small" id="tgStatus">Не подключено</p></div>
-            <div class="row gap">
-              <button class="btn ghost small" data-url="https://t.me/BotFather">Открыть @BotFather</button>
-              <button class="btn ghost small" id="tgConnectBtn">Подключить</button>
-            </div>
-          </div>
-          <div class="set-row">
-            <div><b>Отправлять каждое готовое видео</b><p class="muted small">Видео больше 50 МБ уходит лёгкой копией (лимит ботов Telegram), полное — в папке проекта</p></div>
-            <label class="switch"><input type="checkbox" data-key="tg_send"><span></span></label>
           </div>
           <h3 class="sec">Отчёты для Claude — проверка готовых видео</h3>
           <div class="set-row">
@@ -384,6 +363,21 @@
               <button class="btn ghost small" id="repCheckBtn">Проверить</button>
               <label class="switch"><input type="checkbox" data-key="report_send"><span></span></label>
             </div>
+          </div>
+          <h3 class="sec">Подключение</h3>
+          <div class="key-row" data-k="proxy_url" data-label="Прокси только для программы" data-hint="порт из VPN-приложения, например 127.0.0.1:10808 · пусто — как обычно"></div>
+          <h3 class="sec">Telegram — готовые видео сразу в телефон</h3>
+          <div class="key-row" data-k="tg_token" data-label="Токен бота Telegram" data-secret="1" data-hint="создайте бота в @BotFather и вставьте его токен"></div>
+          <div class="set-row">
+            <div><b>Подключение</b><p class="muted small" id="tgStatus">Не подключено</p></div>
+            <div class="row gap">
+              <button class="btn ghost small" data-url="https://t.me/BotFather">Открыть @BotFather</button>
+              <button class="btn ghost small" id="tgConnectBtn">Подключить</button>
+            </div>
+          </div>
+          <div class="set-row">
+            <div><b>Отправлять каждое готовое видео</b><p class="muted small">Видео больше 50 МБ уходит лёгкой копией (лимит ботов Telegram), полное — в папке проекта</p></div>
+            <label class="switch"><input type="checkbox" data-key="tg_send"><span></span></label>
           </div>
           <h3 class="sec">Claude Code — проверка кадров по подписке</h3>
           <div class="set-row">

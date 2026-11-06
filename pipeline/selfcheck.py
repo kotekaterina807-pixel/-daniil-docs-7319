@@ -187,6 +187,16 @@ def _claude_code(cfg):
         return (name, False, str(e)[:300], True)
 
 
+def _report(cfg):
+    name = "Отчёты для Claude (GitHub)"
+    from . import report
+    try:
+        repo = report.check(cfg)
+        return (name, True, f"закрытый репозиторий {repo} — отчёты после каждой сборки уходят Claude", False)
+    except Exception as e:
+        return (name, False, str(e)[:300], False)
+
+
 def run_all(cfg, log=print):
     checks = [_ffmpeg, _gpu, _disk]
     checks.append(lambda: _proxy(cfg))
@@ -195,7 +205,7 @@ def run_all(cfg, log=print):
         checks.append(lambda: _claude(cfg))
     if cfg.get("visual_check") == "claude_code":
         checks.append(lambda: _claude_code(cfg))
-    checks += [lambda: _pixabay(cfg), _wikimedia, _archives, lambda: _word_sync(cfg)]
+    checks += [lambda: _pixabay(cfg), _wikimedia, _archives, lambda: _word_sync(cfg), lambda: _report(cfg)]
     out = []
     for fn in checks:
         try:
