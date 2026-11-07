@@ -1,6 +1,7 @@
 """Контроль качества перед монтажом: Claude Code смотрит КАЖДЫЙ кадр готового видеоряда вместе
 со словами, которые звучат в этот момент, и заменяет неподходящие на лучший запасной вариант.
 Листы проверки и отчёт сохраняются в папке проекта (проверка_NN.jpg, проверка.json)."""
+import itertools
 import json
 import subprocess
 import textwrap
@@ -35,14 +36,16 @@ PROMPT = """Ты — строгий редактор документально�
 Ответ — ТОЛЬКО строки, по одной на каждый кадр, без пояснений:
 7: ok
 8: 2      ← кадр плохой, лучше запасной вариант 2
-9: плохо  ← кадр плохой, и запасные тоже не подходят
+9: плохо | search: wooden barrels ship hold; old ship cargo barrels   ← плохой, запасные не подходят
+Для каждого плохого кадра без замены ОБЯЗАТЕЛЬНО допиши после «search:» 1–2 точных английских запроса
+(2–5 слов) — что именно искать, чтобы кадр совпал со словами.
 {draw}"""
 
 DRAW = """
-Если кадр плохой и запасные не подходят — опиши по-английски картинку, которую художник нарисует ВМЕСТО него,
+Кроме запросов, для плохого кадра опиши по-английски картинку, которую художник нарисует, если поиск не поможет,
 ровно про эти слова диктора: место, время года и суток, эпоха, предметы, действие, ракурс. Лица реальных людей
 не рисуем: люди — со спины, силуэтом, издалека или в капюшонах/масках. Без надписей. Формат:
-9: плохо | draw: two climbers in 1920s wool clothing seen from behind on a snowy ridge, clouds parting, Everest
+9: плохо | search: snowy ridge climbers 1920s | draw: two climbers in 1920s wool clothing seen from behind on a snowy ridge
 """
 
 
@@ -114,6 +117,7 @@ def _sheets(entries, out_dir, prefix="проверка"):
 
 
 PROMPTS = {}          # номер кадра → что нарисовать (из последнего ответа Claude)
+SEARCHES = {}         # номер кадра → новые запросы, если кадр плохой и запасные не подошли
 
 
 def parse(text):
@@ -125,10 +129,13 @@ def parse(text):
         no, _, verdict = line.partition(":")
         if not no.strip().isdigit():
             continue
-        verdict, _, draw = verdict.partition("|")
-        draw = draw.strip()
-        if draw.lower().startswith("draw:"):
-            PROMPTS[int(no)] = draw[5:].strip()
+        verdict, _, extra = verdict.partition("|")
+        for part in extra.split("|"):
+            part = part.strip()
+            if part.lower().startswith("draw:"):
+                PROMPTS[int(no)] = part[5:].strip()
+            elif part.lower().startswith("search:"):
+                SEARCHES[int(no)] = [q.strip(" .\"'") for q in part[7:].split(";") if q.strip(" .\"'")][:2]
         v = verdict.strip().lower()
         if v.startswith("ok") or v.startswith("ок"):
             out[int(no)] = "ok"
@@ -139,7 +146,7 @@ def parse(text):
     return out
 
 
-def check(cfg, project, entries, finder, topic, log, progress=None):
+def check(cfg, project, entries, finder, topic, log, progress=None, taken=None, _round=1):
     """entries: [{"no", "time", "said", "shot", "alts"}]. Меняет shot на месте. Возвращает отчёт."""
     if not entries:
         return {}
@@ -147,13 +154,15 @@ def check(cfg, project, entries, finder, topic, log, progress=None):
     tmp.mkdir(exist_ok=True)
     for e in entries:
         e["frame_img"] = _frame(e["shot"], tmp / f"{e['no']}.jpg")
-    names = _sheets(entries, project)
+    names = _sheets(entries, project, prefix="проверка" if _round == 1 else "проверка_повтор")
     from . import illustrate
     draw_on = illustrate.available(cfg)
-    log(f"Контроль качества: Claude Code проверяет каждый кадр ({len(entries)} шт., листов {len(names)})...")
+    log(f"Контроль качества: Claude Code проверяет каждый кадр ({len(entries)} шт., листов {len(names)})..."
+        if _round == 1 else f"  Повторная проверка: {len(entries)} кадров с новыми вариантами...")
     verdicts = {}
     done = [0]
     PROMPTS.clear()
+    SEARCHES.clear()
 
     def one(name):
         ans = claude_code.run(cfg, PROMPT.format(sheet=name, topic=topic or "документальное видео",
@@ -168,6 +177,7 @@ def check(cfg, project, entries, finder, topic, log, progress=None):
     by_no = {e["no"]: e for e in entries}
     verdicts = {k: v for k, v in verdicts.items() if k in by_no}
     prompts = {k: v for k, v in PROMPTS.items() if k in by_no}
+    searches = {k: v for k, v in SEARCHES.items() if k in by_no}
     replaced, bad = 0, []
     used = set()
     for no, v in sorted(verdicts.items()):
@@ -188,8 +198,36 @@ def check(cfg, project, entries, finder, topic, log, progress=None):
                 replaced += 1
                 continue
         bad.append(no)
+    taken = set(taken or ()) | used
+    if _round == 1 and bad:                          # второй шанс: новый поиск по запросам Claude и ещё одна проверка
+        retry = []
+        for no in bad:
+            qs = searches.get(no) or []
+            if not qs:
+                continue
+            cands, seen = [], set()
+            for q in qs:
+                for src in (finder._candidates("archive", [q]), iter(finder._web_images(q)),
+                            finder._candidates("stock", [q])):
+                    for c in itertools.islice(src, 4):
+                        if c.get("url") and c["url"] not in taken and c["url"] not in seen and c.get("thumb"):
+                            seen.add(c["url"])
+                            cands.append(c)
+                    if len(cands) >= 6:
+                        break
+            if cands:
+                e = by_no[no]
+                retry.append({"no": no, "time": e["time"], "said": e["said"], "shot": e["shot"], "alts": cands[:3]})
+        if retry:
+            log(f"  Нет подходящей замены у {len(retry)} кадров — ищу по новым запросам Claude и проверяю ещё раз...")
+            rep2 = check(cfg, project, retry, finder, topic, log, None, taken, _round=2)
+            fixed = {int(k) for k in (rep2.get("verdicts") or {})} - set(rep2.get("bad_left") or [])
+            replaced += len(fixed)
+            bad = [n for n in bad if n not in fixed]
+            for k, v in (rep2.get("prompts") or {}).items():
+                prompts.setdefault(int(k), v)
     drawn = 0
-    if draw_on and bad:                               # нет подходящего кадра — рисуем ровно про эти слова
+    if draw_on and bad and _round == 1:                               # нет подходящего кадра — рисуем ровно про эти слова
         from concurrent.futures import ThreadPoolExecutor as _TP
         jobs = [(no, prompts.get(no)) for no in bad if prompts.get(no)]
         log(f"  Рисую кадры, которых нет ни в архивах, ни в интернете: {len(jobs)} шт. (Leonardo)...")
@@ -218,6 +256,10 @@ def check(cfg, project, entries, finder, topic, log, progress=None):
               "prompts": {str(k): v for k, v in prompts.items()},
               "verdicts": {str(k): v for k, v in verdicts.items()},
               "said": {str(e["no"]): e["said"] for e in entries}}
+    if _round > 1:
+        for e in entries:
+            e.pop("frame_img", None)
+        return report
     (project / "проверка.json").write_text(json.dumps(report, ensure_ascii=False, indent=1), encoding="utf-8")
     log(f"  Контроль качества: проверено {len(verdicts)} из {len(entries)}, заменено {replaced}"
         + (f", без хорошей замены: {len(bad)} (кадры {', '.join(map(str, bad[:12]))})" if bad else "") + ".")

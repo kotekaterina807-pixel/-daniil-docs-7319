@@ -538,11 +538,11 @@ def assemble(shots, out, workdir, log=print, group_size=20, on_progress=lambda d
 # Музыка: каждый трек сначала выравнивается по громкости (тихий и громкий трек звучат одинаково),
 # в ней чуть приглушается диапазон голоса (2–3 кГц), чтобы слова звучали чище, и она мягко уходит
 # вниз, пока говорит диктор, и плавно возвращается в паузах. Итог: музыка на ~15–18 дБ тише голоса.
-DUCK = "sidechaincompress=threshold=0.05:ratio=4:attack=40:release=900:makeup=1"
+DUCK = "sidechaincompress=threshold=0.03:ratio=6:attack=30:release=900:makeup=1"
 
 
 def _music_chain(music_volume):
-    k = max(0.0, float(music_volume)) / 0.12 * 0.3          # ползунок 0.12 (по умолчанию) = нормальный уровень
+    k = max(0.0, float(music_volume)) / 0.12 * 0.22         # ползунок 0.12 (по умолчанию) = нормальный уровень
     return ("aformat=sample_rates=48000:channel_layouts=stereo,loudnorm=I=-24:TP=-4:LRA=11,"
             f"equalizer=f=2500:t=q:w=1.2:g=-4,volume={k:.3f}")
 
@@ -564,7 +564,7 @@ def _final_mix_sfx(cmd, music, out, total_sec, music_volume, sfx, fade_out_start
         cmd += ["-stream_loop", "-1", "-i", e["file"]]
         ms = int(e["at"] * 1000)
         parts.append(f"[{idx}:a]aformat=sample_rates=48000:channel_layouts=stereo,atrim=0:{e['dur']:.2f},"
-                     f"afade=t=out:st={max(0.0, e['dur'] - 0.4):.2f}:d=0.4,volume={e['vol']},"
+                     f"afade=t=out:st={max(0.0, e['dur'] - e.get('fade', 0.4)):.2f}:d={e.get('fade', 0.4)},volume={e['vol']},"
                      f"adelay={ms}|{ms}[s{k}]")
         mix.append(f"[s{k}]")
         idx += 1

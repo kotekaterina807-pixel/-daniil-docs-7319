@@ -120,7 +120,10 @@ def _sfx_events(shots):
     for sh in shots:
         t0, t1 = sh["s"] / SR, sh["e"] / SR
         if tw and Path(str(sh.get("src", ""))).name.startswith("doc_"):
-            ev.append({"file": str(tw), "at": t0 + 0.3, "dur": max(0.5, min(t1 - t0 - 0.6, 8.0)), "vol": 0.22})
+            a = sh.get("type_start") if sh.get("type_start") is not None else 0.3
+            b = sh.get("type_end") if sh.get("type_end") is not None else (t1 - t0 - 0.6)
+            dur = max(0.3, min(b, t1 - t0) - a)                 # ровно пока печатаются слова, ни секундой дольше
+            ev.append({"file": str(tw), "at": t0 + a, "dur": dur, "vol": 0.12, "fade": 0.08})
         elif wh and sh.get("role") == "card" and not any(e["file"] == str(wh) and abs(e["at"] - t0) < 6 for e in ev):
             ev.append({"file": str(wh), "at": max(0.0, t0 - 0.55), "dur": 1.6, "vol": 0.3})   # один «свуш» на главу
     return ev[:30]
@@ -322,7 +325,7 @@ def step_build(cfg, niche, project, log=print, stop_flag=lambda: False, progress
             n = max(1, round(length / shot_sec), math.ceil(length / max_shot - 1e-6))
             n = min(n, max(1, int(length / min_shot)))
             if cfg.get("visual_check") == "claude_code":
-                n = 2 if length >= 5.0 else 1         # фраза ≈ кадр; от 5 с — два кадра
+                n = 3 if length >= 7.0 else 2 if length >= 4.0 else 1   # фраза ≈ кадр; от 4 с — два, от 7 с — три
             spec = {"visual": vis, "query": query, "t0": t0, "t1": t1, "n": n, "text": txt}
             if vis == "person":
                 parts = [x.strip() for x in query.split("|")]
@@ -566,6 +569,7 @@ def step_build(cfg, niche, project, log=print, stop_flag=lambda: False, progress
                     "s": b["start"] + int((t0 + edges[j]) * SR), "e": b["start"] + int((t0 + edges[j + 1]) * SR),
                     "mood": s.get("mood", "normal"), "first_of_seg": first_in_seg, "zoom_in": zoom_flip,
                     "person": bool((it or {}).get("person")), "hold": float((it or {}).get("hold") or 0),
+                    "type_start": (it or {}).get("type_start"), "type_end": (it or {}).get("type_end"),
                     "_qa": {"blk": b, "spec": spec, "a": t0 + edges[j], "b": t0 + edges[j + 1],
                             "url": (it or {}).get("url", "")},
                 })
@@ -586,7 +590,7 @@ def step_build(cfg, niche, project, log=print, stop_flag=lambda: False, progress
             # карточки людей, листы с текстом и фото людей не растягиваем; и никакой кадр — дольше 8 с
             return (x.get("_qa") and not x.get("_bad") and not x.get("person")
                     and not str(x["_qa"].get("url", "")).startswith(("card:", "doc:"))
-                    and (x["e"] - x["s"] + extra) / SR <= 8.0)
+                    and (x["e"] - x["s"] + extra) / SR <= 6.0)
         kept, dropped = [], 0
         for i, sh in enumerate(shots):
             if sh.get("_bad"):
@@ -784,6 +788,7 @@ def _choose_in_chat(cfg, project, finder, seg_blocks, jobs, vis_cache, log, chec
                 if sp_["visual"] == "person":
                     heroes.append((sp_["query"], sp_.get("shown", "")))
         lines = []
+        doc_used = []
         for no, (bi, si) in enumerate(jobs, 1):
             check_stop()
             spec = dict(seg_blocks[bi]["specs"][si])
@@ -792,6 +797,15 @@ def _choose_in_chat(cfg, project, finder, seg_blocks, jobs, vis_cache, log, chec
                 spec["queries"] = pl["queries"]
                 if spec["visual"] == "person":
                     spec["fill_query"] = pl["queries"][0]
+            if pl.get("source") == "лист" and spec["visual"] not in ("person", "document") \
+                    and not spec.get("auto_person") and _doc_ok(seg_blocks, bi, si, doc_used):
+                sp0 = seg_blocks[bi]["specs"][si]          # ключевая фраза — лист, где печатаются слова диктора
+                sp0["visual"], sp0["doc_text"] = "document", sp0["text"].strip()
+                sp0["doc_head"] = re.sub(r"^(лист|документ)\s*[:—-]\s*", "", pl.get("show", ""), flags=re.I)[:60]
+                doc_used.append((bi, si))
+                lines.append({"no": no, "sig": sig[no - 1], "text": spec["text"], "query": "лист с текстом", "n": 1,
+                              "show": "лист", "person": "", "cands": [], "doc": True, "doc_head": sp0["doc_head"]})
+                continue
             if pl.get("source") == "архив" and spec["visual"] == "stock":
                 spec["visual"] = "archive"            # старые фото, гравюры, картины той эпохи
             if pl.get("people") and spec["visual"] != "person":
@@ -801,7 +815,7 @@ def _choose_in_chat(cfg, project, finder, seg_blocks, jobs, vis_cache, log, chec
                 if cand:
                     spec["auto_person"] = cand
                     seg_blocks[bi]["specs"][si]["auto_person"] = cand
-            if spec["visual"] != "person" and spec["n"] < 2 and spec.get("t1", 0) - spec.get("t0", 0) >= 5:
+            if spec["visual"] != "person" and spec["n"] < 2 and spec.get("t1", 0) - spec.get("t0", 0) >= 4:
                 spec["n"] = 2                     # минимум два разных кадра на обычную фразу
             cands = review.collect(finder, spec, taken)
             q = spec["query"] if spec["visual"] != "person" else \
@@ -814,10 +828,16 @@ def _choose_in_chat(cfg, project, finder, seg_blocks, jobs, vis_cache, log, chec
                           "cands": [{k: c.get(k) for k in keep} for c in cands]})
             progress(0.10 + 0.25 * no / len(jobs), f"Поиск кадров {no}/{len(jobs)}")
         review.save_review(rev_path, lines)
+    for (bi, si), ln in zip(jobs, lines):         # фразы-листы (по плану режиссёра) — и при повторной сборке
+        if ln.get("doc"):
+            sp0 = seg_blocks[bi]["specs"][si]
+            sp0["visual"], sp0["doc_text"], sp0["doc_head"] = "document", sp0["text"].strip(), ln.get("doc_head", "")
+    pick_lines = [ln for ln in lines if not ln.get("doc")]
     if not ch_path.exists() and auto:
-        _choose_with_claude_code(cfg, project, finder, lines, rev_path, ch_path, topic, log, check_stop, progress)
+        _choose_with_claude_code(cfg, project, finder, pick_lines, rev_path, ch_path, topic, log, check_stop, progress)
+        review.save_review(rev_path, lines)       # вместе с фразами-листами (тот же список, кандидаты обновлены)
     if not ch_path.exists():
-        sheets = review.make_sheets(lines, project, log)
+        sheets = review.make_sheets(pick_lines, project, log)
         raise review.NeedChoices(sheets, len(lines))
     choices = {int(k): v for k, v in json.loads(ch_path.read_text(encoding="utf-8")).items()}
     log("Скачиваю выбранные кадры...")
@@ -837,6 +857,8 @@ def _choose_in_chat(cfg, project, finder, seg_blocks, jobs, vis_cache, log, chec
         paths = dict(ex.map(dl, flat))
     credits = []
     for (bi, si), (ln, cs) in zip(jobs, picked):
+        if ln.get("doc"):
+            continue                              # лист с текстом сделается сам при монтаже
         items = []
         for c in cs:
             pth = paths.get(c["url"])
@@ -980,13 +1002,30 @@ def _person_on_name(specs, ranges, rec):
     return [tuple(r) for r in ranges]
 
 
+def _doc_ok(seg_blocks, bi, si, doc_used):
+    """Лист с текстом: не больше 2 на главу, не подряд, фраза 5–24 слова и 2,5–10 с."""
+    sp = seg_blocks[bi]["specs"][si]
+    words = len(sp.get("text", "").split())
+    length = sp.get("t1", 0) - sp.get("t0", 0)
+    if not (5 <= words <= 24 and 2.5 <= length <= 10):
+        return False
+    ch = seg_blocks[bi].get("chapter")
+    same_ch = [x for x in doc_used if seg_blocks[x[0]].get("chapter") == ch]
+    if len(same_ch) >= 2:
+        return False
+    if any(x[0] == bi and abs(x[1] - si) <= 1 for x in doc_used):
+        return False
+    have = sum(1 for s_ in seg_blocks[bi]["specs"] if s_.get("visual") == "document")
+    return have == 0
+
+
 def _speech_units(sents, pauses, span, rec=None):
     """Фразы озвучки: предложения, длинные (>6.5 с) — делятся по запятым/тире на части от ~2.5 с.
     Границы притягиваются к паузам речи, кадр меняется чуть раньше слов."""
     units = []
     for a, b, txt in sents:
         has_quote = bool(re.search(r"«[^»]{14,}»", txt))
-        if b - a <= 6.5 and not has_quote:
+        if b - a <= 4.5 and not has_quote:         # перечисления и длинные фразы — на части: больше разных кадров
             units.append([a, b, txt])
             continue
         if has_quote:                              # цитата — отдельный кадр (лист с текстом) ровно на её словах
@@ -996,7 +1035,7 @@ def _speech_units(sents, pauses, span, rec=None):
         merged = []
         for x in parts:                            # слишком короткие кусочки склеиваем (цитату — никогда)
             if merged and not x.startswith("«") and not merged[-1].startswith("«") \
-                    and (len(merged[-1]) < 35 or len(x) < 18):
+                    and (len(merged[-1]) < 22 or len(x) < 12):
                 merged[-1] += " " + x
             else:
                 merged.append(x)
@@ -1010,7 +1049,7 @@ def _speech_units(sents, pauses, span, rec=None):
                 bounds = [a + x for x in starts] + [b]
                 for j, x in enumerate(merged):
                     t0_, t1_ = bounds[j], bounds[j + 1]
-                    if j > 0 and t1_ - t0_ < 2.2 and not x.startswith("«") and not units[-1][2].startswith("«"):
+                    if j > 0 and t1_ - t0_ < 1.6 and not x.startswith("«") and not units[-1][2].startswith("«"):
                         units[-1][1] = t1_
                         units[-1][2] += " " + x
                     else:
@@ -1025,7 +1064,7 @@ def _speech_units(sents, pauses, span, rec=None):
                 near = [pt for pt, ln in pauses if abs(pt - end) <= 0.7 and a + 1.5 < pt < b - 1.5]
                 if near:
                     end = min(near, key=lambda pt: abs(pt - end))
-            if end - t >= 2.2 or j == len(merged) - 1 or x.startswith("«") or (j + 1 < len(merged) and merged[j + 1].startswith("«")):
+            if end - t >= 1.6 or j == len(merged) - 1 or x.startswith("«") or (j + 1 < len(merged) and merged[j + 1].startswith("«")):
                 units.append([t, end, x])
                 t = end
             else:
@@ -1075,7 +1114,9 @@ def _assign_specs(script_specs, units):
         body = q.split("|")[0]
         bw = {align.norm(w) for w in body.split()}
         best = max(range(n), key=lambda i: len(bw & {align.norm(w) for w in units[i][2].split()}))
-        docs[best] = q
+        head = q.split("|")[1].strip() if "|" in q else ""
+        # на листе печатается ровно то, что говорит диктор, — слово в слово и в тот же момент
+        docs[best] = units[best][2].strip() + (" | " + head if head else "")
     specs = [("person", persons[i]) if i in persons else ("document", docs[i]) if i in docs
              else (vis[i][0], vis[i][1]) for i in range(n)]
     return specs, [(a, b) for a, b, _ in units], [t for _, _, t in units]
@@ -1123,7 +1164,7 @@ def _quality_check(cfg, project, shots, finder, topic, log, progress):
                         "alts": alts[:3]})
     try:
         rep = qa.check(cfg, project, entries, finder, topic, log,
-                       lambda f, msg: progress(0.42 + 0.03 * f, msg))
+                       lambda f, msg: progress(0.42 + 0.03 * f, msg), taken=used)
         bad = set(rep.get("bad_left") or [])
         for e in entries:
             if e["no"] in bad:
@@ -1155,4 +1196,5 @@ def _document_item(spec, b, shots_dir, length, t0):
     out = shots_dir / f"doc_{_key(text, spec.get('doc_head', ''), f'{clip_len:.2f}', str(reveal[:3]))}.mp4"
     if not out.exists():
         extras.make_document_clip(text, spec.get("doc_head", ""), reveal, clip_len, out, seed=text)
-    return {"path": str(out), "kind": "video", "url": "doc:" + text[:60], "duration": clip_len + 0.5, "hold": hold}
+    return {"path": str(out), "kind": "video", "url": "doc:" + text[:60], "duration": clip_len + 0.5, "hold": hold,
+            "type_start": max(0.0, reveal[0]), "type_end": reveal[-1] + 0.22}   # машинка звучит только пока печатает
