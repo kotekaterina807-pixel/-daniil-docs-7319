@@ -225,6 +225,8 @@ def _music():
     ext = (".mp3", ".wav", ".m4a", ".ogg", ".flac")
     for d in (MUSIC_DIR, SFX_DIR):
         d.mkdir(exist_ok=True)
+    from . import sfx as _sfx
+    _sfx.ensure(SFX_DIR)
     mus = [p for p in MUSIC_DIR.rglob("*") if p.suffix.lower() in ext] if MUSIC_DIR.exists() else []
     sfx = [p.name.lower() for p in SFX_DIR.iterdir() if p.suffix.lower() in ext] if SFX_DIR.exists() else []
     tw = sum(n.startswith("typewriter") for n in sfx)
@@ -233,7 +235,7 @@ def _music():
         return (name, False, "нет фоновой музыки — видео звучит пусто. Положите 5–10 треков в папку music "
                              "(YouTube Studio > Фонотека)", False)
     return (name, True, f"треков музыки: {len(mus)}; звуки: машинка {tw}, переходы {wh}"
-            + ("" if tw and wh else " — звуки по желанию, папка sfx"), False)
+            + " (свои звуки программы; можно заменить своими в папке звуков)" * any("_auto" in n for n in sfx), False)
 
 
 def _report(cfg):

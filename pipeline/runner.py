@@ -106,8 +106,8 @@ def _pick_music(niche):
 
 def _sfx_file(kind):
     from .config import SFX_DIR
-    if not SFX_DIR.exists():
-        return None
+    from . import sfx as _sfx
+    _sfx.ensure(SFX_DIR)                            # своих звуков нет — программа делает свои
     files = [p for p in SFX_DIR.iterdir() if p.name.lower().startswith(kind) and
              p.suffix.lower() in (".mp3", ".wav", ".m4a", ".ogg", ".flac")]
     return random.choice(files) if files else None
