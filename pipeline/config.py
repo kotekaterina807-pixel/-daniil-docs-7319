@@ -3,7 +3,7 @@ import json
 import os
 from pathlib import Path
 
-VERSION = "8.3 (07.11.2026)"
+VERSION = "8.4 (07.11.2026)"
 CONFIG_REV = 10      # при смене — обновляются настройки монтажа у уже сохранённых конфигов
 ROOT = Path(__file__).resolve().parent.parent
 CONFIG_PATH = ROOT / "config.json"
@@ -44,6 +44,7 @@ DEFAULTS = {
     "old_look": True,
     "word_sync": True,
     "qa_check": True,
+    "auto_update": True,             # новые версии ставятся сами (не во время сборки)
     "leonardo_key": "",              # необязательно: рисует кадры, которых нет ни в архивах, ни в интернете
     "ai_images": True,
     "report_repo": "",                 # закрытый репозиторий GitHub для отчётов Claude (владелец/название)

@@ -30,7 +30,7 @@ PORTS = list(range(8765, 8785))
 _NO_WINDOW = 0x08000000 if os.name == "nt" else 0
 
 # Файлы и папки пользователя — обновление их не трогает
-KEEP = {"config.json", "output", "footage", "music", "sfx", "voice_samples", ".venv", ".ui_profile", ".ui_webview",
+KEEP = {"config.json", "routes.json", "output", "footage", "music", "sfx", "voice_samples", ".venv", ".ui_profile", ".ui_webview",
         ".ui_port", ".ui_token", "error_log.txt"}
 
 SAMPLE_TEXT = ("В декабре тысяча девятисотого года с маяка на крошечном острове исчезли три смотрителя. "
@@ -336,7 +336,7 @@ def make_shortcut(quiet=False):
 
 
 # ---------------- HTTP ----------------
-PUBLIC_KEYS = ["leonardo_key", "ai_images", "pixabay_key", "pexels_key", "proxy_url", "lumean_key", "lumean_ai_model",
+PUBLIC_KEYS = ["auto_update", "leonardo_key", "ai_images", "pixabay_key", "pexels_key", "proxy_url", "lumean_key", "lumean_ai_model",
                "tts_provider", "edge_voice", "anthropic_key", "openai_key", "elevenlabs_key", "elevenlabs_voice_id",
                "music_volume", "shot_seconds", "show_labels", "theme", "sound_done", "open_folder_after",
                "default_niche", "update_repo", "language", "visual_check", "eleven_speed", "eleven_stability", "eleven_style",
@@ -774,6 +774,13 @@ class Handler(BaseHTTPRequestHandler):
         repo = (config.load_config().get("update_repo") or "").strip().strip("/")
         if not repo:
             return self._send(200, {"ok": False, "error": "Не указан адрес обновлений"})
+        latest, code = latest_version(repo)
+        if not latest:
+            return self._send(200, {"ok": False, "error": f"Сервер обновлений ответил {code}"})
+        return self._send(200, {"ok": True, "latest": latest, "current": config.VERSION,
+                                "newer": is_newer(latest, config.VERSION)})
+
+    def _check_update_old(self, repo):
         import requests
         latest, code = "", 0
         try:                                         # API GitHub отдаёт свежий файл (raw-адрес кэшируется минутами)
@@ -800,20 +807,75 @@ class Handler(BaseHTTPRequestHandler):
         repo = (config.load_config().get("update_repo") or "").strip().strip("/")
         if not repo:
             return self._send(400, {"error": "Не указан адрес обновлений"})
-        import requests
-        r = requests.get(f"https://codeload.github.com/{repo}/zip/refs/heads/main", timeout=120)
-        if r.status_code != 200:
-            return self._send(502, {"error": f"Не удалось скачать обновление ({r.status_code})"})
+        raw, zver, err = download_update(repo)
+        if err:
+            return self._send(502 if raw is None else 409, {"error": err})
+        return self._update_zip(raw)
+
+
+def latest_version(repo):
+    """Последняя версия на GitHub: (версия, код ответа)."""
+    import requests
+    latest, code = "", 0
+    try:                                         # API GitHub отдаёт свежий файл (raw-адрес кэшируется минутами)
+        r = requests.get(f"https://api.github.com/repos/{repo}/contents/pipeline/config.py",
+                         params={"ref": "main"}, headers={"Accept": "application/vnd.github.raw"}, timeout=20)
+        code = r.status_code
+        if r.status_code == 200:
+            latest = _version_of(r.text)
+    except requests.RequestException:
+        pass
+    if not latest:
         try:
-            zf = zipfile.ZipFile(io.BytesIO(r.content))
-            cfgname = next(n for n in zf.namelist() if n.endswith("pipeline/config.py"))
-            zver = _version_of(zf.read(cfgname).decode("utf-8", "replace"))
+            r = requests.get(f"https://raw.githubusercontent.com/{repo}/main/pipeline/config.py",
+                             params={"t": int(time.time())}, timeout=20)
+            code = r.status_code
+            latest = _version_of(r.text) if r.status_code == 200 else ""
+        except requests.RequestException:
+            pass
+    return latest, code
+
+
+def download_update(repo):
+    """(zip, версия, ошибка). Никогда не откатываемся на старую версию."""
+    import requests
+    r = requests.get(f"https://codeload.github.com/{repo}/zip/refs/heads/main", timeout=180)
+    if r.status_code != 200:
+        return None, "", f"Не удалось скачать обновление ({r.status_code})"
+    try:
+        zf = zipfile.ZipFile(io.BytesIO(r.content))
+        cfgname = next(n for n in zf.namelist() if n.endswith("pipeline/config.py"))
+        zver = _version_of(zf.read(cfgname).decode("utf-8", "replace"))
+    except Exception:
+        zver = ""
+    if zver and is_newer(config.VERSION, zver):
+        return r.content, zver, f"На сервере пока версия {zver}, а у вас уже {config.VERSION} — обновлять нечего."
+    return r.content, zver, ""
+
+
+def _auto_update_loop():
+    """Автообновление: раз в 10 минут проверяет GitHub. Есть новая версия и программа не собирает видео —
+    ставит её сама и перезапускается (окно откроется заново). Во время сборки ждёт её окончания."""
+    time.sleep(25)
+    while True:
+        try:
+            cfg = config.load_config()
+            repo = (cfg.get("update_repo") or "").strip().strip("/")
+            if cfg.get("auto_update", True) and repo and not STATE.get("restart"):
+                latest, _ = latest_version(repo)
+                if latest and is_newer(latest, config.VERSION):
+                    while JOB.running:
+                        time.sleep(15)
+                    raw, zver, err = download_update(repo)
+                    if raw and not err and not JOB.running:
+                        JOB.add_log(f"Автообновление: ставлю версию {zver or latest}...")
+                        STATE["auto_updated"] = zver or latest
+                        apply_update(raw, JOB.add_log)
+                        schedule_restart()
+                        return
         except Exception:
-            zver = ""
-        if zver and is_newer(config.VERSION, zver):      # никогда не откатываемся на старую версию
-            return self._send(409, {"error": f"На сервере пока версия {zver}, а у вас уже {config.VERSION} — "
-                                             "обновлять нечего."})
-        return self._update_zip(r.content)
+            pass
+        time.sleep(600)
 
 
 def _tokens_left():
@@ -907,6 +969,8 @@ def apply_proxy(cfg=None):
         else:
             os.environ.pop(k, None)
     os.environ["NO_PROXY"] = os.environ["no_proxy"] = "127.0.0.1,localhost"
+    from pipeline import netroute
+    netroute.install()                     # каждому сайту — свой маршрут: через прокси или напрямую
 
 
 def clean_key(v):
@@ -1075,20 +1139,45 @@ def _native_available():
 
 
 def _set_window_icon(title):
-    """Иконка DocuStudio в заголовке и на панели задач (по умолчанию была бы иконка Python)."""
+    """Иконка DocuStudio на ВСЕХ окнах программы — в заголовке, на панели задач, в Alt+Tab
+    (иначе Windows показывает иконку Python). Окна проверяются всё время работы: новое окно тоже получит иконку."""
     try:
         import ctypes
+        from ctypes import wintypes as wt
         u = ctypes.windll.user32
+        u.LoadImageW.restype = wt.HANDLE
+        u.SendMessageW.argtypes = [wt.HWND, wt.UINT, wt.WPARAM, wt.LPARAM]
+        setcls = getattr(u, "SetClassLongPtrW", None) or u.SetClassLongW
+        setcls.argtypes = [wt.HWND, ctypes.c_int, ctypes.c_ssize_t]
         ico = str(ROOT / "app.ico")
-        for _ in range(40):
-            hwnd = u.FindWindowW(None, title)
-            if hwnd:
-                for size, kind in ((32, 1), (16, 0)):       # ICON_BIG / ICON_SMALL
-                    h = u.LoadImageW(None, ico, 1, size, size, 0x10)   # IMAGE_ICON, LR_LOADFROMFILE
-                    if h:
-                        u.SendMessageW(hwnd, 0x80, kind, h)    # WM_SETICON
-                return
-            time.sleep(0.25)
+        big_sz = max(48, u.GetSystemMetrics(11) * 2)            # SM_CXICON — крупнее для панели задач с масштабом
+        small_sz = max(16, u.GetSystemMetrics(49))              # SM_CXSMICON
+        big = u.LoadImageW(None, ico, 1, big_sz, big_sz, 0x10)
+        small = u.LoadImageW(None, ico, 1, small_sz, small_sz, 0x10)
+        if not big and not small:
+            return
+        pid = os.getpid()
+        done = set()
+        EnumProc = ctypes.WINFUNCTYPE(wt.BOOL, wt.HWND, wt.LPARAM)
+
+        def each(hwnd, _):
+            if hwnd in done or not u.IsWindowVisible(hwnd):
+                return True
+            p = wt.DWORD()
+            u.GetWindowThreadProcessId(hwnd, ctypes.byref(p))
+            if p.value == pid and not u.GetWindow(hwnd, 4):     # наше окно верхнего уровня (без владельца)
+                if big:
+                    u.SendMessageW(hwnd, 0x80, 1, big)          # WM_SETICON ICON_BIG
+                    setcls(hwnd, -14, big)                      # GCLP_HICON — для новых окон того же класса
+                if small:
+                    u.SendMessageW(hwnd, 0x80, 0, small)        # ICON_SMALL
+                    setcls(hwnd, -34, small)                    # GCLP_HICONSM
+                done.add(hwnd)
+            return True
+        cb = EnumProc(each)
+        while True:
+            u.EnumWindows(cb, 0)
+            time.sleep(0.5 if len(done) == 0 else 2.0)
     except Exception:
         pass
 
@@ -1165,6 +1254,7 @@ def main(argv):
     if want_window and _native_available():
         threading.Thread(target=srv.serve_forever, daemon=True).start()
         threading.Thread(target=_watchdog, args=(srv,), daemon=True).start()
+        threading.Thread(target=_auto_update_loop, daemon=True).start()
         if native_window(url):                      # окно закрыто
             STATE["bye"] = time.time()
             STATE["last_seen"] = time.time() - 10
@@ -1180,6 +1270,7 @@ def main(argv):
         open_window(url)
     if "--headless" not in argv:
         threading.Thread(target=_watchdog, args=(srv,), daemon=True).start()
+        threading.Thread(target=_auto_update_loop, daemon=True).start()
     srv.serve_forever()
 
 

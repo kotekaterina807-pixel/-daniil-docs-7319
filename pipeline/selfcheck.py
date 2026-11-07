@@ -238,6 +238,17 @@ def _music():
             + " (свои звуки программы; можно заменить своими в папке звуков)" * any("_auto" in n for n in sfx), False)
 
 
+def _routes():
+    name = "Маршруты сайтов (прокси / напрямую)"
+    from . import netroute
+    d, pr = netroute.summary()
+    if not d and not pr:
+        return (name, True, "программа запомнит маршрут каждого сайта во время первой сборки", False)
+    msg = (f"напрямую: {', '.join(d)}" if d else "напрямую: нет") + "; " + \
+          (f"через прокси: {', '.join(pr)}" if pr else "через прокси: нет")
+    return (name, True, msg[:600], False)
+
+
 def _report(cfg):
     name = "Отчёты для Claude (GitHub)"
     from . import report
@@ -256,7 +267,7 @@ def run_all(cfg, log=print):
         checks.append(lambda: _claude(cfg))
     if cfg.get("visual_check") == "claude_code":
         checks.append(lambda: _claude_code(cfg))
-    checks += [lambda: _pixabay(cfg), _wikimedia, _archives, lambda: _people_photos(cfg), lambda: _leonardo(cfg), _music, lambda: _word_sync(cfg), lambda: _report(cfg)]
+    checks += [lambda: _pixabay(cfg), _wikimedia, _archives, lambda: _people_photos(cfg), lambda: _leonardo(cfg), _music, lambda: _word_sync(cfg), lambda: _report(cfg), _routes]
     out = []
     for fn in checks:
         try:
