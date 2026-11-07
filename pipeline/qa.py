@@ -191,6 +191,8 @@ def check(cfg, project, entries, finder, topic, log, progress=None, taken=None, 
             continue
         if isinstance(v, int) and 1 <= v <= len(e["alts"]):
             a = e["alts"][v - 1]
+            if e["shot"].get("person") and not a.get("person"):
+                continue                     # портрет названного человека не меняем на «просто картинку»
             if a["url"] in used:
                 bad.append(no)
                 continue

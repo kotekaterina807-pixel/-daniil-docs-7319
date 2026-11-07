@@ -640,6 +640,27 @@ def step_build(cfg, niche, project, log=print, stop_flag=lambda: False, progress
                 sh["e"] = cut
                 shots.append(extra)
     shots.sort(key=lambda x: x["s"])
+    # фото человека — не меньше 4,5 с: зритель успевает рассмотреть лицо и прочитать «имя | кто он».
+    # Время берём у следующих кадров (короткие уступают целиком); лист, карточку главы и другого человека не трогаем
+    i = 0
+    while i < len(shots):
+        sh = shots[i]
+        dur = (sh["e"] - sh["s"]) / SR
+        if sh.get("person") and dur < 4.5 and i + 1 < len(shots):
+            want = sh["s"] + int(4.5 * SR)
+            j = i + 1
+            while j < len(shots) and shots[j]["s"] < want:
+                nx = shots[j]
+                if nx.get("person") or nx.get("role") in ("card", "title") or nx.get("hold"):
+                    want = nx["s"]
+                    break
+                if (nx["e"] - want) / SR >= 1.5:
+                    nx["s"] = want
+                    break
+                want = max(want, nx["e"])
+                shots.pop(j)
+            sh["e"] = max(sh["e"], want)
+        i += 1
     # лист с цитатой не исчезает сразу после последнего слова: держим его ещё 2–4 с, следующий кадр короче
     i = 0
     while i < len(shots):
@@ -798,6 +819,8 @@ def _choose_in_chat(cfg, project, finder, seg_blocks, jobs, vis_cache, log, chec
                     heroes.append((sp_["query"], sp_.get("shown", "")))
         lines = []
         doc_used = []
+        named = {}
+        pp_key = lambda pp: (_stems(pp[0])[-1:] or [""])[0]
         for no, (bi, si) in enumerate(jobs, 1):
             check_stop()
             spec = dict(seg_blocks[bi]["specs"][si])
@@ -821,10 +844,20 @@ def _choose_in_chat(cfg, project, finder, seg_blocks, jobs, vis_cache, log, chec
                 yr = next((pp[2] for pp in pl["people"] if len(pp) > 2 and _is_hero(pp, [[spec["query"], spec.get("shown", "")]])), "")
                 if yr:
                     spec["when"] = seg_blocks[bi]["specs"][si]["when"] = yr
+            if spec["visual"] == "person":
+                named.setdefault(seg_blocks[bi].get("chapter"), set()).add(pp_key([spec["query"], spec.get("shown", "")]))
             if pl.get("people") and spec["visual"] != "person":
                 # фото человека — только героя истории (есть строка [человек] в сценарии) и только во фразе,
                 # где звучит его имя: никаких фото «заранее» и случайных людей, о которых ничего не сказано
+                ch_ = seg_blocks[bi].get("chapter")
                 cand = next((pp for pp in pl["people"] if _is_hero(pp, heroes) and _name_spoken(pp, spec["text"])), None)
+                if cand:
+                    named.setdefault(ch_, set()).add(pp_key(cand))
+                else:
+                    # «он бросает оркестр», «руководителя нет» — о герое, которого уже назвали в этой главе:
+                    # показываем его другие фото (в форме, с оркестром…). До первого упоминания — никогда.
+                    cand = next((pp for pp in pl["people"] if _is_hero(pp, heroes)
+                                 and pp_key(pp) in named.get(ch_, set())), None)
                 if cand:
                     spec["auto_person"] = cand
                     seg_blocks[bi]["specs"][si]["auto_person"] = cand
@@ -885,6 +918,13 @@ def _choose_in_chat(cfg, project, finder, seg_blocks, jobs, vis_cache, log, chec
             items.sort(key=lambda it: not it.get("person"))
         seg_blocks[bi]["specs"][si]["items"] = items
         seg_blocks[bi]["specs"][si]["_cands"] = ln["cands"]      # запасные варианты — для контроля качества
+    st = getattr(finder, "src_stats", {}) or {}
+    names_ = {"_stock": "видео Pixabay", "_pixabay_photos": "фото Pixabay", "_wikimedia": "Wikimedia",
+              "_web_images": "интернет (Bing)", "_loc": "Библ. Конгресса", "_openverse": "Openverse",
+              "_ia_video": "Internet Archive", "_aic": "Чикаго", "_met": "Met"}
+    if st:
+        log("  Кандидаты по источникам: " + ", ".join(f"{names_.get(k, k)} {v}" for k, v in
+                                                     sorted(st.items(), key=lambda x: -x[1])))
     vis_cache["chat"] = {"items": [it for b in seg_blocks for sp in b["specs"] for it in sp.get("items", [])],
                          "credits": credits}
     _save_json(project / "visuals.json", vis_cache)
@@ -1034,7 +1074,7 @@ def _who(spec, roles):
 
 
 def _doc_ok(seg_blocks, bi, si, doc_used):
-    """Лист с текстом: не больше 2 на главу, не подряд, фраза 5–24 слова и 2,5–10 с."""
+    """Лист с текстом: не больше 3 на главу, не подряд, фраза 5–24 слова и 2,5–10 с."""
     sp = seg_blocks[bi]["specs"][si]
     words = len(sp.get("text", "").split())
     length = sp.get("t1", 0) - sp.get("t0", 0)
@@ -1042,7 +1082,7 @@ def _doc_ok(seg_blocks, bi, si, doc_used):
         return False
     ch = seg_blocks[bi].get("chapter")
     same_ch = [x for x in doc_used if seg_blocks[x[0]].get("chapter") == ch]
-    if len(same_ch) >= 2:
+    if len(same_ch) >= 3:
         return False
     if any(x[0] == bi and abs(x[1] - si) <= 1 for x in doc_used):
         return False
@@ -1056,13 +1096,16 @@ def _speech_units(sents, pauses, span, rec=None):
     units = []
     for a, b, txt in sents:
         has_quote = bool(re.search(r"«[^»]{14,}»", txt))
-        if b - a <= 5.0 and not has_quote:         # перечисления и длинные фразы — на части: больше разных кадров
+        if b - a <= 3.2 and not has_quote:         # фраза длиннее ~3 с — на смысловые части: у каждой свой кадр
             units.append([a, b, txt])
             continue
         if has_quote:                              # цитата — отдельный кадр (лист с текстом) ровно на её словах
             parts = [x for x in re.split(r"\s*(?=«)|(?<=»)\s*", txt) if x.strip()]
         else:
-            parts = [x for x in re.split(r"(?<=[,;:])\s+|\s+(?=[—–]\s)", txt) if x.strip()]
+            # части: по запятым, тире и по союзам «и / а / но / когда / чтобы / потому» — что сказано первым,
+            # то и показываем первым (а не главный предмет фразы с её начала)
+            parts = [x for x in re.split(r"(?<=[,;:])\s+|\s+(?=[—–]\s)|\s+(?=(?:и|а|но|когда|чтобы|потому|пока|после)\s)",
+                                         txt) if x.strip()]
         merged = []
         for x in parts:                            # слишком короткие кусочки склеиваем (цитату — никогда)
             if merged and not x.startswith("«") and not merged[-1].startswith("«") \

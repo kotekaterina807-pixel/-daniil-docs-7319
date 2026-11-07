@@ -738,7 +738,11 @@ class VisualFinder:
             order = [self._stock, self._ia_video, self._web_images, self._pixabay_photos, self._wikimedia]
         for src in order:
             for q in queries:
-                yield from src(q)
+                for c in src(q):
+                    st = self.__dict__.setdefault("src_stats", {})
+                    k = getattr(src, "__name__", "?")
+                    st[k] = st.get(k, 0) + 1
+                    yield c
 
     @staticmethod
     def _variants(query):
@@ -836,7 +840,9 @@ class VisualFinder:
             for lang in lang_order:
                 add(self._wiki_page_image(n, lang))
                 for t in self._wiki_title(n, lang)[:2]:
-                    if name_ok(t.lower()):
+                    # только статья именно об этом человеке («Glenn Miller», «Andrew Irvine (mountaineer)»),
+                    # а не об однофамильце с похожим именем («Frazier Glenn Miller Jr.»)
+                    if name_ok(t.lower()) and re.sub(r"\s*\(.*?\)", "", t).strip().lower() in [x.lower() for x in names]:
                         add(self._wiki_page_image(t, lang))
         for n in names:
             for q in (n, f"{n} portrait", f"{n} photograph"):
@@ -852,6 +858,7 @@ class VisualFinder:
             if len(out) >= 8:
                 break
             add(self._web_images(f"{n} photo", min_w=300), need_name=True)
+            add(self._web_images(f"{n} portrait", min_w=300), need_name=True)
         if len(out) > before:
             self._diag(person, f"интернет: фото {len(out) - before}")
         if not out:

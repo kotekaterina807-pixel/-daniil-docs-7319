@@ -35,9 +35,12 @@ def collect(finder, spec, taken):
     """До CANDS кандидатов для строки: сначала видео, без повторов по всему видео."""
     out = []
     if spec["visual"] == "person":
-        for c in finder._person_photos(spec["query"], spec.get("shown", ""), spec.get("when", ""))[:5]:
-            if c["url"] not in taken and c.get("thumb"):
-                out.append(dict(c, person=True))
+        allp = [c for c in finder._person_photos(spec["query"], spec.get("shown", ""), spec.get("when", ""))
+                if c.get("thumb")]
+        fresh = [c for c in allp if c["url"] not in taken]
+        # у человека мало фото (бывает одно на весь интернет) — лучше повторить его портрет, чем показать без лица
+        for c in (fresh or allp[:1])[:5]:
+            out.append(dict(c, person=True))
         query, visual = spec.get("fill_query") or "dark atmosphere", "stock"
     else:
         query, visual = spec["query"], spec["visual"]
@@ -45,8 +48,10 @@ def collect(finder, spec, taken):
     if spec.get("auto_person"):                    # во фразе назван человек — его фото первыми
         en, ru = spec["auto_person"][:2]
         when = spec["auto_person"][2] if len(spec["auto_person"]) > 2 else spec.get("when", "")
-        for c in finder._person_photos(en, ru, when):
-            if c.get("thumb") and c["url"] not in taken and c["url"] not in seen_pool:
+        allp = [c for c in finder._person_photos(en, ru, when) if c.get("thumb")]
+        fresh = [c for c in allp if c["url"] not in taken]
+        for c in (fresh or allp[:1]):
+            if c["url"] not in seen_pool:
                 seen_pool.add(c["url"])
                 pool.append(dict(c, person=en))
                 if len(pool) >= 3:
