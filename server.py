@@ -742,7 +742,7 @@ class Handler(BaseHTTPRequestHandler):
     def _open(self, data):
         what = data.get("what")
         from pipeline import library
-        places = {"output": config.OUTPUT_DIR, "footage": library.FOOTAGE_DIR, "music": config.MUSIC_DIR,
+        places = {"output": config.OUTPUT_DIR, "footage": library.FOOTAGE_DIR, "music": config.MUSIC_DIR, "sfx": config.SFX_DIR,
                   "voices": ROOT / "voice_samples", "app": ROOT}
         if what in places:
             places[what].mkdir(parents=True, exist_ok=True)
