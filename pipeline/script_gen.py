@@ -97,7 +97,7 @@ def make_outline(cfg, niche, topic, minutes, log=print):
   "description": "описание для YouTube, 2–3 абзаца, без таймкодов",
   "tags": ["10–15 тегов"],
   "chapters": [
-    {{"title": "короткое название главы", "content": "что именно раскрывается в главе: события, факты, детали", "ending": "чем глава заканчивается, какой вопрос остаётся", "share": 0.1}}
+    {{"title": "короткое название главы", "content": "что именно раскрывается в главе: события, факты, детали", "ending": "чем глава заканчивается, какой вопрос остаётся", "share": 0.1, "music": "спокойная | загадочная | тревожная — настроение музыки главы"}}
   ],
   "facts_to_verify": ["ключевое утверждение — где его проверить (книга, архив, статья)"]
 }}
@@ -182,6 +182,9 @@ def generate_script(cfg, niche, topic, minutes, log=print):
     prev_tail = ""
     for i in range(len(outline["chapters"])):
         segs = write_chapter(cfg, niche, topic, outline, i, prev_tail, log)
+        mus = str(outline["chapters"][i].get("music", "")).split("|")[0].strip().lower()
+        if segs and mus in ("спокойная", "загадочная", "тревожная"):
+            segs[0]["music"] = mus
         chapters.append({"title": outline["chapters"][i]["title"], "segments": segs})
         prev_tail = " ".join(s["text"] for s in segs[-2:])
     words = sum(len(s["text"].split()) for c in chapters for s in c["segments"])

@@ -813,16 +813,27 @@ class Handler(BaseHTTPRequestHandler):
         return self._update_zip(raw)
 
 
+_ETAG = {}
+
+
 def latest_version(repo):
-    """Последняя версия на GitHub: (версия, код ответа)."""
+    """Последняя версия на GitHub: (версия, код ответа). Повторные проверки — «условные»
+    (If-None-Match): если ничего не изменилось, GitHub отвечает 304 и это не тратит лимит запросов."""
     import requests
     latest, code = "", 0
     try:                                         # API GitHub отдаёт свежий файл (raw-адрес кэшируется минутами)
+        h = {"Accept": "application/vnd.github.raw"}
+        if _ETAG.get(repo):
+            h["If-None-Match"] = _ETAG[repo][0]
         r = requests.get(f"https://api.github.com/repos/{repo}/contents/pipeline/config.py",
-                         params={"ref": "main"}, headers={"Accept": "application/vnd.github.raw"}, timeout=20)
+                         params={"ref": "main"}, headers=h, timeout=20)
         code = r.status_code
+        if r.status_code == 304 and _ETAG.get(repo):
+            return _ETAG[repo][1], 200
         if r.status_code == 200:
             latest = _version_of(r.text)
+            if r.headers.get("ETag") and latest:
+                _ETAG[repo] = (r.headers["ETag"], latest)
     except requests.RequestException:
         pass
     if not latest:
@@ -854,9 +865,9 @@ def download_update(repo):
 
 
 def _auto_update_loop():
-    """Автообновление: раз в 10 минут проверяет GitHub. Есть новая версия и программа не собирает видео —
+    """Автообновление: раз в минуту проверяет GitHub. Есть новая версия и программа не собирает видео —
     ставит её сама и перезапускается (окно откроется заново). Во время сборки ждёт её окончания."""
-    time.sleep(25)
+    time.sleep(15)
     while True:
         try:
             cfg = config.load_config()
@@ -875,7 +886,7 @@ def _auto_update_loop():
                         return
         except Exception:
             pass
-        time.sleep(600)
+        time.sleep(60)
 
 
 def _tokens_left():

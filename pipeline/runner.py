@@ -121,14 +121,16 @@ def _sfx_events(shots):
         t0, t1 = sh["s"] / SR, sh["e"] / SR
         if tw and Path(str(sh.get("src", ""))).name.startswith("doc_"):
             ev.append({"file": str(tw), "at": t0 + 0.3, "dur": max(0.5, min(t1 - t0 - 0.6, 8.0)), "vol": 0.22})
-        elif wh and sh.get("role") == "card":
-            ev.append({"file": str(wh), "at": max(0.0, t0 - 0.4), "dur": 2.5, "vol": 0.35})
+        elif wh and sh.get("role") == "card" and not any(e["file"] == str(wh) and abs(e["at"] - t0) < 6 for e in ev):
+            ev.append({"file": str(wh), "at": max(0.0, t0 - 0.55), "dur": 1.6, "vol": 0.3})   # один «свуш» на главу
     return ev[:30]
 
 
-OLD_LOOK = ("eq=saturation=0.74:contrast=1.07:gamma=0.97,"
-            "colorbalance=rs=0.05:gs=0.015:bs=-0.06:rm=0.03:bm=-0.04:rh=0.02:bh=-0.03,"
-            "noise=alls=7:allf=t,vignette=PI/4.6")    # «староватая» плёнка: тёплый выцветший цвет, зерно, виньетка
+OLD_LOOK = ("gblur=sigma=0.9,"                          # чуть мягче, как старая плёнка/камера
+            "eq=saturation=0.62:contrast=1.04:gamma=0.95,"
+            "eq=brightness='0.012*sin(t*17)+0.008*sin(t*5.3)':eval=frame,"   # лёгкое мерцание плёнки
+            "colorbalance=rs=0.06:gs=0.02:bs=-0.07:rm=0.04:bm=-0.05:rh=0.03:bh=-0.04,"
+            "noise=alls=13:allf=t+u,vignette=PI/4")    # «староватая» плёнка: тёплый выцветший цвет, зерно, виньетка
 
 
 def _grade(niche, mood, old_look=False):
@@ -563,7 +565,7 @@ def step_build(cfg, niche, project, log=print, stop_flag=lambda: False, progress
                     "clip_dur": (it or {}).get("duration", 0), "offset_n": uses, "speed": (it or {}).get("speed", 1.0),
                     "s": b["start"] + int((t0 + edges[j]) * SR), "e": b["start"] + int((t0 + edges[j + 1]) * SR),
                     "mood": s.get("mood", "normal"), "first_of_seg": first_in_seg, "zoom_in": zoom_flip,
-                    "person": bool((it or {}).get("person")),
+                    "person": bool((it or {}).get("person")), "hold": float((it or {}).get("hold") or 0),
                     "_qa": {"blk": b, "spec": spec, "a": t0 + edges[j], "b": t0 + edges[j + 1],
                             "url": (it or {}).get("url", "")},
                 })
@@ -627,6 +629,25 @@ def step_build(cfg, niche, project, log=print, stop_flag=lambda: False, progress
                 sh["e"] = cut
                 shots.append(extra)
     shots.sort(key=lambda x: x["s"])
+    # лист с цитатой не исчезает сразу после последнего слова: держим его ещё 2–4 с, следующий кадр короче
+    i = 0
+    while i < len(shots):
+        sh = shots[i]
+        if sh.get("hold") and i + 1 < len(shots):
+            want = sh["e"] + int(sh["hold"] * SR)              # лист висит, пока зритель дочитывает
+            j = i + 1
+            while j < len(shots) and shots[j]["s"] < want:
+                nx = shots[j]
+                if nx.get("person") or nx.get("role") in ("card", "title"):
+                    want = nx["s"]                             # фото человека и карточку главы не трогаем
+                    break
+                if (nx["e"] - want) / SR >= 1.5:
+                    nx["s"] = want                             # следующий кадр начинается позже
+                    break
+                want = max(want, nx["e"])                      # короткий кадр целиком уступает время листу
+                shots.pop(j)
+            sh["e"] = max(sh["e"], want)
+        i += 1
     # подпись с именем — только пока на экране фото/карточка этого человека
     for o in list(overlays):
         if not o.get("person"):
@@ -692,8 +713,13 @@ def step_build(cfg, niche, project, log=print, stop_flag=lambda: False, progress
                     on_progress=lambda d, t: progress(0.90 + 0.07 * d / t, f"Склейка {d}/{t}"))
     progress(0.97, "Сведение звука")
 
-    music = _pick_music(niche)
-    log(f"Свожу звук{' с музыкой: ' + music.name if music else ' (музыки нет: положите mp3 в папку music)'}...")
+    from . import music as _music
+    try:
+        music, mdesc = _music.build_bed(script, chapter_starts, total_sec, niche.get("id", ""), project / "music_bed.wav", log)
+    except Exception as e:
+        log(f"  Музыка по главам не получилась ({e}) — один трек.")
+        music, mdesc = _pick_music(niche), ""
+    log(f"Свожу звук{' с музыкой: ' + (mdesc or music.name) if music else ' (музыки нет: положите mp3 в папку music)'}...")
     final = project / f"{_slug(script.get('title', 'video'))}.mp4"
     sfx = _sfx_events(shots)
     if sfx:
@@ -1123,7 +1149,10 @@ def _document_item(spec, b, shots_dir, length, t0):
     if not reveal:
         step = max(0.15, (length - 0.6) / max(1, len(words)))
         reveal = [0.3 + i * step for i in range(len(words))]
-    out = shots_dir / f"doc_{_key(text, spec.get('doc_head', ''), f'{length:.2f}', str(reveal[:3]))}.mp4"
+    # после последнего слова лист ещё висит — зритель должен успеть дочитать (≈0,25 с на слово, 2–4 с)
+    hold = max(2.5, min(5.0, 0.3 * len(words)))
+    clip_len = length + hold
+    out = shots_dir / f"doc_{_key(text, spec.get('doc_head', ''), f'{clip_len:.2f}', str(reveal[:3]))}.mp4"
     if not out.exists():
-        extras.make_document_clip(text, spec.get("doc_head", ""), reveal, length, out, seed=text)
-    return {"path": str(out), "kind": "video", "url": "doc:" + text[:60], "duration": length + 0.5}
+        extras.make_document_clip(text, spec.get("doc_head", ""), reveal, clip_len, out, seed=text)
+    return {"path": str(out), "kind": "video", "url": "doc:" + text[:60], "duration": clip_len + 0.5, "hold": hold}

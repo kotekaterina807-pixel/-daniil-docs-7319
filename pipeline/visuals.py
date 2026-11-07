@@ -3,6 +3,7 @@ import os
 фото Pixabay — только если видео не нашлось."""
 import hashlib
 import html
+import json
 import re
 import threading
 import time
@@ -156,7 +157,7 @@ class VisualFinder:
 
     # ---------- Wikimedia ----------
     @staticmethod
-    def _wm_item(p, min_w=1000, min_h=560):
+    def _wm_item(p, min_w=1000, min_h=560, check_cats=True):
         info = (p.get("imageinfo") or [{}])[0]
         if info.get("width", 0) < min_w or info.get("height", 0) < min_h:
             return None
@@ -169,7 +170,7 @@ class VisualFinder:
             return None
         cats = " ".join(c.get("title", "") for c in p.get("categories") or [])
         desc = re.sub(r"<[^>]+>", " ", (meta.get("ImageDescription") or {}).get("value", ""))
-        if ARCHIVE_BLOCK.search(p.get("title", "") + " " + cats):
+        if ARCHIVE_BLOCK.search(p.get("title", "") + (" " + cats if check_cats else "")):
             return None
         artist = re.sub(r"<[^>]+>", "", html.unescape((meta.get("Artist") or {}).get("value", ""))).strip()
         url = info.get("thumburl") or info.get("url")
@@ -216,6 +217,42 @@ class VisualFinder:
                              r"instagram|tiktok|youtube|ytimg|vk\.com|userapi|aliexpress|amazon|ebay|etsy|"
                              r"redbubble|teepublic|zazzle|fineartamerica|pixels\.com|mediastorehouse", re.I)
 
+    def _bing_images(self, query, min_w):
+        """Поиск картинок Bing (как в браузере). Возвращает сырые результаты [{image, thumbnail, url, title, width, height}]."""
+        r = requests.get("https://www.bing.com/images/search",
+                         params={"q": query, "form": "HDRSC2", "first": 1, "qft": "+filterui:imagesize-large"},
+                         headers=dict(BROWSER_UA, **{"Accept-Language": "en-US,en;q=0.8"}), timeout=20)
+        if r.status_code != 200:
+            raise RuntimeError(f"Bing ответил {r.status_code}")
+        res = []
+        for m in re.finditer(r'm="(\{[^"]+\})"', r.text):
+            try:
+                d = json.loads(html.unescape(m.group(1)))
+            except Exception:
+                continue
+            if d.get("murl"):
+                res.append({"image": d["murl"], "thumbnail": d.get("turl") or d["murl"], "url": d.get("purl") or "",
+                            "title": d.get("t") or "", "width": 0, "height": 0})
+        return res
+
+    def _web_filter(self, raw, min_w):
+        out = []
+        for res in raw[:50]:
+            url, src = res.get("image") or "", (res.get("url") or "") + " " + (res.get("source") or "")
+            w, h = int(res.get("width") or 0), int(res.get("height") or 0)
+            title = res.get("title") or ""
+            if not url.startswith("http") or (w and (w < min_w or h < 300)):   # размер неизвестен — проверим при скачивании
+                continue
+            if self.STOCK_SITES.search(url + " " + src) or ARCHIVE_BLOCK.search(title):
+                continue
+            if re.search(r"\.(svg|gif)(\?|$)", url, re.I):
+                continue
+            dom = re.sub(r"^https?://(www\.)?", "", res.get("url") or url).split("/")[0]
+            out.append({"kind": "image", "url": url, "thumb": res.get("thumbnail") or url, "web": True,
+                        "source": "Интернет: " + dom, "page": res.get("url") or "", "title": title,
+                        "author": dom, "license": "из интернета", "tags": title})
+        return out
+
     def _web_images(self, query, min_w=500):
         """Картинки из интернета по запросу — как поиск картинок в браузере. Стоковые агентства с водяными
         знаками и магазины отбрасываются; каждую картинку дальше смотрит Claude (смысл, знаки, надписи)."""
@@ -225,32 +262,27 @@ class VisualFinder:
         def fetch():
             out = []
             try:
+                raw = []
+                try:
+                    raw = self._bing_images(query, min_w)
+                except Exception as e:
+                    self._diag(query, f"Bing: {e}")
+                if raw:
+                    return self._web_filter(raw, min_w)
                 s = requests.Session()
                 s.headers.update(BROWSER_UA)
                 s.headers["Accept"] = "text/html,application/json;q=0.9,*/*;q=0.8"
                 page = s.get("https://duckduckgo.com/", params={"q": query, "iax": "images", "ia": "images"}, timeout=20)
                 m = re.search(r"vqd=[\"']?([\d-]+)", page.text)
                 if not m:
+                    self._diag(query, f"DuckDuckGo: не отдал страницу поиска ({page.status_code})")
                     return out
                 s.headers["Referer"] = "https://duckduckgo.com/"
                 r = s.get("https://duckduckgo.com/i.js", params={"l": "wt-wt", "o": "json", "q": query, "vqd": m.group(1),
                                                                   "f": ",,,,,", "p": "1"}, timeout=20)
                 if r.status_code != 200:
                     return out
-                for res in (r.json().get("results") or [])[:40]:
-                    url, src = res.get("image") or "", (res.get("url") or "") + " " + (res.get("source") or "")
-                    w, h = int(res.get("width") or 0), int(res.get("height") or 0)
-                    title = res.get("title") or ""
-                    if not url.startswith("http") or w < min_w or h < 300:
-                        continue
-                    if self.STOCK_SITES.search(url + " " + src) or ARCHIVE_BLOCK.search(title):
-                        continue
-                    if re.search(r"\.(svg|gif)(\?|$)", url, re.I):
-                        continue
-                    dom = re.sub(r"^https?://(www\.)?", "", res.get("url") or url).split("/")[0]
-                    out.append({"kind": "image", "url": url, "thumb": res.get("thumbnail") or url, "web": True,
-                                "source": "Интернет: " + dom, "page": res.get("url") or "", "title": title,
-                                "author": dom, "license": "из интернета", "tags": title})
+                return self._web_filter(r.json().get("results") or [], min_w)
             except requests.ConnectionError as e:
                 self._down["web"] = True
                 self.log(f"  Поиск картинок в интернете недоступен — дальше без него ({type(e).__name__}).")
@@ -487,13 +519,17 @@ class VisualFinder:
                     if "imageinfo" not in p:
                         continue
                     info = (p.get("imageinfo") or [{}])[0]
-                    if info.get("width", 0) < 400:
+                    if info.get("width", 0) < 220:
+                        self._diag(name, f"Википедия {lang}: фото {fname} слишком маленькое ({info.get('width')} px)")
                         continue
-                    # портреты бывают небольшими — для людей допускаем от 400 px
+                    # старые портреты бывают небольшими — для людей допускаем от 220 px (служебные категории
+                    # Википедии вроде «…template…» не проверяем: лицензию уже проверили)
                     p2 = dict(p)
                     p2["imageinfo"] = [dict(info, width=max(info.get("width", 0), 1000),
                                             height=max(info.get("height", 0), 560))]
-                    it = self._wm_item(p2, 400, 400)
+                    it = self._wm_item(p2, 220, 220, check_cats=False)
+                    if it and "/1920px-" not in it["url"] and info.get("url"):
+                        it["url"] = info["url"]                 # маленький оригинал — берём его целиком
                     if it:
                         out.append(it)
                     else:

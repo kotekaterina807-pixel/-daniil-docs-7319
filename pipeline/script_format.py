@@ -7,6 +7,7 @@ TEXT_TO_MOOD = {v: k for k, v in MOOD_TO_TEXT.items()}
 HEADER = """# СЦЕНАРИЙ. Можно править в Блокноте и сохранить, затем нажать «Собрать видео».
 # Правила:
 #   == ГЛАВА: Название ==   — начало главы
+#   [музыка] спокойная / загадочная / тревожная — настроение музыки для этой главы
 #   Абзац текста           — то, что прочитает диктор
 #   [stock] запрос         — ВИДЕО (Pixabay), запрос на английском: что должно быть видно в кадре
 #   [archive] запрос       — архивное фото реального места/документа (Wikimedia), запрос на английском
@@ -47,6 +48,8 @@ def to_text(script: dict) -> str:
                 lines.append(f"[надпись] {s['label']}")
             if s.get("person") and not any(v == "person" for v, _ in shots):
                 lines.append(f"[человек] {s['person']}")
+            if s.get("music"):
+                lines.append(f"[музыка] {s['music']}")
             lines.append(f"[переход] {MOOD_TO_TEXT.get(s.get('mood', 'normal'), 'обычный')}")
             lines.append("")
     return "\n".join(lines)
@@ -63,11 +66,11 @@ def apply_text(script: dict, text: str) -> dict:
         nonlocal block
         if not block:
             return
-        txt, label, person, mood = [], "", "", "normal"
+        txt, label, person, mood, music = [], "", "", "normal", ""
         shots = []
         for ln in block:
             m = re.match(r"^\[(archive|stock|photo|фото|видео|архив)\]\s*(.*)$", ln.strip(), re.I)
-            tag = re.match(r"^\[(надпись|человек|переход|документ)\]\s*(.*)$", ln.strip(), re.I)
+            tag = re.match(r"^\[(надпись|человек|переход|документ|музыка)\]\s*(.*)$", ln.strip(), re.I)
             if m:
                 kind = {"фото": "photo", "видео": "stock", "архив": "archive"}.get(m.group(1).lower(),
                                                                                m.group(1).lower())
@@ -79,6 +82,8 @@ def apply_text(script: dict, text: str) -> dict:
                 elif name == "документ":
                     if val:
                         shots.append(("document", val))
+                elif name == "музыка":
+                    music = val.lower()
                 elif name == "человек":
                     if val:
                         person = person or val
@@ -97,7 +102,7 @@ def apply_text(script: dict, text: str) -> dict:
                 shots.append(("stock", "dark atmosphere"))
             first = next((x for x in shots if x[0] != "person"), shots[0])
             seg = {"text": body, "visual": first[0], "query": first[1],
-                   "label": label, "person": person, "mood": mood, "shots": shots}
+                   "label": label, "person": person, "mood": mood, "shots": shots, "music": music}
             current["segments"].append(seg)
         block = []
 

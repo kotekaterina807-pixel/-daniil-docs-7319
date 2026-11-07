@@ -542,7 +542,7 @@ DUCK = "sidechaincompress=threshold=0.05:ratio=4:attack=40:release=900:makeup=1"
 
 
 def _music_chain(music_volume):
-    k = max(0.0, float(music_volume)) / 0.12 * 0.5          # ползунок 0.12 (по умолчанию) = нормальный уровень
+    k = max(0.0, float(music_volume)) / 0.12 * 0.3          # ползунок 0.12 (по умолчанию) = нормальный уровень
     return ("aformat=sample_rates=48000:channel_layouts=stereo,loudnorm=I=-24:TP=-4:LRA=11,"
             f"equalizer=f=2500:t=q:w=1.2:g=-4,volume={k:.3f}")
 
@@ -569,7 +569,7 @@ def _final_mix_sfx(cmd, music, out, total_sec, music_volume, sfx, fade_out_start
         mix.append(f"[s{k}]")
         idx += 1
     parts.append("".join(mix) + f"amix=inputs={len(mix)}:duration=first:normalize=0,"
-                 f"loudnorm=I=-14:TP=-1.5:LRA=11,afade=t=in:d=1.5,afade=t=out:st={fade_out_start:.2f}:d=3[a]")
+                 f"loudnorm=I=-16:TP=-1.5:LRA=11,afade=t=in:d=1.5,afade=t=out:st={fade_out_start:.2f}:d=3[a]")
     cmd += ["-filter_complex", ";".join(parts), "-map", "0:v", "-map", "[a]", "-c:v", "copy",
             "-c:a", "aac", "-b:a", "192k", "-ar", "48000", "-t", f"{total_sec:.3f}",
             "-movflags", "+faststart", str(out)]
@@ -590,10 +590,10 @@ def final_mix(video, narration, music, out, total_sec, music_volume=0.12, sfx=No
                 f"[2:a]{_music_chain(music_volume)}[m];"
                 f"[m][n2]{DUCK}[duck];"
                 f"[n1][duck]amix=inputs=2:duration=first:normalize=0,"
-                f"loudnorm=I=-14:TP=-1.5:LRA=11,afade=t=in:d=1.5,afade=t=out:st={fade_out_start:.2f}:d=3[a]")
+                f"loudnorm=I=-16:TP=-1.5:LRA=11,afade=t=in:d=1.5,afade=t=out:st={fade_out_start:.2f}:d=3[a]")
     else:
         filt = (f"[1:a]aformat=sample_rates=48000:channel_layouts=stereo,"
-                f"loudnorm=I=-14:TP=-1.5:LRA=11,afade=t=out:st={fade_out_start:.2f}:d=3[a]")
+                f"loudnorm=I=-16:TP=-1.5:LRA=11,afade=t=out:st={fade_out_start:.2f}:d=3[a]")
     cmd += ["-filter_complex", filt, "-map", "0:v", "-map", "[a]", "-c:v", "copy",
             "-c:a", "aac", "-b:a", "192k", "-ar", "48000", "-t", f"{total_sec:.3f}",
             "-movflags", "+faststart", str(out)]

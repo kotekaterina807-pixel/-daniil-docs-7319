@@ -56,16 +56,35 @@ def typewriter(path, seconds=12.0, seed=7):
     _save(path, out + room)
 
 
-def whoosh(path, seconds=1.6, seed=3):
+def whoosh(path, seconds=1.4, seed=3):
+    """Современный «свуш» как в новых роликах: воздух быстро нарастает, проносится слева направо
+    и обрывается мягким низким ударом."""
     rng = np.random.default_rng(seed)
     n = int(seconds * SR)
-    tt = np.linspace(0, 1, n)
+    t = np.arange(n) / SR
+    peak = 0.62
+    rise = np.clip(t / peak, 0, 1) ** 3                                 # ускоряющееся нарастание
+    fall = np.exp(-np.clip(t - peak, 0, None) / 0.09)
+    env = np.where(t < peak, rise, fall)
     noise = rng.standard_normal(n)
-    a = 0.995 - 0.12 * np.sin(np.pi * tt) ** 2                                       # фильтр открывается и закрывается
-    x = _onepole(noise, a)
-    x = x - _onepole(x, 0.995)                                                       # убираем гул
-    env = np.sin(np.pi * np.clip(tt * 1.15, 0, 1)) ** 2
-    _save(path, x * env)
+    a = 0.985 - 0.55 * np.clip(t / peak, 0, 1) ** 2                     # фильтр раскрывается — звук «светлеет»
+    a = np.where(t < peak, a, 0.43 + 0.5 * (1 - fall))
+    air = _onepole(noise, a)
+    air = air - _onepole(air, 0.97)
+    air = air / (np.max(np.abs(air)) + 1e-9) * env
+    tb = np.clip(t - peak, 0, None)
+    boom = np.sin(2 * np.pi * (52 * tb - 6 * tb ** 2)) * np.exp(-tb / 0.22) * (t >= peak) * 0.55
+    tail = _onepole(rng.standard_normal(n), 0.9) * np.exp(-tb / 0.35) * (t >= peak) * 0.25
+    mono = air + boom + tail
+    pan = np.clip(t / (peak + 0.1), 0, 1)                               # пролетает слева направо
+    left, right = mono * np.cos(pan * np.pi / 2), mono * np.sin(pan * np.pi / 2)
+    st = np.stack([left, right], axis=1)
+    st = st / (np.max(np.abs(st)) + 1e-9) * 0.9
+    with wave.open(str(path), "wb") as w:
+        w.setnchannels(2)
+        w.setsampwidth(2)
+        w.setframerate(SR)
+        w.writeframes((st * 32767).astype("<i2").tobytes())
 
 
 def ensure(sfx_dir):
@@ -76,7 +95,8 @@ def ensure(sfx_dir):
     try:
         if not any(n.startswith("typewriter") for n in names):
             typewriter(sfx_dir / "typewriter_auto.wav")
-        if not any(n.startswith("whoosh") for n in names):
-            whoosh(sfx_dir / "whoosh_auto.wav")
+        (sfx_dir / "whoosh_auto.wav").unlink(missing_ok=True)        # старый «вжух» не понравился — заменён
+        if not any(n.startswith("whoosh") for n in names if n != "whoosh_auto.wav"):
+            whoosh(sfx_dir / "whoosh_auto2.wav")
     except Exception:
         pass
