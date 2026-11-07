@@ -948,8 +948,8 @@ def _choose_with_claude_code(cfg, project, finder, lines, rev_path, ch_path, top
 
         def one(name):
             check_stop()
-            ans = claude_code.run(cfg, claude_code.PROMPT.format(sheet=name, topic=topic or "документальное видео"),
-                                  project)
+            ans = claude_code.run_cached(cfg, claude_code.PROMPT.format(sheet=name, topic=topic or "документальное видео"),
+                                         project, name)
             done[0] += 1
             progress(0.36 + 0.08 * done[0] / max(1, len(sheets)), f"{label}: лист {done[0]}/{len(sheets)}")
             return claude_code.parse(ans)
