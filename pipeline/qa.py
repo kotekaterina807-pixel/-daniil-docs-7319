@@ -30,6 +30,9 @@ PROMPT = """Ты — строгий редактор документально�
 - ПОДПИСЬ на фото называет другого человека (однофамилец, другое имя: «Stella Mallory» вместо Джорджа Мэллори,
   «Irvine-Smith» вместо Эндрю Ирвина) или это обложка/экслибрис/страница книги вместо фото человека;
 - предмет не той эпохи: современный объектив, пластик, современная одежда в истории 1920-х;
+- человек не того возраста: говорят о 25-летнем — а на фото старик (или наоборот);
+- кадр «примерно про то же», когда названо конкретное: названо место, корабль, человек, предмет — в кадре
+  должно быть именно оно (или максимально похожее той же эпохи), а не случайная картинка на тему;
 - памятник, табличка, могила вместо самого человека; современные люди/техника в истории о прошлом;
 - водяной знак, логотип, надписи, интерфейс; быстрый мельтешащий кадр; мультяшная графика.
 
@@ -73,8 +76,10 @@ def _sheets(entries, out_dir, prefix="проверка"):
     for old in out_dir.glob(f"{prefix}_*.jpg"):
         old.unlink(missing_ok=True)
     alt_urls = list({a["thumb"] for e in entries for a in e["alts"] if a.get("thumb")})
-    with ThreadPoolExecutor(max_workers=8) as ex:
+    with ThreadPoolExecutor(max_workers=4) as ex:
         thumbs = dict(zip(alt_urls, ex.map(review._thumb, alt_urls)))
+    for e in entries:                   # запасной без превью — не показываем (Claude видел бы пустую клетку)
+        e["alts"] = [a for a in e["alts"] if thumbs.get(a.get("thumb")) is not None]
     f_head = extras._font(24, extras.SEMI_FONTS)
     f_small = extras._font(19, extras.SEMI_FONTS)
     f_num = extras._font(26, extras.SMALL_CAPS_FONTS)
@@ -213,11 +218,13 @@ def check(cfg, project, entries, finder, topic, log, progress=None, taken=None, 
                         if c.get("url") and c["url"] not in taken and c["url"] not in seen and c.get("thumb"):
                             seen.add(c["url"])
                             cands.append(c)
-                    if len(cands) >= 6:
+                    if len(cands) >= 8:
                         break
             if cands:
                 e = by_no[no]
-                retry.append({"no": no, "time": e["time"], "said": e["said"], "shot": e["shot"], "alts": cands[:3]})
+                ok = [c for c in cands if review._thumb(c["thumb"]) is not None][:3]
+                if ok:
+                    retry.append({"no": no, "time": e["time"], "said": e["said"], "shot": e["shot"], "alts": ok})
         if retry:
             log(f"  Нет подходящей замены у {len(retry)} кадров — ищу по новым запросам Claude и проверяю ещё раз...")
             rep2 = check(cfg, project, retry, finder, topic, log, None, taken, _round=2)

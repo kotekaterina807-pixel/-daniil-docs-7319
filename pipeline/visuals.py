@@ -784,7 +784,7 @@ class VisualFinder:
                 return []
         return self._cached(("wt", lang, name), fetch)
 
-    def _person_photos(self, person, alt=""):
+    def _person_photos(self, person, alt="", when=""):
         """Фото конкретного человека: главное фото его статьи в Википедии (en — по английскому имени,
         ru — по русскому), затем файлы архива, где в названии есть его фамилия. Только свободные лицензии."""
         names = [n for n in dict.fromkeys([person.strip(), (alt or "").strip()]) if n]
@@ -821,6 +821,13 @@ class VisualFinder:
                     continue
                 seen.add(c["url"])
                 out.append(c)
+        if when:                                          # «25-летний врач в 1884-м» — фото того времени, а не старика
+            for n in [x for x in names if not re.search("[а-яё]", x, re.I)][:1]:
+                add(self._wikimedia(f"{n} {when}"), need_name=True)
+                add(self._web_images(f"{n} {when} photo", min_w=300), need_name=True)
+                add(self._web_images(f"young {n} photo", min_w=300), need_name=True)
+            if out:
+                self._diag(person, f"фото {when} года: {len(out)}")
         for n in names:
             lang_order = ("ru", "en") if re.search("[а-яё]", n, re.I) else ("en", "ru")
             for lang in lang_order:

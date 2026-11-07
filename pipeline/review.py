@@ -35,7 +35,7 @@ def collect(finder, spec, taken):
     """До CANDS кандидатов для строки: сначала видео, без повторов по всему видео."""
     out = []
     if spec["visual"] == "person":
-        for c in finder._person_photos(spec["query"], spec.get("shown", ""))[:4]:
+        for c in finder._person_photos(spec["query"], spec.get("shown", ""), spec.get("when", ""))[:5]:
             if c["url"] not in taken and c.get("thumb"):
                 out.append(dict(c, person=True))
         query, visual = spec.get("fill_query") or "dark atmosphere", "stock"
@@ -43,8 +43,9 @@ def collect(finder, spec, taken):
         query, visual = spec["query"], spec["visual"]
     pool, seen_pool = [], set()
     if spec.get("auto_person"):                    # во фразе назван человек — его фото первыми
-        en, ru = spec["auto_person"]
-        for c in finder._person_photos(en, ru):
+        en, ru = spec["auto_person"][:2]
+        when = spec["auto_person"][2] if len(spec["auto_person"]) > 2 else spec.get("when", "")
+        for c in finder._person_photos(en, ru, when):
             if c.get("thumb") and c["url"] not in taken and c["url"] not in seen_pool:
                 seen_pool.add(c["url"])
                 pool.append(dict(c, person=en))
@@ -96,17 +97,44 @@ def collect(finder, spec, taken):
     return out
 
 
+_THUMB_CACHE = {}
+
+
 def _thumb(url):
+    """Превью кандидата. Раньше часть фото (архивы, Википедия, интернет) не грузилась — Claude видел
+    пустые серые клетки и не мог выбрать замену. Теперь: повтор, вид обычного браузера, пауза при 429."""
+    if url in _THUMB_CACHE:
+        return _THUMB_CACHE[url]
+    im = None
     try:
         if Path(url).exists():
             im = Image.open(url)
-        else:
-            r = requests.get(url, headers=UA, timeout=30)
-            r.raise_for_status()
-            im = Image.open(io.BytesIO(r.content))
-        return ImageOps.fit(im.convert("RGB"), (TW, TH), Image.LANCZOS)
+            im.load()
     except Exception:
-        return None
+        im = None
+    if im is None and str(url).startswith("http"):
+        import time as _t
+        from .visuals import BROWSER_UA
+        host = re.sub(r"^https?://", "", url).split("/")[0]
+        for k, hdr in enumerate((UA, dict(BROWSER_UA, Referer=f"https://{host}/"), UA, BROWSER_UA)):
+            try:
+                r = requests.get(url, headers=hdr, timeout=30)
+                if r.status_code == 429:
+                    _t.sleep(2 + 3 * k)
+                    continue
+                if r.status_code != 200:
+                    continue
+                im = Image.open(io.BytesIO(r.content))
+                im.load()
+                break
+            except Exception:
+                _t.sleep(1)
+    try:
+        res = ImageOps.fit(im.convert("RGB"), (TW, TH), Image.LANCZOS) if im is not None else None
+    except Exception:
+        res = None
+    _THUMB_CACHE[url] = res
+    return res
 
 
 def make_sheets(lines, out_dir, log=print, prefix="кадры_лист"):
@@ -114,9 +142,11 @@ def make_sheets(lines, out_dir, log=print, prefix="кадры_лист"):
     out_dir = Path(out_dir)
     for old in out_dir.glob(f"{prefix}_*.jpg"):
         old.unlink(missing_ok=True)
-    urls = [c["thumb"] for ln in lines for c in ln["cands"]]
-    with ThreadPoolExecutor(max_workers=6) as ex:
+    urls = list(dict.fromkeys(c["thumb"] for ln in lines for c in ln["cands"]))
+    with ThreadPoolExecutor(max_workers=4) as ex:
         thumbs = dict(zip(urls, ex.map(_thumb, urls)))
+    for ln in lines:                    # кандидат без превью Claude не увидит — не показываем его вовсе
+        ln["cands"] = [c for c in ln["cands"] if thumbs.get(c["thumb"]) is not None]
     f_head = extras._font(24, extras.SEMI_FONTS)
     f_small = extras._font(19, extras.SEMI_FONTS)
     f_num = extras._font(26, extras.SMALL_CAPS_FONTS)

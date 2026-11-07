@@ -325,7 +325,7 @@ def step_build(cfg, niche, project, log=print, stop_flag=lambda: False, progress
             n = max(1, round(length / shot_sec), math.ceil(length / max_shot - 1e-6))
             n = min(n, max(1, int(length / min_shot)))
             if cfg.get("visual_check") == "claude_code":
-                n = 3 if length >= 7.0 else 2 if length >= 4.0 else 1   # фраза ≈ кадр; от 4 с — два, от 7 с — три
+                n = 3 if length >= 8.0 else 2 if length >= 4.6 else 1   # фраза ≈ кадр; от 4 с — два, от 7 с — три
             spec = {"visual": vis, "query": query, "t0": t0, "t1": t1, "n": n, "text": txt}
             if vis == "person":
                 parts = [x.strip() for x in query.split("|")]
@@ -808,6 +808,10 @@ def _choose_in_chat(cfg, project, finder, seg_blocks, jobs, vis_cache, log, chec
                 continue
             if pl.get("source") == "архив" and spec["visual"] == "stock":
                 spec["visual"] = "archive"            # старые фото, гравюры, картины той эпохи
+            if spec["visual"] == "person" and pl.get("people"):
+                yr = next((pp[2] for pp in pl["people"] if len(pp) > 2 and _is_hero(pp, [[spec["query"], spec.get("shown", "")]])), "")
+                if yr:
+                    spec["when"] = seg_blocks[bi]["specs"][si]["when"] = yr
             if pl.get("people") and spec["visual"] != "person":
                 # фото человека — только героя истории (есть строка [человек] в сценарии) и только во фразе,
                 # где звучит его имя: никаких фото «заранее» и случайных людей, о которых ничего не сказано
@@ -815,7 +819,7 @@ def _choose_in_chat(cfg, project, finder, seg_blocks, jobs, vis_cache, log, chec
                 if cand:
                     spec["auto_person"] = cand
                     seg_blocks[bi]["specs"][si]["auto_person"] = cand
-            if spec["visual"] != "person" and spec["n"] < 2 and spec.get("t1", 0) - spec.get("t0", 0) >= 4:
+            if spec["visual"] != "person" and spec["n"] < 2 and spec.get("t1", 0) - spec.get("t0", 0) >= 4.6:
                 spec["n"] = 2                     # минимум два разных кадра на обычную фразу
             cands = review.collect(finder, spec, taken)
             q = spec["query"] if spec["visual"] != "person" else \
@@ -1025,7 +1029,7 @@ def _speech_units(sents, pauses, span, rec=None):
     units = []
     for a, b, txt in sents:
         has_quote = bool(re.search(r"«[^»]{14,}»", txt))
-        if b - a <= 4.5 and not has_quote:         # перечисления и длинные фразы — на части: больше разных кадров
+        if b - a <= 5.0 and not has_quote:         # перечисления и длинные фразы — на части: больше разных кадров
             units.append([a, b, txt])
             continue
         if has_quote:                              # цитата — отдельный кадр (лист с текстом) ровно на её словах
@@ -1127,7 +1131,7 @@ def _stems(name):
 
 
 def _is_hero(pp, heroes):
-    en, ru = pp
+    en, ru = pp[0], pp[1]
     for h_en, h_ru in heroes:
         if (en and h_en and _stems(en)[-1:] == _stems(h_en)[-1:]) or (ru and h_ru and _stems(ru)[-1:] == _stems(h_ru)[-1:]):
             return True
