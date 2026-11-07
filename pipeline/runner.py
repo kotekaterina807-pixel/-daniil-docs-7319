@@ -676,6 +676,8 @@ def step_build(cfg, niche, project, log=print, stop_flag=lambda: False, progress
                 extras.make_label(who, lp, accent)
             if add_overlay(lp, a, min(LABEL_SEC, b_ - a), "label", person=True):
                 last_label[who] = a
+        n_ps = sum(1 for sh in shots if sh.get("person"))
+        log(f"  Фото людей в монтаже: {n_ps}, подписей «имя | кто он»: {len(last_label) and sum(1 for o in overlays if o.get('person'))}.")
     for o in overlays:
         o.pop("person", None)
     for sh in shots:
@@ -877,6 +879,10 @@ def _choose_in_chat(cfg, project, finder, seg_blocks, jobs, vis_cache, log, chec
                 items.append({"path": str(pth), "kind": c["kind"], "url": c["url"],
                               "duration": c.get("duration") or 0, "person": bool(c.get("person"))})
                 credits.append(c)
+        sp_ = seg_blocks[bi]["specs"][si]
+        if sp_.get("visual") == "person" or sp_.get("auto_person"):
+            # фразу о человеке открывает его фото — на имени, а не «где-то потом» (иначе фото могло не попасть в монтаж)
+            items.sort(key=lambda it: not it.get("person"))
         seg_blocks[bi]["specs"][si]["items"] = items
         seg_blocks[bi]["specs"][si]["_cands"] = ln["cands"]      # запасные варианты — для контроля качества
     vis_cache["chat"] = {"items": [it for b in seg_blocks for sp in b["specs"] for it in sp.get("items", [])],
