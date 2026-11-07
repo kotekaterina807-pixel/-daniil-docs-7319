@@ -3,7 +3,7 @@ import json
 import os
 from pathlib import Path
 
-VERSION = "9.2 (07.11.2026)"
+VERSION = "9.3 (07.11.2026)"
 CONFIG_REV = 10      # при смене — обновляются настройки монтажа у уже сохранённых конфигов
 ROOT = Path(__file__).resolve().parent.parent
 CONFIG_PATH = ROOT / "config.json"
@@ -45,6 +45,7 @@ DEFAULTS = {
     "word_sync": True,
     "qa_check": True,
     "auto_update": True,             # новые версии ставятся сами (не во время сборки)
+    "photo_stack": True,             # подряд идущие фото ложатся стопкой со вспышкой
     "leonardo_key": "",              # необязательно: рисует кадры, которых нет ни в архивах, ни в интернете
     "ai_images": True,
     "report_repo": "",                 # закрытый репозиторий GitHub для отчётов Claude (владелец/название)

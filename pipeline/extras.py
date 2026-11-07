@@ -454,3 +454,116 @@ def make_document_clip(text, head, reveal, length, out_mp4, seed=""):
                     "-crf", "18", str(out_mp4)], check=True, timeout=900,
                    creationflags=0x08000000 if os.name == "nt" else 0)
     return out_mp4
+
+
+def make_map_clip(title, points, times, length, out_mp4, seed=""):
+    """Старая карта: точки появляются, когда диктор называет место, а пунктир маршрута
+    «прокладывается» к каждой новой точке ровно к моменту, когда звучит её название.
+    points: [(название, широта, долгота)], times: [секунда появления каждой точки]."""
+    import math
+    import subprocess
+    import tempfile
+    from .config import ffmpeg_exe
+    W, H = 1920, 1080
+    base, (px, py, pw, ph) = _paper(W, H, seed or title or "map")
+    d0 = ImageDraw.Draw(base)
+    ink, red = (70, 52, 36), (150, 28, 22)
+    fh = _font(34, TYPE_BOLD)
+    fl = _font(36, TYPE_FONTS)
+    fs = _font(22, TYPE_FONTS)
+    m = 110
+    ax0, ay0, ax1, ay1 = px + m, py + m + 40, px + pw - m, py + ph - m + 10
+    lats = [p[1] for p in points]
+    lons = [p[2] for p in points]
+    la0, la1 = min(lats), max(lats)
+    lo0, lo1 = min(lons), max(lons)
+    k = math.cos(math.radians((la0 + la1) / 2))
+    span_x = max(0.5, (lo1 - lo0) * k)
+    span_y = max(0.5, la1 - la0)
+    sc = min((ax1 - ax0) / span_x, (ay1 - ay0) / span_y) * 0.92
+    cx, cy = (ax0 + ax1) / 2, (ay0 + ay1) / 2
+    mx, my = (lo0 + lo1) / 2, (la0 + la1) / 2
+
+    def xy(lat, lon):
+        return cx + (lon - mx) * k * sc, cy - (lat - my) * sc
+    # сетка градусов (тонко, как на старых картах)
+    for lat in range(int(math.floor(la0 - 2)), int(math.ceil(la1 + 2)) + 1):
+        _, y = xy(lat, mx)
+        if ay0 - 30 < y < ay1 + 30:
+            d0.line([(px + 40, y), (px + pw - 40, y)], fill=(170, 150, 118), width=1)
+            d0.text((px + 46, y - 26), f"{lat}°", font=fs, fill=(150, 128, 98))
+    for lon in range(int(math.floor(lo0 - 4)), int(math.ceil(lo1 + 4)) + 1):
+        x, _ = xy(my, lon)
+        if px + 40 < x < px + pw - 40:
+            d0.line([(x, py + 90), (x, py + ph - 40)], fill=(170, 150, 118), width=1)
+    if title:
+        d0.text((px + 60, py + 34), title.upper(), font=fh, fill=(120, 40, 30))
+        d0.line([px + 60, py + 82, px + pw - 60, py + 82], fill=(120, 40, 30), width=2)
+    # роза ветров
+    rx, ry = px + pw - 120, py + ph - 130
+    d0.polygon([(rx, ry - 52), (rx - 12, ry), (rx + 12, ry)], fill=ink)
+    d0.polygon([(rx, ry + 52), (rx - 12, ry), (rx + 12, ry)], outline=ink)
+    d0.text((rx - 9, ry - 92), "N", font=fl, fill=ink)
+    P = [xy(p[1], p[2]) for p in points]
+    times = list(times) + [length - 1.0] * (len(points) - len(times))
+    seg_d = 1.1                                           # пунктир доходит до точки за 1,1 с
+    tmp = Path(tempfile.mkdtemp())
+    fps = 30
+    n = max(1, int(length * fps))
+
+    def dashed(d, a, b, frac):
+        (x0, y0), (x1, y1) = a, b
+        L = math.hypot(x1 - x0, y1 - y0)
+        if L < 1:
+            return
+        ux, uy = (x1 - x0) / L, (y1 - y0) / L
+        s, dash, gap = 0.0, 18.0, 12.0
+        end = L * frac
+        while s < end:
+            e = min(s + dash, end)
+            d.line([(x0 + ux * s, y0 + uy * s), (x0 + ux * e, y0 + uy * e)], fill=red, width=6)
+            s += dash + gap
+
+    lst = tmp / "list.txt"
+    prev_state = None
+    frames = []
+    for f in range(n):
+        t = f / fps
+        state = []
+        for i in range(len(points)):
+            if i == 0:
+                state.append(1.0 if t >= times[0] else 0.0)
+            else:
+                st = times[i] - seg_d
+                state.append(max(0.0, min(1.0, (t - st) / seg_d)) if t >= st else 0.0)
+        state = [round(x, 3) for x in state]            # одинаково и для сравнения, и для рисования
+        key = tuple(state)
+        if key == prev_state and frames:
+            frames[-1][1] += 1
+            continue
+        prev_state = key
+        im = base.copy()
+        d = ImageDraw.Draw(im)
+        for i in range(1, len(points)):
+            if state[i] > 0:
+                dashed(d, P[i - 1], P[i], state[i])
+        for i, (name, _, _) in enumerate(points):
+            if state[i] >= 1.0 or (i == 0 and state[0] > 0):
+                x, y = P[i]
+                d.ellipse([x - 13, y - 13, x + 13, y + 13], outline=red, width=4)
+                d.ellipse([x - 6, y - 6, x + 6, y + 6], fill=red)
+                d.text((x + 24, y - 24), name, font=fl, fill=ink)
+        p_ = tmp / f"{len(frames):05d}.jpg"
+        im.save(p_, quality=92)
+        frames.append([p_, 1])
+    with open(lst, "w", encoding="utf-8") as fh_:
+        for p_, cnt in frames:
+            fh_.write(f"file '{p_.as_posix()}'\nduration {cnt / fps:.4f}\n")
+        fh_.write(f"file '{frames[-1][0].as_posix()}'\n")
+    zf = max(1, n)
+    subprocess.run([ffmpeg_exe(), "-y", "-hide_banner", "-loglevel", "error", "-f", "concat", "-safe", "0",
+                    "-i", str(lst), "-vf", f"fps=30,scale=3840:2160:flags=lanczos,"
+                    f"zoompan=z='1+0.025*on/{zf}':x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':d=1:s=1920x1080:fps=30,"
+                    "format=yuv420p", "-c:v", "libx264", "-preset", "veryfast", "-crf", "18", str(out_mp4)],
+                   check=True, timeout=1200, creationflags=0x08000000 if os.name == "nt" else 0)
+    return out_mp4

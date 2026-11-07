@@ -8,6 +8,8 @@ HEADER = """# СЦЕНАРИЙ. Можно править в Блокноте и
 # Правила:
 #   == ГЛАВА: Название ==   — начало главы
 #   [музыка] спокойная / загадочная / тревожная — настроение музыки для этой главы
+#   [карта] Заголовок | Место широта долгота | Место широта долгота ...  — старая карта: точка появляется,
+#           когда диктор называет место, пунктир маршрута прокладывается к ней (на весь абзац)
 #   Абзац текста           — то, что прочитает диктор
 #   [stock] запрос         — ВИДЕО (Pixabay), запрос на английском: что должно быть видно в кадре
 #   [archive] запрос       — архивное фото реального места/документа (Wikimedia), запрос на английском
@@ -43,7 +45,7 @@ def to_text(script: dict) -> str:
             lines.append(s["text"])
             shots = s.get("shots") or [(s["visual"], s["query"])]
             for v, q in shots:
-                lines.append(f"[человек] {q}" if v == "person" else f"[{v}] {q}")
+                lines.append(f"[человек] {q}" if v == "person" else f"[карта] {q}" if v == "map" else f"[{v}] {q}")
             if s.get("label"):
                 lines.append(f"[надпись] {s['label']}")
             if s.get("person") and not any(v == "person" for v, _ in shots):
@@ -70,7 +72,7 @@ def apply_text(script: dict, text: str) -> dict:
         shots = []
         for ln in block:
             m = re.match(r"^\[(archive|stock|photo|фото|видео|архив)\]\s*(.*)$", ln.strip(), re.I)
-            tag = re.match(r"^\[(надпись|человек|переход|документ|музыка)\]\s*(.*)$", ln.strip(), re.I)
+            tag = re.match(r"^\[(надпись|человек|переход|документ|музыка|карта)\]\s*(.*)$", ln.strip(), re.I)
             if m:
                 kind = {"фото": "photo", "видео": "stock", "архив": "archive"}.get(m.group(1).lower(),
                                                                                m.group(1).lower())
@@ -82,6 +84,9 @@ def apply_text(script: dict, text: str) -> dict:
                 elif name == "документ":
                     if val:
                         shots.append(("document", val))
+                elif name == "карта":
+                    if val:
+                        shots.append(("map", val))
                 elif name == "музыка":
                     music = val.lower()
                 elif name == "человек":

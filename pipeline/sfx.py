@@ -87,6 +87,25 @@ def whoosh(path, seconds=1.4, seed=3):
         w.writeframes((st * 32767).astype("<i2").tobytes())
 
 
+def flash(path, seed=11):
+    """Щелчок затвора старого фотоаппарата и короткий «хлопок» вспышки."""
+    rng = np.random.default_rng(seed)
+    n = int(0.9 * SR)
+    t = np.arange(n) / SR
+    out = np.zeros(n)
+    for at, amp in ((0.0, 1.0), (0.055, 0.7)):        # две створки затвора
+        i = int(at * SR)
+        L = int(0.03 * SR)
+        tt = np.arange(L) / SR
+        click = rng.standard_normal(L) * np.exp(-tt / 0.004)
+        click = np.diff(np.concatenate([[0], click]))
+        out[i:i + L] += click[: n - i] * amp
+    tb = t - 0.07
+    pop = (np.sin(2 * np.pi * (2400 * tb + 900 * tb ** 2)) * np.exp(-np.clip(tb, 0, None) / 0.12) * (tb >= 0) * 0.18)
+    air = _onepole(rng.standard_normal(n), 0.6) * np.exp(-np.clip(tb, 0, None) / 0.18) * (tb >= 0) * 0.35
+    _save(path, out + pop + air)
+
+
 def ensure(sfx_dir):
     """Если своих звуков нет — делаем свои один раз."""
     sfx_dir = Path(sfx_dir)
@@ -95,6 +114,8 @@ def ensure(sfx_dir):
     try:
         if not any(n.startswith("typewriter") for n in names):
             typewriter(sfx_dir / "typewriter_auto.wav")
+        if not any(n.startswith("flash") for n in names):
+            flash(sfx_dir / "flash_auto.wav")
         (sfx_dir / "whoosh_auto.wav").unlink(missing_ok=True)        # старый «вжух» не понравился — заменён
         if not any(n.startswith("whoosh") for n in names if n != "whoosh_auto.wav"):
             whoosh(sfx_dir / "whoosh_auto2.wav")

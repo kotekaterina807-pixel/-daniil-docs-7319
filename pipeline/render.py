@@ -141,6 +141,84 @@ def render_image_shot(src, total, out, grade, zoom_in=True, label=None):
     _pipe(_kb_frames(base, total, zoom_in, amp), total, out, chain, extra)
 
 
+# ---------- «стопка фотографий», как в документальных фильмах ----------
+def _print_card(src, seed, max_w=1180, max_h=760):
+    """Фото как старый отпечаток: белая рамка, лёгкий наклон, мягкая тень. RGBA и угол."""
+    import random
+    rnd = random.Random(str(seed))
+    im = Image.open(src).convert("RGB")
+    sc = min(max_w / im.width, max_h / im.height)
+    im = im.resize((max(2, round(im.width * sc)), max(2, round(im.height * sc))), Image.LANCZOS)
+    bd = 18
+    card = Image.new("RGB", (im.width + 2 * bd, im.height + 2 * bd + 10), (238, 232, 218))
+    card.paste(im, (bd, bd))
+    angle = rnd.uniform(-5.5, 5.5)
+    rgba = card.convert("RGBA").rotate(angle, resample=Image.BICUBIC, expand=True)
+    pad = 40
+    sh = Image.new("RGBA", (rgba.width + 2 * pad, rgba.height + 2 * pad), (0, 0, 0, 0))
+    alpha = rgba.split()[3].point(lambda a: 150 if a else 0)
+    black = Image.new("RGBA", rgba.size, (0, 0, 0, 255))
+    black.putalpha(alpha)
+    sh.alpha_composite(black, (pad + 10, pad + 14))
+    sh = sh.filter(ImageFilter.GaussianBlur(14))
+    sh.alpha_composite(rgba, (pad, pad))
+    dx, dy = rnd.randint(-150, 150), rnd.randint(-70, 70)
+    return sh, (dx, dy)
+
+
+def _stack_background(first_src):
+    bg = _cover(Image.open(first_src).convert("RGB"), W, H).filter(ImageFilter.GaussianBlur(30))
+    return ImageEnhance.Brightness(bg).enhance(0.38).convert("RGBA")
+
+
+def render_stack_shot(prev, src, total, out, grade, seed, zoom_in=True, label=None):
+    """Новое фото «ложится» поверх предыдущих отпечатков: вспышка, мягкое опускание, тень.
+    prev — [(src, seed)] уже лежащих фото. Потом весь стол медленно приближается."""
+    first = prev[0][0] if prev else src
+    bg = _stack_background(first)
+    for psrc, pseed in prev[-3:]:                      # уже лежащие (не больше трёх под новым)
+        card, (dx, dy) = _print_card(psrc, pseed)
+        bg.alpha_composite(card, ((W - card.width) // 2 + dx, (H - card.height) // 2 + dy))
+    card, (dx, dy) = _print_card(src, seed)
+    x0, y0 = (W - card.width) // 2 + dx, (H - card.height) // 2 + dy
+    final = bg.copy()
+    final.alpha_composite(card, (x0, y0))
+    final_rgb = final.convert("RGB")
+    anim = int(0.38 * FPS)
+    flash = int(0.15 * FPS)
+    amp = 0.035 * min(1.0, max(0.4, total / FPS / 5.0))
+    big = final_rgb
+
+    def frames():
+        for k in range(total):
+            if k < anim:                                 # фото опускается на стол: крупнее → на место
+                p = k / anim
+                e = 1 - (1 - p) ** 3
+                sc = 1.12 - 0.12 * e
+                cw, ch = round(card.width * sc), round(card.height * sc)
+                c2 = card.resize((cw, ch), Image.BICUBIC)
+                if e < 1:
+                    a = c2.split()[3].point(lambda v, e=e: int(v * min(1.0, 0.25 + e)))
+                    c2.putalpha(a)
+                fr = bg.copy()
+                fr.alpha_composite(c2, (x0 + (card.width - cw) // 2, y0 + (card.height - ch) // 2 - round(18 * (1 - e))))
+                img = fr.convert("RGB")
+                if k < flash:                            # вспышка фотоаппарата
+                    img = Image.blend(img, Image.new("RGB", (W, H), (255, 252, 240)), 0.55 * (1 - k / flash))
+                yield img.tobytes()
+            else:                                        # медленный наезд на «стол»
+                p = (k - anim) / max(1, total - anim - 1)
+                e = 0.5 * p + 0.5 * (p * p * (3 - 2 * p))
+                z = 1 + amp * e                          # только наезд: продолжает «падение» фото без скачка
+                bw, bh = big.size
+                cw, ch = min(bw, bw / z), min(bh, bh / z)
+                xx, yy = max(0.0, (bw - cw) / 2), max(0.0, (bh - ch) / 2)
+                yield big.resize((W, H), Image.BICUBIC, box=(xx, yy, xx + cw, yy + ch)).tobytes()
+    extra, lf = _overlay_label(label, total / FPS, 1)
+    chain = f"[0:v]{grade or 'null'},format=yuv420p[v0];{lf}"
+    _pipe(frames(), total, out, chain, extra)
+
+
 def motion_score(path, seconds=8):
     """Насколько «быстрый» ролик: медиана разницы соседних кадров (8 кадров/с, 96×54, лёгкое размытие).
     Ориентиры: спокойный кадр 0–3, плавная панорама 3–6, быстрая камера/таймлапс 7 и выше."""
@@ -221,6 +299,9 @@ def render_shots(shots, workers, log=print, on_progress=lambda d, t: None):
             elif s["kind"] == "video":
                 render_video_shot(s["src"], n, tmp, s["grade"], s.get("label"), s.get("clip_dur", 0),
                                  s.get("offset_n", 0), s.get("speed", 1.0))
+            elif s["kind"] == "image" and s["src"] and s.get("stack") is not None:
+                render_stack_shot(s["stack"], s["src"], n, tmp, s["grade"], s.get("stack_seed", s["src"]),
+                                  s.get("zoom_in", True), s.get("label"))
             elif s["kind"] == "image" and s["src"]:
                 render_image_shot(s["src"], n, tmp, s["grade"], s.get("zoom_in", True), s.get("label"))
             else:
@@ -547,6 +628,46 @@ def _music_chain(music_volume):
             f"equalizer=f=2500:t=q:w=1.2:g=-4,volume={k:.3f}")
 
 
+def _sfx_track(sfx, total_sec, out):
+    """Звуковые эффекты (их может быть сотни на 30 минут) раскладываются в одну дорожку заранее:
+    один вход для FFmpeg вместо сотен."""
+    sr = 48000
+    n = int((total_sec + 2) * sr)
+    buf = np.zeros((n, 2), dtype=np.float32)
+    cache = {}
+    for e in sfx:
+        f = e["file"]
+        if f not in cache:
+            p = subprocess.run([ffmpeg_exe(), "-hide_banner", "-loglevel", "error", "-i", f, "-f", "f32le",
+                                "-ac", "2", "-ar", str(sr), "-"], capture_output=True, timeout=120,
+                               creationflags=_NO_WINDOW)
+            cache[f] = np.frombuffer(p.stdout, dtype=np.float32).reshape(-1, 2) if p.stdout else None
+        src = cache[f]
+        if src is None or not len(src):
+            continue
+        L = int(e["dur"] * sr)
+        reps = int(np.ceil(L / len(src)))                 # короткий звук (машинка) повторяется на всю длину
+        clip = np.tile(src, (max(1, reps), 1))[:L].copy()
+        fd = int(min(L, e.get("fade", 0.4) * sr))
+        if fd > 1:
+            clip[-fd:] *= np.linspace(1, 0, fd, dtype=np.float32)[:, None]
+        a = int(e["at"] * sr)
+        if a >= n:
+            continue
+        clip = clip[: n - a]
+        buf[a:a + len(clip)] += clip * float(e["vol"])
+    if not np.any(buf):
+        return None
+    import wave
+    pcm = (np.clip(buf, -1, 1) * 32767).astype("<i2")
+    with wave.open(str(out), "wb") as w:
+        w.setnchannels(2)
+        w.setsampwidth(2)
+        w.setframerate(sr)
+        w.writeframes(pcm.tobytes())
+    return out
+
+
 def _final_mix_sfx(cmd, music, out, total_sec, music_volume, sfx, fade_out_start):
     cmd = list(cmd)
     idx = 2
@@ -560,13 +681,11 @@ def _final_mix_sfx(cmd, music, out, total_sec, music_volume, sfx, fade_out_start
         idx += 1
     else:
         parts.append("[n2]anullsink")
-    for k, e in enumerate(sfx):
-        cmd += ["-stream_loop", "-1", "-i", e["file"]]
-        ms = int(e["at"] * 1000)
-        parts.append(f"[{idx}:a]aformat=sample_rates=48000:channel_layouts=stereo,atrim=0:{e['dur']:.2f},"
-                     f"afade=t=out:st={max(0.0, e['dur'] - e.get('fade', 0.4)):.2f}:d={e.get('fade', 0.4)},volume={e['vol']},"
-                     f"adelay={ms}|{ms}[s{k}]")
-        mix.append(f"[s{k}]")
+    track = _sfx_track(sfx, total_sec, Path(out).with_suffix(".sfx.wav"))   # все звуки — одной дорожкой
+    if track:
+        cmd += ["-i", str(track)]
+        parts.append(f"[{idx}:a]aformat=sample_rates=48000:channel_layouts=stereo[sx]")
+        mix.append("[sx]")
         idx += 1
     parts.append("".join(mix) + f"amix=inputs={len(mix)}:duration=first:normalize=0,"
                  f"loudnorm=I=-16:TP=-1.5:LRA=11,afade=t=in:d=1.5,afade=t=out:st={fade_out_start:.2f}:d=3[a]")

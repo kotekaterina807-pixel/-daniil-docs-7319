@@ -115,10 +115,12 @@ def _sfx_file(kind):
 
 def _sfx_events(shots):
     """Звуковые акценты: стук машинки, пока печатается лист, и «вжух» перед новой главой."""
-    tw, wh = _sfx_file("typewriter"), _sfx_file("whoosh")
+    tw, wh, fl = _sfx_file("typewriter"), _sfx_file("whoosh"), _sfx_file("flash")
     ev = []
     for sh in shots:
         t0, t1 = sh["s"] / SR, sh["e"] / SR
+        if fl and sh.get("stack") is not None:          # фото ложится в стопку — щелчок затвора и вспышка
+            ev.append({"file": str(fl), "at": max(0.0, t0 - 0.02), "dur": 0.9, "vol": 0.28, "fade": 0.2})
         if tw and Path(str(sh.get("src", ""))).name.startswith("doc_"):
             a = sh.get("type_start") if sh.get("type_start") is not None else 0.3
             b = sh.get("type_end") if sh.get("type_end") is not None else (t1 - t0 - 0.6)
@@ -126,7 +128,7 @@ def _sfx_events(shots):
             ev.append({"file": str(tw), "at": t0 + a, "dur": dur, "vol": 0.12, "fade": 0.08})
         elif wh and sh.get("role") == "card" and not any(e["file"] == str(wh) and abs(e["at"] - t0) < 6 for e in ev):
             ev.append({"file": str(wh), "at": max(0.0, t0 - 0.55), "dur": 1.6, "vol": 0.3})   # один «свуш» на главу
-    return ev[:30]
+    return ev[:400]
 
 
 OLD_LOOK = ("gblur=sigma=0.9,"                          # чуть мягче, как старая плёнка/камера
@@ -340,6 +342,10 @@ def step_build(cfg, niche, project, log=print, stop_flag=lambda: False, progress
                 spec["doc_text"], spec["doc_head"] = parts[0], (parts[1] if len(parts) > 1 else "")
                 b["specs"].append(spec)                   # лист с текстом делается сам — подбирать нечего
                 continue
+            if vis == "map":
+                spec["map"] = query
+                b["specs"].append(spec)                   # карта рисуется сама — подбирать нечего
+                continue
             b["specs"].append(spec)
             jobs.append((bi, len(b["specs"]) - 1))
 
@@ -489,6 +495,12 @@ def step_build(cfg, niche, project, log=print, stop_flag=lambda: False, progress
         # строки без кадров не показывают чужие ролики повторно: их время забирает соседняя строка
         # (предыдущая в абзаце, иначе следующая), её кадры просто идут дольше
         specs_ = b["specs"]
+        for spec in specs_:                        # карта маршрута — заранее, у неё свой кадр
+            if spec["visual"] == "map" and not spec.get("items"):
+                try:
+                    spec["items"] = [_map_item(spec, b, shots_dir, max(0.5, spec["t1"] - spec["t0"]), spec["t0"])]
+                except Exception as e:
+                    log(f"  Карта не получилась ({e}) — будет обычный кадр.")
         for spec in specs_:                        # листы с текстом — заранее, у них свои кадры
             if spec["visual"] == "document" and not spec.get("items"):
                 try:
@@ -704,6 +716,28 @@ def step_build(cfg, niche, project, log=print, stop_flag=lambda: False, progress
     for sh in shots:
         sh.pop("_qa", None)
 
+    # ---------- 4б. «стопка фото»: подряд идущие фото ложатся друг на друга (как в документальных фильмах) ----------
+    if cfg.get("photo_stack", True):
+        group = []
+
+        def flush():
+            if len(group) >= 2:
+                for k, x in enumerate(group):
+                    x["stack"] = [(y["src"], y["src"] + str(y["s"])) for y in group[max(0, k - 3):k]]
+                    x["stack_seed"] = x["src"] + str(x["s"])
+                    x["stack_last"] = k == len(group) - 1
+            group.clear()
+        for sh in shots:
+            ok = (sh["kind"] == "image" and sh.get("src") and not sh.get("role")
+                  and not Path(str(sh["src"])).name.startswith(("person_", "doc_", "map_")))
+            if ok and group and len(group) < 4:
+                group.append(sh)
+            else:
+                flush()
+                if ok:
+                    group.append(sh)
+        flush()
+
     # ---------- 5. переходы (только плавный наплыв), кадры, хвосты под переходы ----------
     for i, sh in enumerate(shots):
         f0 = round(sh["s"] / SR * render.FPS)
@@ -724,6 +758,8 @@ def step_build(cfg, niche, project, log=print, stop_flag=lambda: False, progress
             sec = TR_INNER
         fr = int(round(sec * render.FPS))
         fr = max(3, min(fr, int(sh["frames"] * 0.4), int(nxt["frames"] * 0.4)))
+        if sh.get("stack") is not None and nxt.get("stack") and not sh.get("stack_last"):
+            fr = 0                                    # в стопке новое фото ложится сверху — без наплыва
         sh["trans"], sh["tail"] = "fade", fr
     for i, sh in enumerate(shots):
         g = _grade(niche, sh["mood"], bool(cfg.get("old_look", True)))
@@ -732,7 +768,7 @@ def step_build(cfg, niche, project, log=print, stop_flag=lambda: False, progress
         sh["grade"] = g
         sh["out"] = str(shots_dir / (f"{i:04d}_" + _key(sh["kind"], sh["src"], str(sh["frames"]), str(sh["tail"]),
                                                           sh["grade"], str(sh.get("zoom_in")), str(sh.get("offset_n", 0)),
-                                                          "v2") + ".mp4"))
+                                                          str(sh.get("stack")), "v3") + ".mp4"))
 
     workers = max(2, min(6, (os.cpu_count() or 4) // 2))
     log(f"Монтаж: {len(shots)} кадров (потоков: {workers}). Кодирование: "
@@ -1157,6 +1193,9 @@ def _speech_units(sents, pauses, span, rec=None):
 
 def _assign_specs(script_specs, units):
     """Строки кадров сценария → фразы. [человек] — к фразе, где звучит его имя; остальные — по порядку."""
+    mp = next((q for v, q in script_specs if v == "map"), None)
+    if mp and units:                               # карта маршрута — на весь абзац одним кадром
+        return [("map", mp)], [(units[0][0], units[-1][1])], [" ".join(u[2] for u in units)]
     n = len(units)
     vis = [["stock", ""] for _ in range(n)]
     persons = {}
@@ -1226,7 +1265,7 @@ def _quality_check(cfg, project, shots, finder, topic, log, progress):
         q = sh.get("_qa")
         if not q or sh["kind"] not in ("video", "image") or not sh.get("src"):
             continue
-        if str(q.get("url", "")).startswith(("doc:", "card:")):
+        if str(q.get("url", "")).startswith(("doc:", "card:", "map:")):
             continue                                   # листы с текстом и карточки людей — сделаны программой
         rec = q["blk"].get("words")
         if rec:
@@ -1248,6 +1287,46 @@ def _quality_check(cfg, project, shots, finder, topic, log, progress):
                 e["shot"]["_bad"] = True
     except Exception as e:
         log(f"  Контроль качества не выполнен ({e}) — монтирую как есть.")
+
+
+def _map_item(spec, b, shots_dir, length, t0):
+    """Карта маршрута: точка — в момент, когда диктор называет место (по распознанным словам)."""
+    parts = [x.strip() for x in spec["map"].split("|") if x.strip()]
+    title, pts = "", []
+    for x in parts:
+        m = re.match(r"^(.+?)\s+(-?\d+(?:[.,]\d+)?)\s+(-?\d+(?:[.,]\d+)?)$", x)
+        if m:
+            pts.append((m.group(1).strip(), float(m.group(2).replace(",", ".")), float(m.group(3).replace(",", "."))))
+        elif not pts:
+            title = x
+    if len(pts) < 2:
+        raise ValueError("на карте меньше двух мест с координатами")
+    rec = b.get("words") or []
+    times, last = [], 0.3
+    for name, _, _ in pts:
+        st = align.word_time(rec, name.split()[0][:max(4, len(name.split()[0]) - 2)], t0 + last - 0.2, t0 + length) if rec else None
+        if st is None:
+            times.append(None)
+        else:
+            last = max(last, st - t0)
+            times.append(max(0.3, st - t0))
+    # места, которые не прозвучали, — равномерно между соседними (последнее — ближе к концу абзаца)
+    known = [i for i, t in enumerate(times) if t is not None]
+    for i in range(len(times)):
+        if times[i] is None:
+            prev = max([j for j in known if j < i], default=None)
+            nxt = min([j for j in known if j > i], default=None)
+            a = times[prev] if prev is not None else 0.4
+            bnd = times[nxt] if nxt is not None else max(a + 1.5, length - 1.2)
+            span = (nxt if nxt is not None else len(times)) - (prev if prev is not None else -1)
+            times[i] = a + (bnd - a) * (i - (prev if prev is not None else -1)) / max(1, span)
+    for i in range(1, len(times)):                     # по порядку и не теснее 1,2 с
+        times[i] = max(times[i], times[i - 1] + 1.2)
+    clip_len = length + 1.5
+    out = shots_dir / f"map_{_key(spec['map'], f'{clip_len:.2f}', str([round(t, 2) for t in times]))}.mp4"
+    if not out.exists():
+        extras.make_map_clip(title, pts, times, clip_len, out, seed=spec["map"])
+    return {"path": str(out), "kind": "video", "url": "map:" + title[:40], "duration": clip_len + 0.5}
 
 
 def _document_item(spec, b, shots_dir, length, t0):
