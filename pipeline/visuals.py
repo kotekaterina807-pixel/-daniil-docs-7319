@@ -727,12 +727,15 @@ class VisualFinder:
         """Сначала ВИДЕО по всем вариантам запроса, фото — только если видео не хватило.
         archive — реальное фото места/документа: Wikimedia, затем видео, затем фото Pixabay."""
         if visual == "archive":
-            order = [self._wikimedia, self._loc, self._ia_video, self._met, self._aic, self._openverse,
-                     self._stock, self._pixabay_photos, self._web_images]
+            # музеи (Met, Чикаго) отдают много картин «примерно на тему» — они в конце;
+            # точный поиск картинок по названию (как в браузере) — сразу после Wikimedia
+            order = [self._wikimedia, self._web_images, self._loc, self._ia_video, self._openverse,
+                     self._stock, self._pixabay_photos, self._aic, self._met]
         elif visual == "photo":
-            order = [self._pixabay_photos, self._wikimedia, self._met, self._aic, self._openverse, self._web_images, self._stock]
+            order = [self._web_images, self._wikimedia, self._pixabay_photos, self._openverse, self._stock,
+                     self._aic, self._met]
         else:
-            order = [self._stock, self._ia_video, self._pixabay_photos, self._wikimedia, self._met]
+            order = [self._stock, self._ia_video, self._web_images, self._pixabay_photos, self._wikimedia]
         for src in order:
             for q in queries:
                 yield from src(q)

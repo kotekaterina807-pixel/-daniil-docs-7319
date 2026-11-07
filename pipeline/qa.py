@@ -212,7 +212,7 @@ def check(cfg, project, entries, finder, topic, log, progress=None, taken=None, 
                 continue
             cands, seen = [], set()
             for q in qs:
-                for src in (finder._candidates("archive", [q]), iter(finder._web_images(q)),
+                for src in (iter(finder._web_images(q)), iter(finder._wikimedia(q)),
                             finder._candidates("stock", [q])):
                     for c in itertools.islice(src, 4):
                         if c.get("url") and c["url"] not in taken and c["url"] not in seen and c.get("thumb"):

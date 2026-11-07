@@ -542,7 +542,7 @@ DUCK = "sidechaincompress=threshold=0.03:ratio=6:attack=30:release=900:makeup=1"
 
 
 def _music_chain(music_volume):
-    k = max(0.0, float(music_volume)) / 0.12 * 0.22         # ползунок 0.12 (по умолчанию) = нормальный уровень
+    k = max(0.0, float(music_volume)) / 0.12 * 0.14         # ползунок 0.12 (по умолчанию) = нормальный уровень
     return ("aformat=sample_rates=48000:channel_layouts=stereo,loudnorm=I=-24:TP=-4:LRA=11,"
             f"equalizer=f=2500:t=q:w=1.2:g=-4,volume={k:.3f}")
 

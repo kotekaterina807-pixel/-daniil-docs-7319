@@ -376,7 +376,7 @@ def _paper(W, H, seed):
 
 
 def make_document_clip(text, head, reveal, length, out_mp4, seed=""):
-    """Видео: старый документ, на котором текст печатается слово за словом ровно под голос диктора.
+    """Видео: старый документ, на котором текст печатается по буквам ровно под голос диктора.
     reveal — время (с) появления каждого слова от начала кадра."""
     import subprocess
     import tempfile
@@ -411,27 +411,46 @@ def make_document_clip(text, head, reveal, length, out_mp4, seed=""):
         d0.line([px + margin, top - 44, px + pw - margin, top - 44], fill=(120, 40, 30), width=2)
     tmp = Path(tempfile.mkdtemp())
     reveal = list(reveal) + [length] * (len(words) - len(reveal))
-    steps = sorted(set([0.0] + [max(0.0, min(length - 0.05, t)) for t in reveal]))
-    frames = []
-    for k, t in enumerate(steps):
-        im = base.copy()
-        d = ImageDraw.Draw(im)
-        for i, w in enumerate(words):
-            if reveal[i] <= t + 1e-6:
-                x, y = pos[i]
-                d.text((x, y), w, font=f, fill=(38, 30, 24))
-        p = tmp / f"{k:04d}.png"
-        im.save(p)
-        frames.append((p, t))
+    # печать ПО БУКВАМ: буквы слова появляются в темпе речи — от момента, когда диктор начал слово,
+    # до начала следующего слова (но не медленнее 0,11 с и не быстрее 0,035 с на букву)
+    events = []                                           # (время, номер слова, номер буквы)
+    for i, w in enumerate(words):
+        t0 = max(0.0, min(length - 0.05, reveal[i]))
+        nxt = reveal[i + 1] if i + 1 < len(words) else t0 + 0.08 * len(w) + 0.2
+        span = max(0.05, min(nxt, length - 0.05) - t0)
+        per = max(0.035, min(0.11, span / (len(w) + 0.5)))
+        for c in range(len(w)):
+            events.append((min(length - 0.05, t0 + c * per), i, c))
+    events.sort()
+    im = base.copy()
+    d = ImageDraw.Draw(im)
+    frames = [(tmp / "0000.jpg", 0.0)]
+    im.save(frames[0][0], quality=93)
+    k = 0
+    while k < len(events):
+        # все буквы, у которых время совпадает (в пределах кадра 1/30 с), рисуем в один кадр
+        group = [e for e in events[k:] if e[0] - events[k][0] < 1 / 30]
+        for _, i, c in group:
+            x, y = pos[i]
+            w = words[i]
+            d.text((x + d0.textlength(w[:c], font=f), y), w[c], font=f, fill=(38, 30, 24))
+        k += len(group)
+        p_ = tmp / f"{k:04d}.jpg"
+        im.save(p_, quality=93)
+        frames.append((p_, events[k - 1][0]))
     lst = tmp / "list.txt"
     with open(lst, "w", encoding="utf-8") as fh_:
         for k, (p, t) in enumerate(frames):
             nxt = frames[k + 1][1] if k + 1 < len(frames) else length
-            fh_.write(f"file '{p.as_posix()}'\nduration {max(0.04, nxt - t):.3f}\n")
+            fh_.write(f"file '{p.as_posix()}'\nduration {max(0.034, nxt - t):.3f}\n")
         fh_.write(f"file '{frames[-1][0].as_posix()}'\n")
+    # плавное медленное приближение без дрожи: сначала увеличиваем кадр в 2 раза (тогда сдвиги
+    # zoompan меньше пикселя и не «прыгают»), приближение очень мягкое — до 3% за весь кадр
+    zf = max(1, int(length * 30))
     subprocess.run([ffmpeg_exe(), "-y", "-hide_banner", "-loglevel", "error", "-f", "concat", "-safe", "0",
-                    "-i", str(lst), "-vf", "fps=30,zoompan=z='min(1.06,1+0.0005*on)':x='iw/2-(iw/zoom/2)':"
-                    "y='ih/2-(ih/zoom/2)':d=1:s=1920x1080:fps=30,format=yuv420p", "-c:v", "libx264", "-preset", "veryfast",
-                    "-crf", "18", str(out_mp4)], check=True, timeout=600,
+                    "-i", str(lst), "-vf", f"fps=30,scale=3840:2160:flags=lanczos,"
+                    f"zoompan=z='1+0.03*on/{zf}':x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':d=1:s=1920x1080:fps=30,"
+                    "format=yuv420p", "-c:v", "libx264", "-preset", "veryfast",
+                    "-crf", "18", str(out_mp4)], check=True, timeout=900,
                    creationflags=0x08000000 if os.name == "nt" else 0)
     return out_mp4

@@ -145,8 +145,26 @@ def make_sheets(lines, out_dir, log=print, prefix="кадры_лист"):
     urls = list(dict.fromkeys(c["thumb"] for ln in lines for c in ln["cands"]))
     with ThreadPoolExecutor(max_workers=4) as ex:
         thumbs = dict(zip(urls, ex.map(_thumb, urls)))
-    for ln in lines:                    # кандидат без превью Claude не увидит — не показываем его вовсе
-        ln["cands"] = [c for c in ln["cands"] if thumbs.get(c["thumb"]) is not None]
+    failed = {}
+    for ln in lines:                    # превью не загрузилось — пробуем саму картинку; иначе кандидата не показываем
+        keep = []
+        for c in ln["cands"]:
+            if thumbs.get(c["thumb"]) is None and c.get("url", "").startswith("http") and c["kind"] == "image":
+                t = _thumb(c["url"])
+                if t is not None:
+                    thumbs[c["url"]] = t
+                    c["thumb"] = c["url"]
+            if thumbs.get(c["thumb"]) is not None:
+                keep.append(c)
+            else:
+                host = re.sub(r"^https?://", "", c.get("thumb", "")).split("/")[0]
+                failed[host] = failed.get(host, 0) + 1
+                if c.get("person"):
+                    failed["ФОТО ЛЮДЕЙ"] = failed.get("ФОТО ЛЮДЕЙ", 0) + 1
+        ln["cands"] = keep
+    if failed:
+        log("  Превью не загрузились (сайт → сколько): " + ", ".join(f"{h} → {n}" for h, n in
+                                                                     sorted(failed.items(), key=lambda x: -x[1])[:8]))
     f_head = extras._font(24, extras.SEMI_FONTS)
     f_small = extras._font(19, extras.SEMI_FONTS)
     f_num = extras._font(26, extras.SMALL_CAPS_FONTS)

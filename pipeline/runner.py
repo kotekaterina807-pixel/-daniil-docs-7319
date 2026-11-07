@@ -428,6 +428,12 @@ def step_build(cfg, niche, project, log=print, stop_flag=lambda: False, progress
     def first_video(items):
         return next((it for it in items if it["kind"] == "video"), items[0] if items else None)
 
+    roles = {}
+    for b_ in seg_blocks:                         # кто есть кто: имя → роль (из строк [человек] сценария)
+        for x in b_["specs"]:
+            if x.get("visual") == "person" and x.get("role"):
+                roles[x.get("shown", "")] = roles[x.get("query", "")] = x["role"]
+
     def add_overlay(png, start_sec, dur_sec, anim, person=False):
         """Надписи никогда не накладываются: если место занято, надпись ждёт (до 3 с), иначе пропускается."""
         if anim in ("label", "title"):
@@ -569,6 +575,7 @@ def step_build(cfg, niche, project, log=print, stop_flag=lambda: False, progress
                     "s": b["start"] + int((t0 + edges[j]) * SR), "e": b["start"] + int((t0 + edges[j + 1]) * SR),
                     "mood": s.get("mood", "normal"), "first_of_seg": first_in_seg, "zoom_in": zoom_flip,
                     "person": bool((it or {}).get("person")), "hold": float((it or {}).get("hold") or 0),
+                    "who": _who(spec, roles) if (it or {}).get("person") else "",
                     "type_start": (it or {}).get("type_start"), "type_end": (it or {}).get("type_end"),
                     "_qa": {"blk": b, "spec": spec, "a": t0 + edges[j], "b": t0 + edges[j + 1],
                             "url": (it or {}).get("url", "")},
@@ -652,23 +659,23 @@ def step_build(cfg, niche, project, log=print, stop_flag=lambda: False, progress
                 shots.pop(j)
             sh["e"] = max(sh["e"], want)
         i += 1
-    # подпись с именем — только пока на экране фото/карточка этого человека
-    for o in list(overlays):
-        if not o.get("person"):
-            continue
-        a = o["start"] / render.FPS
-        b_ = a + o["frames"] / render.FPS
-        host = next((sh for sh in shots if sh.get("person") and sh["s"] / SR < b_ and sh["e"] / SR > a), None)
-        if not host:
-            overlays.remove(o)
-            continue
-        end = min(b_, host["e"] / SR - 0.15)
-        start = max(a, host["s"] / SR + 0.1)
-        if end - start < 1.2:
-            overlays.remove(o)
-            continue
-        o["start"] = int(round(start * render.FPS))
-        o["frames"] = int(round((end - start) * render.FPS))
+    # подпись «Имя Фамилия | кто он» — на КАЖДОМ фото человека, ровно пока фото на экране
+    # (тот же человек снова через несколько секунд — подпись не повторяем)
+    overlays[:] = [o for o in overlays if not o.get("person")]
+    last_label = {}
+    if cfg.get("show_labels", True):
+        for sh in shots:
+            who = sh.get("who") or ""
+            if not sh.get("person") or not who or str(sh.get("src", "")).find("person_") >= 0:
+                continue                                   # у карточки имя и так крупно написано
+            a, b_ = sh["s"] / SR + 0.15, sh["e"] / SR - 0.15
+            if b_ - a < 1.5 or a - last_label.get(who, -99) < 15:
+                continue
+            lp = shots_dir / f"label3_{_key(who, str(accent))}.png"
+            if not lp.exists():
+                extras.make_label(who, lp, accent)
+            if add_overlay(lp, a, min(LABEL_SEC, b_ - a), "label", person=True):
+                last_label[who] = a
     for o in overlays:
         o.pop("person", None)
     for sh in shots:
@@ -1004,6 +1011,20 @@ def _person_on_name(specs, ranges, rec):
         if t is not None and t - 0.25 > ranges[i][0] + 0.8 and t - 0.25 < ranges[i][1] - 1.0:
             ranges[i - 1][1] = ranges[i][0] = t - 0.25
     return [tuple(r) for r in ranges]
+
+
+def _who(spec, roles):
+    """Подпись к фото человека: «Имя Фамилия | кто он»."""
+    if spec.get("visual") == "person":
+        name = spec.get("shown") or spec.get("query", "")
+        role = spec.get("role") or roles.get(name, "")
+    elif spec.get("auto_person"):
+        en, ru = spec["auto_person"][0], spec["auto_person"][1]
+        name = ru or en
+        role = roles.get(ru) or roles.get(en) or ""
+    else:
+        return ""
+    return name + (" | " + role if role else "")
 
 
 def _doc_ok(seg_blocks, bi, si, doc_used):
