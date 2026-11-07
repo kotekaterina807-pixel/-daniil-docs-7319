@@ -535,6 +535,18 @@ def assemble(shots, out, workdir, log=print, group_size=20, on_progress=lambda d
     os.replace(tmp, out)
 
 
+# Музыка: каждый трек сначала выравнивается по громкости (тихий и громкий трек звучат одинаково),
+# в ней чуть приглушается диапазон голоса (2–3 кГц), чтобы слова звучали чище, и она мягко уходит
+# вниз, пока говорит диктор, и плавно возвращается в паузах. Итог: музыка на ~15–18 дБ тише голоса.
+DUCK = "sidechaincompress=threshold=0.05:ratio=4:attack=40:release=900:makeup=1"
+
+
+def _music_chain(music_volume):
+    k = max(0.0, float(music_volume)) / 0.12 * 0.5          # ползунок 0.12 (по умолчанию) = нормальный уровень
+    return ("aformat=sample_rates=48000:channel_layouts=stereo,loudnorm=I=-24:TP=-4:LRA=11,"
+            f"equalizer=f=2500:t=q:w=1.2:g=-4,volume={k:.3f}")
+
+
 def _final_mix_sfx(cmd, music, out, total_sec, music_volume, sfx, fade_out_start):
     cmd = list(cmd)
     idx = 2
@@ -542,8 +554,8 @@ def _final_mix_sfx(cmd, music, out, total_sec, music_volume, sfx, fade_out_start
     mix = ["[n1]"]
     if music:
         cmd += ["-stream_loop", "-1", "-i", str(music)]
-        parts.append(f"[{idx}:a]aformat=sample_rates=48000:channel_layouts=stereo,volume={music_volume}[m]")
-        parts.append("[m][n2]sidechaincompress=threshold=0.03:ratio=6:attack=30:release=600[duck]")
+        parts.append(f"[{idx}:a]{_music_chain(music_volume)}[m]")
+        parts.append(f"[m][n2]{DUCK}[duck]")
         mix.append("[duck]")
         idx += 1
     else:
@@ -575,8 +587,8 @@ def final_mix(video, narration, music, out, total_sec, music_volume=0.12, sfx=No
     if music:
         cmd += ["-stream_loop", "-1", "-i", str(music)]
         filt = (f"[1:a]aformat=sample_rates=48000:channel_layouts=stereo,asplit=2[n1][n2];"
-                f"[2:a]aformat=sample_rates=48000:channel_layouts=stereo,volume={music_volume}[m];"
-                f"[m][n2]sidechaincompress=threshold=0.03:ratio=6:attack=30:release=600[duck];"
+                f"[2:a]{_music_chain(music_volume)}[m];"
+                f"[m][n2]{DUCK}[duck];"
                 f"[n1][duck]amix=inputs=2:duration=first:normalize=0,"
                 f"loudnorm=I=-14:TP=-1.5:LRA=11,afade=t=in:d=1.5,afade=t=out:st={fade_out_start:.2f}:d=3[a]")
     else:

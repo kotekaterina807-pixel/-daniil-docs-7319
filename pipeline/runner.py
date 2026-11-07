@@ -120,9 +120,9 @@ def _sfx_events(shots):
     for sh in shots:
         t0, t1 = sh["s"] / SR, sh["e"] / SR
         if tw and Path(str(sh.get("src", ""))).name.startswith("doc_"):
-            ev.append({"file": str(tw), "at": t0 + 0.3, "dur": max(0.5, min(t1 - t0 - 0.6, 8.0)), "vol": 0.35})
+            ev.append({"file": str(tw), "at": t0 + 0.3, "dur": max(0.5, min(t1 - t0 - 0.6, 8.0)), "vol": 0.22})
         elif wh and sh.get("role") == "card":
-            ev.append({"file": str(wh), "at": max(0.0, t0 - 0.4), "dur": 2.5, "vol": 0.5})
+            ev.append({"file": str(wh), "at": max(0.0, t0 - 0.4), "dur": 2.5, "vol": 0.35})
     return ev[:30]
 
 
