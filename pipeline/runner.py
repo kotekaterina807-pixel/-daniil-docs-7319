@@ -797,6 +797,7 @@ def _choose_in_chat(cfg, project, finder, seg_blocks, jobs, vis_cache, log, chec
         plan = {}
         if auto:                                  # режиссёрский план: что должно быть в кадре + точные запросы
             from . import claude_code
+            claude_code.LOG = log
             plan_path = project / "план_кадров.json"
             try:
                 cached = json.loads(plan_path.read_text(encoding="utf-8"))
@@ -880,6 +881,8 @@ def _choose_in_chat(cfg, project, finder, seg_blocks, jobs, vis_cache, log, chec
             sp0["visual"], sp0["doc_text"], sp0["doc_head"] = "document", sp0["text"].strip(), ln.get("doc_head", "")
     pick_lines = [ln for ln in lines if not ln.get("doc")]
     if not ch_path.exists() and auto:
+        from . import claude_code as _cc
+        _cc.LOG = log
         _choose_with_claude_code(cfg, project, finder, pick_lines, rev_path, ch_path, topic, log, check_stop, progress)
         review.save_review(rev_path, lines)       # вместе с фразами-листами (тот же список, кандидаты обновлены)
     if not ch_path.exists():

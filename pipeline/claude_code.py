@@ -67,7 +67,26 @@ def open_login(cfg):
             "subscription», войдите в браузере, затем /exit." + warn}
 
 
+LOG = None          # куда писать «жду сброса лимита» (ставит сборка)
+
+
 def run(cfg, prompt, workdir, timeout=900):
+    """Один запрос к Claude Code. Если лимит подписки на этот период исчерпан (на 30-минутном видео
+    запросов много), не роняем сборку: ждём сброса лимита (проверка раз в 15 минут, до 6 часов)."""
+    import time as _t
+    for k in range(25):
+        try:
+            return _run_once(cfg, prompt, workdir, timeout)
+        except ClaudeCodeError as e:
+            if "лимит подписки" not in str(e) or k == 24:
+                raise
+            if LOG:
+                LOG(f"  Лимит подписки Claude на этот период исчерпан — жду сброса и продолжу сам "
+                    f"(проверка через 15 минут, попытка {k + 1}).")
+            _t.sleep(900)
+
+
+def _run_once(cfg, prompt, workdir, timeout=900):
     """Один запрос к Claude Code. Текст задания идёт через stdin (без проблем с кавычками в Windows)."""
     exe = find_exe()
     if not exe:
