@@ -223,18 +223,19 @@
               <button class="btn primary" id="libFind">Найти</button>
             </div>
             <div class="row gap mt">
+              <div class="select-wrap"><select id="libLang"><option value="de">Немецкий</option><option value="ru">Русский</option><option value="en">Английский</option><option value="pl">Польский</option><option value="fr">Французский</option><option value="es">Испанский</option><option value="it">Итальянский</option><option value="pt">Португальский</option><option value="">Любой язык</option></select></div>
               <div class="select-wrap"><select id="libGender"><option value="">Любой пол</option><option value="male">Мужской</option><option value="female">Женский</option></select></div>
               <div class="select-wrap"><select id="libAge"><option value="">Любой возраст</option><option value="young">Молодой</option><option value="middle_aged">Средний</option><option value="old">Пожилой</option></select></div>
               <div class="select-wrap"><select id="libUse"><option value="narrative_story">Для повествования</option><option value="">Любое назначение</option><option value="informative_educational">Обучающие</option><option value="characters_animation">Персонажи</option></select></div>
             </div>
-            <p class="muted small mt">Показаны голоса с русским языком. ▶ — пример с сайта, «Добавить» — в «Мои голоса» слева.</p>
+            <p class="muted small mt">Язык голоса выбирается в первом списке. ▶ — пример с сайта, «Добавить» — в «Мои голоса» слева.</p>
             <div class="voice-list" id="libList"></div>
             <div class="row gap mt"><button class="btn ghost small" id="libMore" hidden>Показать ещё</button></div>
           </div>
           <div class="card">
             <h3>Добавить голос по ID</h3>
             <p class="muted small" id="lumAddHint" hidden>Если у вас уже есть ID голоса ElevenLabs (Voice ID) — вставьте его сюда.</p>
-            <p class="muted small" id="elAddHint">1. Откройте библиотеку и найдите голос (фильтр Language: Russian).<br>2. У голоса нажмите «Add to my voices».<br>3. Нажмите ⋯ → «Copy voice ID» и вставьте сюда.</p>
+            <p class="muted small" id="elAddHint">1. Откройте библиотеку и найдите голос (фильтр Language — нужный язык, например German).<br>2. У голоса нажмите «Add to my voices».<br>3. Нажмите ⋯ → «Copy voice ID» и вставьте сюда.</p>
             <div class="row gap mt">
               <input class="input grow" id="elAddId" placeholder="ID голоса или ссылка на него" spellcheck="false">
               <button class="btn primary" id="elAddBtn">Добавить</button>

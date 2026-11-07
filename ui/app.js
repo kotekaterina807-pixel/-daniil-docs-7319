@@ -719,7 +719,7 @@ async function libSearch(page) {
   const box = $("#libList");
   if (!page) box.innerHTML = '<p class="muted small">Ищу голоса…</p>';
   const r = await api("/api/lumean_library", { search: $("#libSearch").value.trim(), gender: $("#libGender").value,
-    age: $("#libAge").value, use_cases: $("#libUse").value, language: "ru", page }).catch((e) => ({ ok: false, error: e.message }));
+    age: $("#libAge").value, use_cases: $("#libUse").value, language: $("#libLang").value, page }).catch((e) => ({ ok: false, error: e.message }));
   if (!r.ok) { box.innerHTML = `<p class="small" style="color:var(--danger)">${esc(r.error)}</p>`; return; }
   LIB.items = page ? LIB.items.concat(r.voices) : r.voices;
   if (r.page != null) LIB.page = r.page;
@@ -733,7 +733,9 @@ async function libSearch(page) {
 }
 $("#libFind").onclick = () => libSearch(0);
 $("#libSearch").addEventListener("keydown", (e) => { if (e.key === "Enter") libSearch(0); });
-["#libGender", "#libAge", "#libUse"].forEach((s) => $(s).addEventListener("change", () => libSearch(0)));
+try { const l = localStorage.getItem("ds-lib-lang"); if (l !== null) $("#libLang").value = l; } catch (e) {}
+$("#libLang").addEventListener("change", (e) => { try { localStorage.setItem("ds-lib-lang", e.target.value); } catch (err) {} });
+["#libLang", "#libGender", "#libAge", "#libUse"].forEach((s) => $(s).addEventListener("change", () => libSearch(0)));
 $("#libMore").onclick = () => libSearch(LIB.page + 1);
 $("#libList").addEventListener("click", async (e) => {
   const row = e.target.closest(".vrow"); if (!row) return;

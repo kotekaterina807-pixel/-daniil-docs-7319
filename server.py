@@ -561,7 +561,7 @@ class Handler(BaseHTTPRequestHandler):
             try:
                 return self._send(200, {"ok": True, **lumean.library(config.load_config(), str(data.get("search") or ""),
                                                                    str(data.get("gender") or ""), str(data.get("age") or ""),
-                                                                   str(data.get("use_cases") or ""), str(data.get("language") or "ru"),
+                                                                   str(data.get("use_cases") or ""), str(data.get("language") if data.get("language") is not None else "ru"),
                                                                    int(data.get("page") or 0))})
             except Exception as e:
                 return self._send(200, {"ok": False, "error": str(e)})
