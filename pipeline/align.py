@@ -85,15 +85,68 @@ def _get_model(lang, log):
         return _model[name]
 
 
+_FOLD = {"ß": "ss", "ł": "l", "æ": "ae", "ø": "o", "œ": "oe"}
+
+
+def _fold(ch):
+    """Латинские буквы с точками/хвостиками — к простым (ä→a, ó→o): немецкий, польский, французский.
+    Кириллицу не трогаем (й остаётся й)."""
+    if ch in _FOLD:
+        return _FOLD[ch]
+    if ord(ch) < 0x250 and not ch.isascii():
+        import unicodedata
+        return "".join(c for c in unicodedata.normalize("NFKD", ch) if not unicodedata.combining(c))
+    return ch
+
+
 def norm(w):
-    w = w.lower().replace("ё", "е")
-    return re.sub(r"[^0-9a-zа-яąćęłńóśźż]+", "", w)
+    w = "".join(_fold(c) for c in w.lower().replace("ё", "е"))
+    return re.sub(r"[^0-9a-zа-я]+", "", w)
+
+
+def word_starts(words, rec_words, dur):
+    """Время начала КАЖДОГО слова текста по распознанной речи — без искусственных пауз между словами.
+    Несовпавшие слова — между соседними пропорционально числу букв. None — если почти ничего не совпало."""
+    toks = [norm(w) for w in words]
+    rt = [w for _, _, w in rec_words]
+    if not words or not rt:
+        return None
+    sm = difflib.SequenceMatcher(None, toks, rt, autojunk=False)
+    t_of = {}
+    for a, b, size in sm.get_matching_blocks():
+        for k in range(size):
+            if toks[a + k]:
+                t_of[a + k] = rec_words[b + k][0]
+    if len(t_of) < max(2, len(words) // 4):
+        return None
+    end_speech = rec_words[-1][1]
+    cum = [0]
+    for w in words:
+        cum.append(cum[-1] + len(w) + 1)
+    known = sorted(t_of)
+    out = []
+    for i in range(len(words)):
+        if i in t_of:
+            out.append(t_of[i])
+            continue
+        prev = max((k for k in known if k < i), default=None)
+        nxt = min((k for k in known if k > i), default=None)
+        if prev is not None and nxt is not None:
+            a_t, b_t, a_c, b_c = t_of[prev], t_of[nxt], cum[prev], cum[nxt]
+        elif prev is not None:
+            a_t, b_t, a_c, b_c = t_of[prev], end_speech, cum[prev], cum[-1]
+        else:
+            a_t, b_t, a_c, b_c = max(0.0, t_of[nxt] - 0.07 * (cum[nxt] - cum[i])), t_of[nxt], cum[i], cum[nxt]
+        out.append(a_t + (b_t - a_t) * (cum[i] - a_c) / max(1, b_c - a_c))
+    for i in range(1, len(out)):
+        out[i] = max(out[i], out[i - 1] + 0.04)
+    return [min(max(0.0, t), dur) for t in out]
 
 
 def words(wav_path, lang="ru", log=print):
     """[(start, end, слово)] для файла озвучки. Результат кэшируется рядом с файлом."""
     wav_path = Path(wav_path)
-    cache = wav_path.with_suffix(wav_path.suffix + f".words-{lang}.json")
+    cache = wav_path.with_suffix(wav_path.suffix + f".words2-{lang}.json")   # words2: умлауты ä→a
     if cache.exists():
         try:
             return [tuple(x) for x in json.loads(cache.read_text(encoding="utf-8"))]

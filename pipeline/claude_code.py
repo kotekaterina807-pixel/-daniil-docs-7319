@@ -233,12 +233,18 @@ PLAN_PROMPT = """Ты режиссёр документального видео
 «лист» — для 2–3 самых сильных фраз каждой главы, которые эффектно смотрятся напечатанными на старом листе:
 запись в журнале, приговор, вывод суда, дата и место, жуткий факт, чьи-то слова (5–24 слова). На листе
 печатаются РОВНО слова диктора в момент, когда он их говорит. В «в кадре» для листа напиши короткий заголовок
-листа (например: «Судовой журнал, 1872»), запросы всё равно дай. Не больше трёх листов на главу и не подряд.
+листа НА ЯЗЫКЕ ВИДЕО ({lang}) — например «Судовой журнал, 1872» для русского видео, «Logbuch, 1872» для немецкого;
+заголовок должен подходить именно к этой фразе (не повторяй один заголовок на разных листах). Запросы всё равно дай.
+Не больше трёх листов на главу и не подряд. Не ставь лист на последнюю фразу главы.
 
 ЛЮДИ: если фраза о конкретном реальном человеке — по имени, по должности («капитан», «губернатор»)
-или через «он/она», когда понятно, о ком речь, — укажи его: Имя Фамилия латиницей, как в английской
-Википедии = как по-русски. Если во фразе есть год или возраст человека — допиши год в скобках после
-латинского имени: «Arthur Conan Doyle (1884) = Артур Конан Дойл» — тогда найдём фото того времени, а не старости. Зритель должен видеть лицо человека, о котором рассказывают, как можно чаще.
+или через «он/она», когда понятно, о ком речь, — укажи его в виде
+«Имя Фамилия латиницей, как в английской Википедии = имя как пишется на языке видео ({lang}) = кто он, 2–5 слов на языке видео».
+Если во фразе есть год или возраст человека — допиши год в скобках после латинского имени:
+«Arthur Conan Doyle (1884) = Артур Конан Дойл = писатель» — тогда найдём фото того времени, а не старости.
+Если ты знаешь, что подлинной фотографии или портрета ИМЕННО этого человека не существует (малоизвестный
+человек, о котором нет статьи в Википедии), допиши в конце «= без фото» — тогда покажем не случайного тёзку,
+а кадр по смыслу фразы. Зритель должен видеть лицо человека, о котором рассказывают, как можно чаще.
 Иначе поставь «-».
 
 Для каждой фразы дай 3–4 поисковых запроса НА АНГЛИЙСКОМ (2–5 слов) — КОНКРЕТНО про то, что звучит:
@@ -259,7 +265,7 @@ skiing photo», «Mary Celeste ship painting»). Зритель должен в�
 12 | в кадре: деревянный столб с вырезанными буквами | видео | люди: - | carved wooden post; letters carved in wood; old wooden pole closeup
 14 | в кадре: каюта с вещами / кладовая с провизией / бочки в трюме | архив | люди: - | 19th century ship cabin; ship galley provisions; wooden barrels ship hold
 15 | в кадре: Судовой журнал, 1872 | лист | люди: - | old ship logbook; handwritten log page
-13 | в кадре: губернатор колонии | архив | люди: John White = Джон Уайт | elizabethan governor portrait; 1580s colonists engraving; roanoke colony painting
+13 | в кадре: губернатор колонии | архив | люди: John White = Джон Уайт = губернатор колонии | elizabethan governor portrait; 1580s colonists engraving; roanoke colony painting
 
 Фразы:
 {lines}
@@ -274,7 +280,10 @@ def plan(cfg, lines, topic, workdir, log=print):
         chunk = lines[i:i + 45]
         text = "\n".join(f"{ln['no']}. {ln['text']}" for ln in chunk)
         try:
-            ans = run(cfg, PLAN_PROMPT.format(topic=topic or "документальное видео", lines=text), workdir, timeout=600)
+            from .config import lang as get_lang
+            lang = get_lang(cfg.get("language", "ru"))["name"]
+            ans = run(cfg, PLAN_PROMPT.format(topic=topic or "документальное видео", lines=text, lang=lang),
+                      workdir, timeout=600)
         except ClaudeCodeError as e:
             log(f"  План кадров не получен ({e}) — ищу по запросам из сценария.")
             return out
@@ -292,11 +301,21 @@ def plan(cfg, lines, topic, workdir, log=print):
                     item["source"] = low
                 elif low.startswith("люди"):
                     for pp in x.split(":", 1)[-1].split(","):
-                        en, _, ru = pp.partition("=")
+                        fs = [f.strip() for f in pp.split("=")]
+                        en = fs[0]
+                        nophoto = any(f.lower().startswith("без фото") for f in fs[1:])
+                        fs = [f for f in fs[1:] if not f.lower().startswith("без фото")]
+                        ru = fs[0] if fs else ""
+                        role = fs[1] if len(fs) > 1 else ""
                         yr = re.search(r"\((\d{4})s?\)", en)
                         en = re.sub(r"\s*\(.*?\)", "", en).strip()
                         if en and en != "-":
+                            if nophoto:
+                                item.setdefault("nophoto", []).append(en)
+                                continue
                             item["people"].append([en, (ru or en).strip()] + ([yr.group(1)] if yr else []))
+                            if role:
+                                item.setdefault("roles", {})[en] = role[:60]
             qs = parts[-1] if parts else ""
             item["queries"] = [q.strip(" .\"'") for q in re.split(r"[;,]", qs) if q.strip(" .\"'")][:4]
             if not item["show"] and len(parts) > 1:

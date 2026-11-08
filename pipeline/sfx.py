@@ -1,5 +1,6 @@
 """Свои звуки, сделанные программой (никаких чужих файлов — никаких претензий по правам):
-стук печатной машинки для листов с цитатами и «вжух» для перехода к новой главе.
+машинка на листах, «свуш» перед главой, вспышка и шлепок фото в стопке, шорох листа,
+скрип пера и «тук» точки на карте, низкий удар при появлении человека.
 Если в папке sfx лежат свои файлы typewriter*/whoosh*, берутся они."""
 import random
 import wave
@@ -106,6 +107,62 @@ def flash(path, seed=11):
     _save(path, out + pop + air)
 
 
+def paper_drop(path, seed=5):
+    """Фото падает на стол: шорох бумаги и мягкий глухой шлепок."""
+    rng = np.random.default_rng(seed)
+    n = int(0.6 * SR)
+    t = np.arange(n) / SR
+    slide = _onepole(rng.standard_normal(n), 0.35)
+    slide = (slide - _onepole(slide, 0.9)) * np.clip(t / 0.05, 0, 1) * np.exp(-t / 0.07) * 0.6
+    tb = np.clip(t - 0.04, 0, None)
+    thud = np.sin(2 * np.pi * 95 * tb) * np.exp(-tb / 0.035) * (t >= 0.04)
+    flap = _onepole(rng.standard_normal(n), 0.5) * np.exp(-tb / 0.02) * (t >= 0.04) * 0.5
+    _save(path, slide + thud * 0.8 + flap)
+
+
+def rustle(path, seed=9):
+    """Лист бумаги кладут на стол — короткий сухой шорох."""
+    rng = np.random.default_rng(seed)
+    n = int(0.8 * SR)
+    t = np.arange(n) / SR
+    noise = rng.standard_normal(n)
+    crackle = (rng.random(n) < 0.004) * rng.standard_normal(n) * 4
+    x = noise - _onepole(noise, 0.8) + crackle
+    env = np.clip(t / 0.08, 0, 1) * np.exp(-t / 0.22) * (1 + 0.5 * np.sin(2 * np.pi * 9 * t))
+    _save(path, _onepole(x * env, 0.25))
+
+
+def pen(path, seconds=1.2, seed=13):
+    """Перо скрипит по бумаге — пока рисуется пунктир маршрута."""
+    rng = np.random.default_rng(seed)
+    n = int(seconds * SR)
+    t = np.arange(n) / SR
+    noise = rng.standard_normal(n)
+    hp = noise - _onepole(noise, 0.9)
+    strokes = 0.5 + 0.5 * np.sign(np.sin(2 * np.pi * 6.5 * t))           # штрихи пунктира
+    env = np.clip(t / 0.05, 0, 1) * np.clip((seconds - t) / 0.08, 0, 1) * (0.35 + 0.65 * _onepole(strokes, 0.995))
+    _save(path, _onepole(hp, 0.3) * env)
+
+
+def pin(path, seed=17):
+    """Точка на карте: короткий деревянный «тук»."""
+    n = int(0.35 * SR)
+    t = np.arange(n) / SR
+    x = np.sin(2 * np.pi * 820 * t) * np.exp(-t / 0.018) + np.sin(2 * np.pi * 1640 * t) * np.exp(-t / 0.008) * 0.4
+    _save(path, x)
+
+
+def hit(path, seed=19):
+    """Появление фото человека: низкий кинематографичный удар с хвостом."""
+    rng = np.random.default_rng(seed)
+    n = int(2.2 * SR)
+    t = np.arange(n) / SR
+    boom = np.sin(2 * np.pi * (48 * t - 5 * t ** 2)) * np.exp(-t / 0.5)
+    body = _onepole(rng.standard_normal(n), 0.97) * np.exp(-t / 0.25) * 3
+    click = rng.standard_normal(n) * np.exp(-t / 0.006) * 0.3
+    _save(path, boom + body + click)
+
+
 def ensure(sfx_dir):
     """Если своих звуков нет — делаем свои один раз."""
     sfx_dir = Path(sfx_dir)
@@ -114,8 +171,13 @@ def ensure(sfx_dir):
     try:
         if not any(n.startswith("typewriter") for n in names):
             typewriter(sfx_dir / "typewriter_auto.wav")
-        if not any(n.startswith("flash") for n in names):
-            flash(sfx_dir / "flash_auto.wav")
+        if not any(n.startswith("flash") and "_auto" not in n for n in names):   # своих вспышек нет —
+            for nm, sd in (("flash_auto.wav", 11), ("flash_auto2.wav", 23), ("flash_auto3.wav", 31)):
+                if nm not in names:                            # несколько вариантов — не звучит одинаково
+                    flash(sfx_dir / nm, seed=sd)
+        for kind, fn in (("paper", paper_drop), ("rustle", rustle), ("pen", pen), ("pin", pin), ("hit", hit)):
+            if not any(n.startswith(kind) for n in names):
+                fn(sfx_dir / f"{kind}_auto.wav")
         (sfx_dir / "whoosh_auto.wav").unlink(missing_ok=True)        # старый «вжух» не понравился — заменён
         if not any(n.startswith("whoosh") for n in names if n != "whoosh_auto.wav"):
             whoosh(sfx_dir / "whoosh_auto2.wav")

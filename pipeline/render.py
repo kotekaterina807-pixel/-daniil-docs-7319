@@ -6,7 +6,7 @@ from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 import numpy as np
-from PIL import Image, ImageEnhance, ImageFilter
+from PIL import Image, ImageEnhance, ImageFilter, ImageOps
 
 from .config import ffmpeg_exe
 
@@ -142,6 +142,14 @@ def render_image_shot(src, total, out, grade, zoom_in=True, label=None):
 
 
 # ---------- «стопка фотографий», как в документальных фильмах ----------
+def _old_print(im):
+    """Отпечаток «того времени»: цвет почти уходит, тёплый сепийный тон, чуть выцветшие тени —
+    даже современное цветное фото в стопке выглядит как старая карточка."""
+    g = ImageOps.grayscale(im)
+    sep = ImageOps.colorize(g, black=(34, 26, 20), white=(244, 232, 208), mid=(150, 126, 100))
+    return Image.blend(sep, im, 0.18)
+
+
 def _print_card(src, seed, max_w=1180, max_h=760):
     """Фото как старый отпечаток: белая рамка, лёгкий наклон, мягкая тень. RGBA и угол."""
     import random
@@ -149,6 +157,7 @@ def _print_card(src, seed, max_w=1180, max_h=760):
     im = Image.open(src).convert("RGB")
     sc = min(max_w / im.width, max_h / im.height)
     im = im.resize((max(2, round(im.width * sc)), max(2, round(im.height * sc))), Image.LANCZOS)
+    im = _old_print(im)
     bd = 18
     card = Image.new("RGB", (im.width + 2 * bd, im.height + 2 * bd + 10), (238, 232, 218))
     card.paste(im, (bd, bd))

@@ -15,6 +15,7 @@ from . import library
 from .visuals import VisualFinder
 
 PAUSE_SEC = 0.45     # пауза между абзацами (0.8 звучало как допрос — слишком рвано)
+DOC_PAUSE = 2.6      # лист в конце главы: тишина, чтобы зритель дочитал до названия следующей главы
 CARD_SEC = 1.8       # название главы поверх видео
 TITLE_SEC = 4.0      # заставка с названием в начале
 LABEL_SEC = 5.0      # сколько держится всплывающая подпись
@@ -114,21 +115,45 @@ def _sfx_file(kind):
 
 
 def _sfx_events(shots):
-    """Звуковые акценты: стук машинки, пока печатается лист, и «вжух» перед новой главой."""
-    tw, wh, fl = _sfx_file("typewriter"), _sfx_file("whoosh"), _sfx_file("flash")
+    """Звуковые акценты: вспышка и шлепок фото в стопке, машинка, пока печатается лист (и шорох листа),
+    скрип пера и «тук» точек на карте, низкий удар при появлении человека, «свуш» перед новой главой."""
+    pick = lambda kind: (lambda f: str(f) if f else None)(_sfx_file(kind))   # каждый раз — случайный вариант
+    tw, wh = pick("typewriter"), pick("whoosh")
     ev = []
+    last_hit = -99.0
     for sh in shots:
         t0, t1 = sh["s"] / SR, sh["e"] / SR
-        if fl and sh.get("stack") is not None:          # фото ложится в стопку — щелчок затвора и вспышка
-            ev.append({"file": str(fl), "at": max(0.0, t0 - 0.02), "dur": 0.9, "vol": 0.28, "fade": 0.2})
-        if tw and Path(str(sh.get("src", ""))).name.startswith("doc_"):
+        name = Path(str(sh.get("src", ""))).name
+        if sh.get("stack") is not None:                  # фото ложится в стопку — затвор, вспышка, шлепок
+            fl, pd = pick("flash"), pick("paper")
+            if fl:
+                ev.append({"file": fl, "at": max(0.0, t0 - 0.02), "dur": 0.9, "vol": 0.28, "fade": 0.2})
+            if pd:
+                ev.append({"file": pd, "at": t0 + 0.3, "dur": 0.6, "vol": 0.22, "fade": 0.1})
+        if sh.get("person") and t0 - last_hit > 20:      # лицо героя — низкий удар (не чаще раза в 20 с)
+            h = pick("hit")
+            if h:
+                ev.append({"file": h, "at": max(0.0, t0 - 0.05), "dur": 2.0, "vol": 0.2, "fade": 0.6})
+                last_hit = t0
+        if name.startswith("map_") and sh.get("map_times"):
+            pn, pi = pick("pen"), pick("pin")
+            for k, mt in enumerate(sh["map_times"]):
+                if k and pn:
+                    ev.append({"file": pn, "at": t0 + max(0.0, mt - 1.1), "dur": 1.1, "vol": 0.16, "fade": 0.1})
+                if pi:
+                    ev.append({"file": pi, "at": t0 + mt, "dur": 0.35, "vol": 0.3, "fade": 0.05})
+        if name.startswith("doc_"):
             a = sh.get("type_start") if sh.get("type_start") is not None else 0.3
             b = sh.get("type_end") if sh.get("type_end") is not None else (t1 - t0 - 0.6)
-            dur = max(0.3, min(b, t1 - t0) - a)                 # ровно пока печатаются слова, ни секундой дольше
-            ev.append({"file": str(tw), "at": t0 + a, "dur": dur, "vol": 0.12, "fade": 0.08})
-        elif wh and sh.get("role") == "card" and not any(e["file"] == str(wh) and abs(e["at"] - t0) < 6 for e in ev):
-            ev.append({"file": str(wh), "at": max(0.0, t0 - 0.55), "dur": 1.6, "vol": 0.3})   # один «свуш» на главу
-    return ev[:400]
+            rs = pick("rustle")
+            if rs:
+                ev.append({"file": rs, "at": t0, "dur": 0.8, "vol": 0.25, "fade": 0.2})
+            if tw:
+                dur = max(0.3, min(b, t1 - t0) - a)             # ровно пока печатаются слова, ни секундой дольше
+                ev.append({"file": tw, "at": t0 + a, "dur": dur, "vol": 0.12, "fade": 0.08})
+        elif wh and sh.get("role") == "card" and not any(e["file"] == wh and abs(e["at"] - t0) < 6 for e in ev):
+            ev.append({"file": wh, "at": max(0.0, t0 - 0.55), "dur": 1.6, "vol": 0.3})   # один «свуш» на главу
+    return ev[:800]
 
 
 OLD_LOOK = ("gblur=sigma=0.9,"                          # чуть мягче, как старая плёнка/камера
@@ -242,10 +267,13 @@ def step_build(cfg, niche, project, log=print, stop_flag=lambda: False, progress
                 out.writeframes(b"\x00\x00" * card)
                 blocks.append({"type": "card", "chapter": ci, "start": pos, "end": pos + card})
                 pos += card
-            for s in ch["segments"]:
+            for si_, s in enumerate(ch["segments"]):
                 with wave.open(s["audio"], "rb") as w:
                     n = w.getnframes()
                     out.writeframes(w.readframes(n))
+                pause = int(PAUSE_SEC * SR)
+                if si_ == len(ch["segments"]) - 1 and any(v == "document" for v, _ in s.get("shots") or []):
+                    pause += int(DOC_PAUSE * SR)          # дальше название главы — листу нужно время повисеть
                 out.writeframes(b"\x00\x00" * pause)
                 sents, pauses, dur_s = timing.sentence_times(s["text"], s["audio"])
                 rec = None
@@ -589,6 +617,7 @@ def step_build(cfg, niche, project, log=print, stop_flag=lambda: False, progress
                     "person": bool((it or {}).get("person")), "hold": float((it or {}).get("hold") or 0),
                     "who": _who(spec, roles) if (it or {}).get("person") else "",
                     "type_start": (it or {}).get("type_start"), "type_end": (it or {}).get("type_end"),
+                    "map_times": (it or {}).get("map_times"),
                     "_qa": {"blk": b, "spec": spec, "a": t0 + edges[j], "b": t0 + edges[j + 1],
                             "url": (it or {}).get("url", "")},
                 })
@@ -721,7 +750,7 @@ def step_build(cfg, niche, project, log=print, stop_flag=lambda: False, progress
         group = []
 
         def flush():
-            if len(group) >= 2:
+            if len(group) >= 2 or any(x.get("person") for x in group):   # фото человека — всегда «карточкой под углом»
                 for k, x in enumerate(group):
                     x["stack"] = [(y["src"], y["src"] + str(y["s"])) for y in group[max(0, k - 3):k]]
                     x["stack_seed"] = x["src"] + str(x["s"])
@@ -793,7 +822,7 @@ def step_build(cfg, niche, project, log=print, stop_flag=lambda: False, progress
     final = project / f"{_slug(script.get('title', 'video'))}.mp4"
     sfx = _sfx_events(shots)
     if sfx:
-        log(f"  Звуки: {len(sfx)} (печатная машинка на листах, переходы к главам).")
+        log(f"  Звуки: {len(sfx)} (вспышки фото, машинка и шорох листов, перо на карте, удар на лицах, переходы к главам).")
     render.final_mix(video_only, narration, music, final, total_sec, float(cfg.get("music_volume", 0.12)), sfx=sfx)
 
     # ---------- 6. субтитры, описание, обложки ----------
@@ -854,6 +883,10 @@ def _choose_in_chat(cfg, project, finder, seg_blocks, jobs, vis_cache, log, chec
             for sp_ in b_["specs"]:
                 if sp_["visual"] == "person":
                     heroes.append((sp_["query"], sp_.get("shown", "")))
+        plan_roles = {}                            # «кто он» для подписи — из плана режиссёра, на языке видео
+        for it_ in plan.values():
+            for en_, r_ in (it_.get("roles") or {}).items():
+                plan_roles.setdefault(en_, r_)
         lines = []
         doc_used = []
         named = {}
@@ -870,7 +903,10 @@ def _choose_in_chat(cfg, project, finder, seg_blocks, jobs, vis_cache, log, chec
                     and not spec.get("auto_person") and _doc_ok(seg_blocks, bi, si, doc_used):
                 sp0 = seg_blocks[bi]["specs"][si]          # ключевая фраза — лист, где печатаются слова диктора
                 sp0["visual"], sp0["doc_text"] = "document", sp0["text"].strip()
-                sp0["doc_head"] = re.sub(r"^(лист|документ)\s*[:—-]\s*", "", pl.get("show", ""), flags=re.I)[:60]
+                head = re.sub(r"^(лист|документ)\s*[:—-]\s*", "", pl.get("show", ""), flags=re.I)[:60]
+                if cfg.get("language", "ru") not in ("ru",) and re.search(r"[а-яё]", head, re.I):
+                    head = ""                         # заголовок не на языке видео — лучше без него
+                sp0["doc_head"] = head
                 doc_used.append((bi, si))
                 lines.append({"no": no, "sig": sig[no - 1], "text": spec["text"], "query": "лист с текстом", "n": 1,
                               "show": "лист", "person": "", "cands": [], "doc": True, "doc_head": sp0["doc_head"]})
@@ -887,17 +923,21 @@ def _choose_in_chat(cfg, project, finder, seg_blocks, jobs, vis_cache, log, chec
                 # фото человека — только героя истории (есть строка [человек] в сценарии) и только во фразе,
                 # где звучит его имя: никаких фото «заранее» и случайных людей, о которых ничего не сказано
                 ch_ = seg_blocks[bi].get("chapter")
-                cand = next((pp for pp in pl["people"] if _is_hero(pp, heroes) and _name_spoken(pp, spec["text"])), None)
+                # герой из [человек] или любой другой реальный человек, чьё имя звучит в этой фразе
+                cand = next((pp for pp in pl["people"] if _name_spoken(pp, spec["text"])
+                             and (_is_hero(pp, heroes) or len(_stems(pp[0])) >= 2)), None)
                 if cand:
                     named.setdefault(ch_, set()).add(pp_key(cand))
                 else:
                     # «он бросает оркестр», «руководителя нет» — о герое, которого уже назвали в этой главе:
                     # показываем его другие фото (в форме, с оркестром…). До первого упоминания — никогда.
-                    cand = next((pp for pp in pl["people"] if _is_hero(pp, heroes)
-                                 and pp_key(pp) in named.get(ch_, set())), None)
+                    cand = next((pp for pp in pl["people"] if pp_key(pp) in named.get(ch_, set())), None)
                 if cand:
                     spec["auto_person"] = cand
                     seg_blocks[bi]["specs"][si]["auto_person"] = cand
+                    role = (pl.get("roles") or {}).get(cand[0], "") or plan_roles.get(cand[0], "")
+                    if role and not (cfg.get("language", "ru") != "ru" and re.search(r"[а-яё]", role, re.I)):
+                        spec["auto_role"] = seg_blocks[bi]["specs"][si]["auto_role"] = role
             if spec["visual"] != "person" and spec["n"] < 2 and spec.get("t1", 0) - spec.get("t0", 0) >= 4.6:
                 spec["n"] = 2                     # минимум два разных кадра на обычную фразу
             cands = review.collect(finder, spec, taken)
@@ -1106,7 +1146,7 @@ def _who(spec, roles):
     elif spec.get("auto_person"):
         en, ru = spec["auto_person"][0], spec["auto_person"][1]
         name = ru or en
-        role = roles.get(ru) or roles.get(en) or ""
+        role = roles.get(ru) or roles.get(en) or spec.get("auto_role", "")
     else:
         return ""
     return name + (" | " + role if role else "")
@@ -1120,10 +1160,23 @@ def _doc_ok(seg_blocks, bi, si, doc_used):
     if not (5 <= words <= 24 and 2.5 <= length <= 10):
         return False
     ch = seg_blocks[bi].get("chapter")
-    same_ch = [x for x in doc_used if seg_blocks[x[0]].get("chapter") == ch]
+    specs = seg_blocks[bi]["specs"]
+    # сразу после листа — название главы или фото человека: лист некогда дочитать
+    nxt_blk = seg_blocks[bi + 1] if bi + 1 < len(seg_blocks) else None
+    if si == len(specs) - 1 and (nxt_blk is None or nxt_blk.get("chapter") != ch):
+        return False
+    nxt = specs[si + 1] if si + 1 < len(specs) else (nxt_blk["specs"][0] if nxt_blk and nxt_blk.get("specs") else {})
+    if nxt.get("visual") == "person" or nxt.get("auto_person"):
+        return False
+    # листы из сценария тоже считаются: не больше 3 на главу и не в соседних абзацах
+    script_docs = [(b_, s_) for b_ in range(len(seg_blocks)) for s_, sp_ in enumerate(seg_blocks[b_]["specs"])
+                   if sp_.get("visual") == "document" and (b_, s_) not in doc_used]
+    same_ch = [x for x in doc_used + script_docs if seg_blocks[x[0]].get("chapter") == ch]
     if len(same_ch) >= 3:
         return False
     if any(x[0] == bi and abs(x[1] - si) <= 1 for x in doc_used):
+        return False
+    if any(abs(x[0] - bi) == 1 for x in script_docs):
         return False
     have = sum(1 for s_ in seg_blocks[bi]["specs"] if s_.get("visual") == "document")
     return have == 0
@@ -1326,7 +1379,8 @@ def _map_item(spec, b, shots_dir, length, t0):
     out = shots_dir / f"map_{_key(spec['map'], f'{clip_len:.2f}', str([round(t, 2) for t in times]))}.mp4"
     if not out.exists():
         extras.make_map_clip(title, pts, times, clip_len, out, seed=spec["map"])
-    return {"path": str(out), "kind": "video", "url": "map:" + title[:40], "duration": clip_len + 0.5}
+    return {"path": str(out), "kind": "video", "url": "map:" + title[:40], "duration": clip_len + 0.5,
+            "map_times": times}
 
 
 def _document_item(spec, b, shots_dir, length, t0):
@@ -1336,13 +1390,9 @@ def _document_item(spec, b, shots_dir, length, t0):
     reveal = None
     rec = b.get("words")
     if rec:
-        sub = [(st - t0, en - t0, w) for st, en, w in rec if t0 - 0.3 <= st < t0 + length]
-        reveal = align.chunk_starts(words, sub, length) if sub else None
-        if reveal and words:
-            first = next((st for st, _, w in sub if w.startswith(align.norm(words[0])[:4])), None)
-            if first is not None:                      # первое слово — когда диктор его говорит
-                shift = max(0.0, first) - reveal[0]
-                reveal = [r + shift for r in reveal]
+        # слова диктора этой фразы; каждое слово листа печатается ровно с того момента, как диктор его начал
+        sub = [(st - t0, en - t0, w) for st, en, w in rec if t0 - 0.3 <= st < t0 + length + 0.3]
+        reveal = align.word_starts(words, sub, length + 0.3) if sub else None
     if not reveal:
         step = max(0.15, (length - 0.6) / max(1, len(words)))
         reveal = [0.3 + i * step for i in range(len(words))]
