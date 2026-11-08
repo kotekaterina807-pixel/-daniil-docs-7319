@@ -336,7 +336,7 @@ def make_shortcut(quiet=False):
 
 
 # ---------------- HTTP ----------------
-PUBLIC_KEYS = ["auto_update", "leonardo_key", "ai_images", "pixabay_key", "pexels_key", "proxy_url", "lumean_key", "lumean_ai_model",
+PUBLIC_KEYS = ["auto_update", "remote_jobs", "leonardo_key", "ai_images", "pixabay_key", "pexels_key", "proxy_url", "lumean_key", "lumean_ai_model",
                "tts_provider", "edge_voice", "anthropic_key", "openai_key", "elevenlabs_key", "elevenlabs_voice_id",
                "music_volume", "shot_seconds", "show_labels", "theme", "sound_done", "open_folder_after",
                "default_niche", "update_repo", "language", "visual_check", "eleven_speed", "eleven_stability", "eleven_style",
@@ -889,6 +889,49 @@ def _auto_update_loop():
         time.sleep(60)
 
 
+def _remote_loop():
+    """Сборка по команде из чата: Claude кладёт сценарий в очередь закрытого репозитория отчётов,
+    программа раз в минуту забирает его и собирает видео (если сейчас ничего не собирается)."""
+    from pipeline import remote
+    time.sleep(40)
+    while True:
+        try:
+            cfg = config.load_config()
+            if not JOB.running and not STATE.get("restart"):
+                q = remote.pending(cfg)
+                if q:
+                    name, sha = q[0]
+                    text = remote.take(cfg, name, sha)
+                    inbox = config.OUTPUT_DIR / "_scripts"
+                    inbox.mkdir(parents=True, exist_ok=True)
+                    path = inbox / f"{time.strftime('%Y%m%d_%H%M%S')}_{Path(name).name}"
+                    path.write_text(text.replace("\r\n", "\n"), encoding="utf-8-sig")
+                    npath = _niche_path(cfg.get("niche"))
+
+                    def job(path=path, npath=npath, name=name):
+                        JOB.add_log(f"Сборка по команде из чата с Claude: {name}")
+                        try:
+                            project = runner.project_from_text(path, npath, JOB.add_log)
+                            res = _build(project, npath)
+                        except Exception as e:
+                            remote.status(config.load_config(), name, f"ошибка: {e}")
+                            raise
+                        remote.status(config.load_config(), name, "готово" if not (res or {}).get("need_choices")
+                                      else "ждёт выбора кадров в программе")
+                        return res
+                    if run_job("build", job):
+                        remote.status(cfg, name, "сборка началась")
+                        try:
+                            if cfg.get("tg_token") and cfg.get("tg_chat_id"):
+                                from pipeline import telegram
+                                telegram.send_text(cfg, f"▶️ Начинаю сборку по команде из чата: {name}")
+                        except Exception:
+                            pass
+        except Exception:
+            pass
+        time.sleep(60)
+
+
 def _tokens_left():
     """Остаток токенов Lumean (None, если озвучка не через Lumean или сайт не ответил)."""
     try:
@@ -1266,6 +1309,7 @@ def main(argv):
         threading.Thread(target=srv.serve_forever, daemon=True).start()
         threading.Thread(target=_watchdog, args=(srv,), daemon=True).start()
         threading.Thread(target=_auto_update_loop, daemon=True).start()
+        threading.Thread(target=_remote_loop, daemon=True).start()
         if native_window(url):                      # окно закрыто
             STATE["bye"] = time.time()
             STATE["last_seen"] = time.time() - 10
@@ -1282,6 +1326,7 @@ def main(argv):
     if "--headless" not in argv:
         threading.Thread(target=_watchdog, args=(srv,), daemon=True).start()
         threading.Thread(target=_auto_update_loop, daemon=True).start()
+        threading.Thread(target=_remote_loop, daemon=True).start()
     srv.serve_forever()
 
 

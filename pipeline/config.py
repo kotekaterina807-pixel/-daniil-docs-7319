@@ -3,7 +3,7 @@ import json
 import os
 from pathlib import Path
 
-VERSION = "9.5 (08.11.2026)"
+VERSION = "9.6 (08.11.2026)"
 CONFIG_REV = 10      # при смене — обновляются настройки монтажа у уже сохранённых конфигов
 ROOT = Path(__file__).resolve().parent.parent
 CONFIG_PATH = ROOT / "config.json"
@@ -44,6 +44,7 @@ DEFAULTS = {
     "old_look": True,
     "word_sync": True,
     "qa_check": True,
+    "remote_jobs": True,             # сборка по команде из чата с Claude (очередь в репозитории отчётов)
     "auto_update": True,             # новые версии ставятся сами (не во время сборки)
     "photo_stack": True,             # подряд идущие фото ложатся стопкой со вспышкой
     "leonardo_key": "",              # необязательно: рисует кадры, которых нет ни в архивах, ни в интернете
