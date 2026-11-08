@@ -73,7 +73,9 @@ def step_script(cfg, niche, niche_path, topic, minutes, project, log=print):
 def project_from_text(txt_path, niche_path, log=print):
     """Новый проект из готового сценария (.txt), написанного вручную или в чате."""
     text = Path(txt_path).read_text(encoding="utf-8-sig")
-    script = script_format.apply_text({"title": "", "language": "ru", "tags": [], "description": ""}, text)
+    from .config import load_config
+    script = script_format.apply_text({"title": "", "language": load_config().get("language", "ru"), "tags": [],
+                                       "description": ""}, text)   # без строки «ЯЗЫК» — язык выбранного голоса
     if not script.get("title"):
         script["title"] = script["chapters"][0]["title"]
     script.setdefault("topic", script["title"])
@@ -194,6 +196,18 @@ def step_build(cfg, niche, project, log=print, stop_flag=lambda: False, progress
     L = lang(code)
     cfg = dict(cfg)
     cfg["language"] = code
+    from .config import voice_for_lang, voice_lang
+    v_ = voice_for_lang(cfg, code)                    # голос диктора — на языке видео
+    if v_ and v_.get("id") != cfg.get("elevenlabs_voice_id"):
+        cfg["elevenlabs_voice_id"] = v_["id"]
+        log(f"Язык видео: {L['name']} — диктор «{v_.get('name', '')}» (голос этого языка).")
+    else:
+        cur = next((x for x in cfg.get("eleven_voices") or [] if x.get("id") == cfg.get("elevenlabs_voice_id")), None)
+        if cur and voice_lang(cur) and voice_lang(cur) != code:
+            log(f"  ВНИМАНИЕ: видео на языке «{L['name']}», а выбранный голос — другого языка, и голоса нужного "
+                f"языка в «Моих голосах» нет. Добавьте его во вкладке «Голоса».")
+        else:
+            log(f"Язык видео: {L['name']}.")
     if not str(cfg.get("edge_voice", "")).lower().startswith(code + "-"):
         cfg["edge_voice"] = L["edge_voice"]
     accent = tuple(niche.get("accent", [200, 30, 30]))

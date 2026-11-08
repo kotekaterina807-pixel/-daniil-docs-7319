@@ -584,13 +584,14 @@ class Handler(BaseHTTPRequestHandler):
                         if "не найден" in str(e):
                             return self._send(400, {"error": "Голос не найден в вашем аккаунте ElevenLabs. Нажмите у голоса «Add to my voices» и вставьте ID снова."})
                         return self._send(400, {"error": str(e)})
-            row = {k: row.get(k, "") for k in ("id", "name", "desc", "preview")}
+            row = {k: row.get(k, "") for k in ("id", "name", "desc", "preview", "lang")}
             if not row["id"]:
                 return self._send(400, {"error": "Нет ID голоса"})
             voices = [v for v in (cfg.get("eleven_voices") or []) if v.get("id") != row["id"]] + [row]
             cfg["eleven_voices"] = voices
             if not cfg.get("elevenlabs_voice_id"):
                 cfg["elevenlabs_voice_id"] = row["id"]
+            _sync_language(cfg)
             config.save_config(cfg)
             return self._send(200, {"ok": True, "voice": row})
         if p == "/api/eleven_import":
@@ -612,6 +613,7 @@ class Handler(BaseHTTPRequestHandler):
             cfg["eleven_voices"] = ordered
             if ordered:
                 cfg["elevenlabs_voice_id"] = ordered[0].get("id", "")
+            _sync_language(cfg)
             config.save_config(cfg)
             return self._send(200, {"ok": True, "current": cfg.get("elevenlabs_voice_id", ""),
                                     "name": ordered[0].get("name", "") if ordered else ""})
@@ -1036,6 +1038,14 @@ def clean_key(v):
     return v.strip("\"'`«»“”‘’<>")
 
 
+def _sync_language(cfg):
+    """Язык видео = язык выбранного голоса диктора (сценарий, озвучка, распознавание речи, подписи)."""
+    v = next((x for x in cfg.get("eleven_voices") or [] if x.get("id") == cfg.get("elevenlabs_voice_id")), None)
+    code = config.voice_lang(v)
+    if code:
+        cfg["language"] = code
+
+
 def save_settings(values):
     """Сохраняет параметры. Возвращает предупреждения (например, перепутаны ключ и ID каталога)."""
     cfg = config.load_config()
@@ -1059,6 +1069,8 @@ def save_settings(values):
                 notes.append(f"Поле {k} должно быть числом — не сохранено.")
                 continue
         cfg[k] = v
+    if "elevenlabs_voice_id" in values:
+        _sync_language(cfg)                          # выбрали голос — видео будет на его языке
     if "proxy_url" in values:
         u = str(cfg.get("proxy_url", "")).strip()
         if u and "://" not in u:

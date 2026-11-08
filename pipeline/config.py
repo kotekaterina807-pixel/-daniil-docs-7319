@@ -3,7 +3,7 @@ import json
 import os
 from pathlib import Path
 
-VERSION = "9.6 (08.11.2026)"
+VERSION = "9.7 (08.11.2026)"
 CONFIG_REV = 10      # при смене — обновляются настройки монтажа у уже сохранённых конфигов
 ROOT = Path(__file__).resolve().parent.parent
 CONFIG_PATH = ROOT / "config.json"
@@ -87,6 +87,26 @@ LANGS = {
 
 def lang(code) -> dict:
     return LANGS.get(code) or LANGS["ru"]
+
+
+def voice_lang(v) -> str:
+    """Язык сохранённого голоса: поле lang (из библиотеки) или код языка в описании голоса."""
+    if not v:
+        return ""
+    if v.get("lang") in LANGS:
+        return v["lang"]
+    import re as _re
+    m = _re.search(r"(?<![a-z])(" + "|".join(LANGS) + r")(?![a-z])", str(v.get("desc", "")).lower())
+    return m.group(1) if m else ""
+
+
+def voice_for_lang(cfg, code):
+    """Голос диктора для языка: выбранный, если он этого языка, иначе первый сохранённый голос этого языка."""
+    vs = cfg.get("eleven_voices") or []
+    cur = next((v for v in vs if v.get("id") == cfg.get("elevenlabs_voice_id")), None)
+    if cur and voice_lang(cur) in ("", code):
+        return cur
+    return next((v for v in vs if voice_lang(v) == code), cur)
 
 
 # Запасное место для настроек, если в папку программы писать нельзя

@@ -143,7 +143,8 @@ def library(cfg, search="", gender="", age="", use_cases="", language="ru", page
         desc = ", ".join(x for x in (v.get("gender"), v.get("age"), v.get("accent"), v.get("descriptive"),
                                      v.get("use_case"), v.get("language")) if x)
         out.append({"id": v.get("voice_id"), "name": v.get("name") or v.get("voice_id"), "desc": desc,
-                    "preview": v.get("preview_url") or "", "about": (v.get("description") or "")[:200]})
+                    "preview": v.get("preview_url") or "", "about": (v.get("description") or "")[:200],
+                    "lang": (str(v.get("language") or "").lower()[:2] if not language else language.lower()[:2])})
     return {"voices": out, "has_more": bool(d.get("has_more")), "page": page}
 
 

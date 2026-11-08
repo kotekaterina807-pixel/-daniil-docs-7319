@@ -744,7 +744,7 @@ $("#libList").addEventListener("click", async (e) => {
   if (pv) { if (playingBtn === pv && !player.paused) { stopAudio(); return; } playUrl(v.preview, pv, "lib|" + v.id); return; }
   if (e.target.closest("[data-ladd]")) {
     try {
-      await api("/api/eleven_add", { voice_obj: { id: v.id, name: v.name, desc: v.desc, preview: v.preview } });
+      await api("/api/eleven_add", { voice_obj: { id: v.id, name: v.name, desc: v.desc, preview: v.preview, lang: v.lang || $("#libLang").value } });
       toast(`Голос «${v.name}» добавлен в «Мои голоса»`, "ok");
       const d = await api("/api/init"); S.cfg = d.cfg; await loadVoices(); libSearch(0); renderVoiceCard();
     } catch (err) { toast(err.message, "err"); }
