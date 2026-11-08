@@ -72,6 +72,30 @@ def _duration(path):
         return 0.0
 
 
+def _size(path):
+    """Ширина и высота видео."""
+    try:
+        import re
+        p = subprocess.run([ffmpeg_exe(), "-i", str(path)], capture_output=True, text=True, timeout=60,
+                           creationflags=_NO_WINDOW)
+        m = re.search(r"Video:.*?(\d{3,5})x(\d{3,5})", p.stderr)
+        return (int(m.group(1)), int(m.group(2))) if m else (0, 0)
+    except Exception:
+        return 0, 0
+
+
+def _thumb(path):
+    """Обложка 320 px по ширине (требование Telegram) — кадр с 5-й секунды (у короткого — с середины)."""
+    out = Path(path).with_name(Path(path).stem + "_tgthumb.jpg")
+    try:
+        subprocess.run([ffmpeg_exe(), "-y", "-hide_banner", "-loglevel", "error", "-ss", f"{min(5.0, _duration(path) / 2):.2f}",
+                        "-i", str(path), "-frames:v", "1", "-vf", "scale=320:-2", "-q:v", "4", str(out)],
+                       capture_output=True, timeout=60, creationflags=_NO_WINDOW)
+        return out if out.exists() and out.stat().st_size < 200_000 else None
+    except Exception:
+        return None
+
+
 def light_copy(src, log=print):
     """Копия до ~48 МБ: битрейт под длину ролика, разрешение — сколько позволяет битрейт."""
     src = Path(src)
@@ -105,7 +129,18 @@ def send_video(cfg, path, caption="", log=print):
             send_text(cfg, f"✅ Готово: {caption}\nВидео слишком длинное для отправки ботом — оно в папке проекта на ПК.")
             return "видео слишком длинное для бота — отправлено только сообщение"
         note = "\n(лёгкая копия для просмотра — полное качество в папке проекта)"
-    with open(send, "rb") as f:
-        _call(token, "sendVideo", timeout=1800, files={"video": (send.name, f, "video/mp4")},
-              chat_id=chat, caption=(caption + note)[:1000], supports_streaming="true")
+    # размеры, длительность и обложка — без них Telegram показывает ролик квадратом 1:1
+    w, h = _size(send)
+    thumb = _thumb(send)
+    files = {"video": (send.name, open(send, "rb"), "video/mp4")}
+    if thumb:
+        files["thumbnail"] = (thumb.name, open(thumb, "rb"), "image/jpeg")
+    try:
+        _call(token, "sendVideo", timeout=1800, files=files, chat_id=chat, caption=(caption + note)[:1000],
+              supports_streaming="true", width=w or 1920, height=h or 1080, duration=int(_duration(send)))
+    finally:
+        for _, fh, _ in files.values():
+            fh.close()
+        if thumb:
+            thumb.unlink(missing_ok=True)
     return f"видео отправлено в Telegram ({send.stat().st_size / 1048576:.0f} МБ)"
