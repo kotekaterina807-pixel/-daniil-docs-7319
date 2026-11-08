@@ -180,7 +180,7 @@ def _stack_background(first_src):
     return ImageEnhance.Brightness(bg).enhance(0.38).convert("RGBA")
 
 
-def render_stack_shot(prev, src, total, out, grade, seed, zoom_in=True, label=None):
+def render_stack_shot(prev, src, total, out, grade, seed, zoom_in=True, label=None, flash_on=True):
     """Новое фото «ложится» поверх предыдущих отпечатков: вспышка, мягкое опускание, тень.
     prev — [(src, seed)] уже лежащих фото. Потом весь стол медленно приближается."""
     first = prev[0][0] if prev else src
@@ -212,7 +212,7 @@ def render_stack_shot(prev, src, total, out, grade, seed, zoom_in=True, label=No
                 fr = bg.copy()
                 fr.alpha_composite(c2, (x0 + (card.width - cw) // 2, y0 + (card.height - ch) // 2 - round(18 * (1 - e))))
                 img = fr.convert("RGB")
-                if k < flash:                            # вспышка фотоаппарата
+                if flash_on and k < flash:               # вспышка фотоаппарата
                     img = Image.blend(img, Image.new("RGB", (W, H), (255, 252, 240)), 0.55 * (1 - k / flash))
                 yield img.tobytes()
             else:                                        # медленный наезд на «стол»
@@ -310,7 +310,7 @@ def render_shots(shots, workers, log=print, on_progress=lambda d, t: None):
                                  s.get("offset_n", 0), s.get("speed", 1.0))
             elif s["kind"] == "image" and s["src"] and s.get("stack") is not None:
                 render_stack_shot(s["stack"], s["src"], n, tmp, s["grade"], s.get("stack_seed", s["src"]),
-                                  s.get("zoom_in", True), s.get("label"))
+                                  s.get("zoom_in", True), s.get("label"), not s.get("stack_solo"))
             elif s["kind"] == "image" and s["src"]:
                 render_image_shot(s["src"], n, tmp, s["grade"], s.get("zoom_in", True), s.get("label"))
             else:

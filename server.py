@@ -877,10 +877,11 @@ def _auto_update_loop():
             if cfg.get("auto_update", True) and repo and not STATE.get("restart"):
                 latest, _ = latest_version(repo)
                 if latest and is_newer(latest, config.VERSION):
-                    while JOB.running:
+                    time.sleep(5)
+                    while JOB.running or STATE.get("bg", 0) > 0:   # сборка, отчёт или отправка в Telegram
                         time.sleep(15)
                     raw, zver, err = download_update(repo)
-                    if raw and not err and not JOB.running:
+                    if raw and not err and not JOB.running and STATE.get("bg", 0) <= 0:
                         JOB.add_log(f"Автообновление: ставлю версию {zver or latest}...")
                         STATE["auto_updated"] = zver or latest
                         apply_update(raw, JOB.add_log)
@@ -955,12 +956,15 @@ def _final_video(project):
 
 def _tg_send_bg(path, title):
     from pipeline import telegram
+    STATE["bg"] = STATE.get("bg", 0) + 1                 # пока отправляется — автообновление ждёт
     try:
         t = runner._load_json(Path(path).parent / "script.json", {}).get("title") or title
         msg = telegram.send_video(config.load_config(), path, f"🎬 {t}", JOB.add_log)
         JOB.add_log("Telegram: " + msg)
     except Exception as e:
         JOB.add_log(f"Telegram: не отправилось — {e}")
+    finally:
+        STATE["bg"] = STATE.get("bg", 1) - 1
 
 
 def _build(project, npath):
@@ -993,6 +997,7 @@ def _build(project, npath):
 
 def _report_bg(project, lines):
     from pipeline import report
+    STATE["bg"] = STATE.get("bg", 0) + 1
     try:
         cfg = dict(config.load_config(), _version=config.VERSION)
         folder = report.send(cfg, project, [str(x.get("msg", x)) if isinstance(x, dict) else str(x) for x in lines],
@@ -1000,6 +1005,8 @@ def _report_bg(project, lines):
         JOB.add_log(f"Отчёт для Claude отправлен в GitHub: {folder}")
     except Exception as e:
         JOB.add_log(f"Отчёт для Claude не отправился: {e}")
+    finally:
+        STATE["bg"] = STATE.get("bg", 1) - 1
 
 
 def _niche_path(niche_id):

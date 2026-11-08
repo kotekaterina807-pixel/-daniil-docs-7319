@@ -128,7 +128,7 @@ def _sfx_events(shots):
         name = Path(str(sh.get("src", ""))).name
         if sh.get("stack") is not None:                  # фото ложится в стопку — затвор, вспышка, шлепок
             fl, pd = pick("flash"), pick("paper")
-            if fl:
+            if fl and not sh.get("stack_solo"):
                 ev.append({"file": fl, "at": max(0.0, t0 - 0.02), "dur": 0.9, "vol": 0.28, "fade": 0.2})
             if pd:
                 ev.append({"file": pd, "at": t0 + 0.3, "dur": 0.6, "vol": 0.22, "fade": 0.1})
@@ -745,13 +745,23 @@ def step_build(cfg, niche, project, log=print, stop_flag=lambda: False, progress
             if not sh.get("person") or not who or str(sh.get("src", "")).find("person_") >= 0:
                 continue                                   # у карточки имя и так крупно написано
             a, b_ = sh["s"] / SR + 0.15, sh["e"] / SR - 0.15
-            if b_ - a < 1.5 or a - last_label.get(who, -99) < 15:
+            if b_ - a < 1.0:
                 continue
+            prev = next((o for o in reversed(overlays) if o.get("person") == who), None)
+            if prev and abs(prev["start"] + prev["frames"] - a * render.FPS) < 0.5 * render.FPS:
+                prev["frames"] = max(1, int(round(b_ * render.FPS)) - prev["start"])   # тот же человек дальше — подпись не мигает
+                continue
+            # подпись человека важнее остальных: другие надписи на это время убираем
+            s_, e_ = a * render.FPS, b_ * render.FPS
+            overlays[:] = [o for o in overlays if o["anim"] != "label" or o.get("person")
+                           or o["start"] + o["frames"] < s_ - 12 or o["start"] > e_ + 12]
             lp = shots_dir / f"label3_{_key(who, str(accent))}.png"
             if not lp.exists():
                 extras.make_label(who, lp, accent)
-            if add_overlay(lp, a, min(LABEL_SEC, b_ - a), "label", person=True):
-                last_label[who] = a
+            # на КАЖДОЕ появление фото — подпись полностью выезжает и держится, пока фото на экране
+            overlays.append({"png": str(lp), "start": int(round(a * render.FPS)),
+                             "frames": max(1, int(round((b_ - a) * render.FPS))), "anim": "label", "person": who})
+            last_label[who] = a
         n_ps = sum(1 for sh in shots if sh.get("person"))
         log(f"  Фото людей в монтаже: {n_ps}, подписей «имя | кто он»: {len(last_label) and sum(1 for o in overlays if o.get('person'))}.")
     for o in overlays:
@@ -764,11 +774,13 @@ def step_build(cfg, niche, project, log=print, stop_flag=lambda: False, progress
         group = []
 
         def flush():
-            if len(group) >= 2 or any(x.get("person") for x in group):   # фото человека — всегда «карточкой под углом»
+            if group:                      # любое фото — отпечатком под углом; одиночное ложится без вспышки
+                solo = len(group) == 1 and not group[0].get("person")
                 for k, x in enumerate(group):
                     x["stack"] = [(y["src"], y["src"] + str(y["s"])) for y in group[max(0, k - 3):k]]
                     x["stack_seed"] = x["src"] + str(x["s"])
                     x["stack_last"] = k == len(group) - 1
+                    x["stack_solo"] = solo
             group.clear()
         for sh in shots:
             ok = (sh["kind"] == "image" and sh.get("src") and not sh.get("role")
@@ -811,7 +823,7 @@ def step_build(cfg, niche, project, log=print, stop_flag=lambda: False, progress
         sh["grade"] = g
         sh["out"] = str(shots_dir / (f"{i:04d}_" + _key(sh["kind"], sh["src"], str(sh["frames"]), str(sh["tail"]),
                                                           sh["grade"], str(sh.get("zoom_in")), str(sh.get("offset_n", 0)),
-                                                          str(sh.get("stack")), "v3") + ".mp4"))
+                                                          str(sh.get("stack")), str(sh.get("stack_solo")), "v4") + ".mp4"))
 
     workers = max(2, min(6, (os.cpu_count() or 4) // 2))
     log(f"Монтаж: {len(shots)} кадров (потоков: {workers}). Кодирование: "
