@@ -119,7 +119,7 @@ def apply_text(script: dict, text: str) -> dict:
         if line.startswith("#! ОБЛОЖКА:"):
             script["thumbnail_text"] = line.split(":", 1)[1].strip()
             continue
-        meta = re.match(r"^#!\s*(ЯЗЫК|ТЕГИ|ОПИСАНИЕ|ФАКТ|ТЕМА|АРХИВ|ВАРИАНТ НАЗВАНИЯ):\s?(.*)$", line)
+        meta = re.match(r"^#!\s*(ЯЗЫК|ТЕГИ|ОПИСАНИЕ|ФАКТ|ТЕМА|АРХИВ|ЭПОХА|ФОТО|ВАРИАНТ НАЗВАНИЯ):\s?(.*)$", line)
         if meta:
             key, val = meta.group(1), meta.group(2).strip()
             if key == "ЯЗЫК" and val:
@@ -132,6 +132,11 @@ def apply_text(script: dict, text: str) -> dict:
                 facts.append(val)
             elif key == "ТЕМА" and val:
                 script["topic"] = val
+            elif key == "ЭПОХА" and val:              # время и место действия: кадры только «оттуда»
+                script["era"] = val
+            elif key == "ФОТО" and val and "=" in val:  # «Имя Фамилия = ссылка на фото» — подлинное фото человека
+                nm, url = val.split("=", 1)
+                script.setdefault("photos", {})[nm.strip()] = url.strip()
             elif key == "АРХИВ" and val:              # разделы Wikimedia Commons с подлинными фото темы
                 script["archive"] = [t.strip() for t in val.split(";") if t.strip()]
             elif key == "ВАРИАНТ НАЗВАНИЯ" and val:

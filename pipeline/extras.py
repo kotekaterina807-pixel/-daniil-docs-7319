@@ -375,6 +375,37 @@ def _paper(W, H, seed):
     return img, (px, py, pw, ph)
 
 
+SERIF_BOLD = [r"C:\Windows\Fonts\georgiab.ttf", r"C:\Windows\Fonts\timesbd.ttf",
+              "/usr/share/fonts/truetype/dejavu/DejaVuSerif-Bold.ttf"]
+
+
+def _wax_seal(img, cx, cy, r, seed=""):
+    """Сургучная печать с буквой «U» — знак канала. Неровный край, блик, лёгкий наклон."""
+    import math
+    import random as _r
+    rnd = _r.Random(str(seed) + "seal")
+    size = int(r * 2.6)
+    layer = Image.new("RGBA", (size, size), (0, 0, 0, 0))
+    d = ImageDraw.Draw(layer)
+    c = size / 2
+    pts = []
+    for k in range(48):
+        a = 2 * math.pi * k / 48
+        rr = r * (1.0 + 0.07 * math.sin(a * 7 + rnd.random()) + rnd.uniform(-0.03, 0.05))
+        pts.append((c + rr * math.cos(a), c + rr * math.sin(a)))
+    d.polygon([(x + 3, y + 4) for x, y in pts], fill=(30, 8, 6, 90))          # тень
+    d.polygon(pts, fill=(132, 22, 26, 255))
+    d.ellipse([c - r * 0.74, c - r * 0.74, c + r * 0.74, c + r * 0.74], outline=(92, 12, 16, 255), width=4)
+    d.ellipse([c - r * 0.66, c - r * 0.66, c + r * 0.66, c + r * 0.66], fill=(150, 30, 32, 255))
+    f = _font(int(r * 0.95), SERIF_BOLD)
+    tw = d.textlength("U", font=f)
+    d.text((c - tw / 2 + 2, c - r * 0.58 + 2), "U", font=f, fill=(80, 10, 12, 255))   # тиснение
+    d.text((c - tw / 2, c - r * 0.58), "U", font=f, fill=(196, 70, 60, 255))
+    d.arc([c - r * 0.9, c - r * 0.9, c + r * 0.9, c + r * 0.9], 200, 250, fill=(220, 120, 110, 200), width=3)  # блик
+    layer = layer.rotate(rnd.uniform(-14, 14), resample=Image.BICUBIC)
+    img.paste(layer, (int(cx - size / 2), int(cy - size / 2)), layer)
+
+
 def make_document_clip(text, head, reveal, length, out_mp4, seed=""):
     """Видео: старый документ, на котором текст печатается по буквам ровно под голос диктора.
     reveal — время (с) появления каждого слова от начала кадра."""
@@ -383,6 +414,7 @@ def make_document_clip(text, head, reveal, length, out_mp4, seed=""):
     from .config import ffmpeg_exe
     W, H = 1920, 1080
     base, (px, py, pw, ph) = _paper(W, H, seed or text)
+    _wax_seal(base, px + pw - 112, py + ph - 108, 50, seed or text)   # печать канала «U» в углу листа
     words = text.split()
     margin = 90
     d0 = ImageDraw.Draw(base)

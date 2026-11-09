@@ -41,9 +41,9 @@ def _direct_retry(url, params, timeout, r):
 
 
 # Только материалы без авторских прав: общественное достояние и CC0.
-# CC BY / CC BY-SA и «Copyrighted free use» отбрасываются.
-CLEAN_LICENSE = re.compile(r"public domain|\bpd\b|\bpd-|cc0|no restrictions", re.I)
-NOT_CLEAN_LICENSE = re.compile(r"cc[ -]?by|copyrighted|fair use|all rights", re.I)
+# CC BY / CC BY-SA — можно, автор указывается в описании видео. NC/ND и «все права защищены» — нет.
+CLEAN_LICENSE = re.compile(r"public domain|\bpd\b|\bpd-|cc0|no restrictions|cc[ -]?by(?![ -]?nc)(?![ -]?nd)", re.I)
+NOT_CLEAN_LICENSE = re.compile(r"copyrighted|fair use|all rights|\bnc\b|non-?commercial|\bnd\b|no ?deriv", re.I)
 
 # Признаки водяных знаков, логотипов, чужих каналов и кадров из чужих видео.
 BLOCK_WORDS = re.compile(
@@ -876,6 +876,16 @@ class VisualFinder:
         """Фото конкретного человека: главное фото его статьи в Википедии (en — по английскому имени,
         ru — по русскому), затем файлы архива, где в названии есть его фамилия. Только свободные лицензии."""
         names = [n for n in dict.fromkeys([person.strip(), (alt or "").strip()]) if n]
+        # фото, указанное в сценарии (#! ФОТО: Имя = ссылка) — подлинное, его и берём первым
+        manual = getattr(self, "manual_photos", None) or {}
+        if manual:
+            fold = lambda x: re.sub(r"[^a-zа-яё]", "", x.lower().replace("j", "y").replace("w", "v"))
+            keys = {fold(n.split()[-1]) for n in names if n.split()}
+            for nm, url in manual.items():
+                if nm.split() and fold(nm.split()[-1]) in keys and url.startswith("http"):
+                    return [{"kind": "image", "url": url, "thumb": url, "source": "указано в сценарии",
+                             "page": url, "title": nm, "author": "архив", "license": "указано в сценарии",
+                             "tags": nm, "person": True}]
         surnames = {n.split()[-1].lower().strip(",") for n in names}
         for n in names:                                   # «Дятлов, Игорь» → фамилия первой
             if "," in n:

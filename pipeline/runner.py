@@ -15,6 +15,7 @@ from . import library
 from .visuals import VisualFinder
 
 PAUSE_SEC = 0.45     # пауза между абзацами (0.8 звучало как допрос — слишком рвано)
+DOC_HOLD = 3.0       # лист после последнего напечатанного слова висит ровно 3 с — и сразу следующий кадр
 DOC_PAUSE = 2.6      # лист в конце главы: тишина, чтобы зритель дочитал до названия следующей главы
 CARD_SEC = 1.8       # название главы поверх видео
 TITLE_SEC = 4.0      # заставка с названием в начале
@@ -114,6 +115,117 @@ def _sfx_file(kind):
     files = [p for p in SFX_DIR.iterdir() if p.name.lower().startswith(kind) and
              p.suffix.lower() in (".mp3", ".wav", ".m4a", ".ogg", ".flac")]
     return random.choice(files) if files else None
+
+
+def _topic_rules(script, cfg):
+    """Тема для Claude + жёсткое правило эпохи: видео о прошлом — только кадры, которые выглядят как то время."""
+    t = script.get("topic", "") or "документальное видео"
+    if not cfg.get("old_look", True):
+        return t
+    era = script.get("era") or "прошлое (не современность)"
+    return (f"{t}\nЭПОХА И МЕСТО: {era}. ЖЁСТКОЕ ПРАВИЛО ЭПОХИ: подходят только кадры, которые выглядят как то время и то "
+            f"место: подлинные архивные фото темы, старые чёрно-белые фото, люди в одежде того времени, старая техника, "
+            f"старые документы; природа — только дикая, без примет современности, и похожая на место действия. "
+            f"ВСЕГДА ПЛОХО, даже если подходит по словам: современные люди и одежда, лыжники/сноубордисты/туристы в "
+            f"современном снаряжении, горнолыжные склоны и подъёмники, современные машины, техника, здания, дороги, "
+            f"телефоны, яркие современные цвета; чужие горы и места (например, острые Альпы вместо пологого Урала). "
+            f"Лучше старое фото по общей теме, чем современный кадр «по словам».")
+
+
+def _contiguous(shots, log=print):
+    """Кадры встык: каждый начинается ровно там, где кончился предыдущий. Склейка считает время как
+    сумму длительностей, поэтому любое наложение двух кадров сдвигало ВСЁ дальнейшее видео позже звука
+    (к концу ролика — на 4–5 с: вспышка звучала, а фото появлялось позже, диктор «убегал» от кадров)."""
+    shots = sorted(shots, key=lambda x: (x["s"], x["e"]))
+    out = []
+    fixed = 0
+    for sh in shots:
+        if not out:
+            if sh["s"] != 0:
+                sh["s"] = 0
+            out.append(sh)
+            continue
+        prev = out[-1]
+        if sh["s"] != prev["e"]:
+            fixed += 1
+            if sh["s"] < prev["e"]:                       # наложение: следующий кадр начинается позже
+                if sh["e"] - prev["e"] < int(0.4 * SR):   # от него почти ничего не осталось — убрать
+                    if sh.get("person") and not prev.get("person"):
+                        prev["e"] = sh["s"]               # фото человека важнее — укорачиваем предыдущий
+                        out.append(sh)
+                    continue
+                if sh.get("person") and not prev.get("person") and sh["s"] - prev["s"] > int(1.0 * SR):
+                    prev["e"] = sh["s"]                   # человек появляется вовремя, предыдущий кадр короче
+                else:
+                    sh["s"] = prev["e"]
+            else:                                         # дырка: предыдущий кадр тянется до следующего
+                prev["e"] = sh["s"]
+        out.append(sh)
+    if fixed:
+        log(f"  Тайминг: выровнено стыков кадров: {fixed} (картинка идёт точно со звуком).")
+    return out
+
+
+def _plain(x):
+    """Обычный кадр (видео/фото), которым можно заполнить время. Листы, карты, карточки и люди — нет."""
+    nm = Path(str(x.get("src") or "")).name
+    return (bool(x.get("src")) and x.get("kind") in ("video", "image") and not x.get("person")
+            and not nm.startswith(("doc_", "map_", "person_", "card_"))
+            and not str((x.get("_qa") or {}).get("url", "")).startswith(("doc:", "map:", "card:")))
+
+
+def _fit_docs(shots):
+    """Лист виден, пока печатается текст, и ещё ровно DOC_HOLD секунд. Не дольше (остаток — соседний кадр)
+    и не меньше (если следующий кадр длинный — он начинается позже)."""
+    shots = sorted(shots, key=lambda x: x["s"])
+    out, seen = [], set()
+    i = 0
+    while i < len(shots):
+        sh = shots[i]
+        nm = Path(str(sh.get("src") or "")).name
+        if not nm.startswith("doc_") or sh.get("type_end") is None:
+            out.append(sh)
+            i += 1
+            continue
+        j = i                                            # все куски этого листа подряд
+        while j + 1 < len(shots) and Path(str(shots[j + 1].get("src") or "")).name == nm:
+            j += 1
+        s0, e0 = sh["s"], shots[j]["e"]
+        if nm in seen:                                   # тот же лист второй раз (после другого кадра) — не нужен
+            donor = next((x for x in reversed(out) if _plain(x)), None) or \
+                    next((x for x in shots[j + 1:] if _plain(x)), None)
+            if donor:
+                out.append(dict(donor, s=s0, e=e0, offset_n=int(donor.get("offset_n", 0)) + 1,
+                                first_of_seg=False, person=False, who=None, stack=None))
+            elif out:
+                out[-1]["e"] = e0
+            i = j + 1
+            continue
+        seen.add(nm)
+        want = s0 + int((sh["type_end"] + DOC_HOLD) * SR)
+        whole = dict(sh, e=min(e0, want))
+        out.append(whole)
+        rest = e0 - whole["e"]
+        nxt = shots[j + 1] if j + 1 < len(shots) else None
+        if rest > int(0.4 * SR):                         # лист закончился раньше строки — остаток соседнему кадру
+            if nxt is not None and _plain(nxt) and (nxt["e"] - whole["e"]) / SR <= 9.0:
+                nxt["s"] = whole["e"]
+            else:
+                donor = next((x for x in reversed(out[:-1]) if _plain(x)), None) or \
+                        next((x for x in shots[j + 1:] if _plain(x)), None)
+                if donor:
+                    out.append(dict(donor, s=whole["e"], e=e0, offset_n=int(donor.get("offset_n", 0)) + 1,
+                                    first_of_seg=False, person=False, who=None, stack=None))
+                else:
+                    whole["e"] = e0
+        elif want - e0 > int(0.5 * SR) and nxt is not None and _plain(nxt):
+            # текст допечатался под самый конец строки — лист висит ещё до 3 с, следующий кадр позже
+            add = min(want - e0, (nxt["e"] - nxt["s"]) - int(2.0 * SR))
+            if add > 0:
+                whole["e"] = e0 + add
+                nxt["s"] = whole["e"]
+        i = j + 1
+    return sorted(out, key=lambda x: x["s"])
 
 
 def _late_person_photo(finder, spec, memo):
@@ -355,6 +467,7 @@ def step_build(cfg, niche, project, log=print, stop_flag=lambda: False, progress
     if fixes.get("archive"):
         script["archive"] = list(dict.fromkeys((script.get("archive") or []) + fixes["archive"]))
     finder.topic_items = []
+    finder.manual_photos = script.get("photos") or {}
     finder.person_hint = re.sub(r"(?i)\b(incident|vorfall|случай|инцидент)\b", "",
                                 (script.get("archive") or [""])[0]).strip()
     if script.get("archive"):
@@ -452,7 +565,7 @@ def step_build(cfg, niche, project, log=print, stop_flag=lambda: False, progress
         log("  Кадры проверяет Claude Code (по подписке Claude).")
     if mode in ("chat", "claude_code"):
         _choose_in_chat(cfg, project, finder, seg_blocks, jobs, vis_cache, log, check_stop, progress,
-                        auto=(mode == "claude_code"), topic=script.get("topic", ""))
+                        auto=(mode == "claude_code"), topic=_topic_rules(script, cfg))
     else:
         def run_job(job):
             bi, si = job
@@ -700,7 +813,7 @@ def step_build(cfg, niche, project, log=print, stop_flag=lambda: False, progress
         f"повторно использовано роликов: {reused}.")
 
     if cfg.get("visual_check") == "claude_code" and cfg.get("qa_check", True):
-        _quality_check(cfg, project, shots, finder, script.get("topic", ""), log, progress)
+        _quality_check(cfg, project, shots, finder, _topic_rules(script, cfg), log, progress)
     _apply_fixes(shots, fixes, fixes_path, finder, media_dir, log)
     if True:
         # кадр забракован, а замены нет — его время отдаём соседнему кадру (лучше дольше хороший, чем плохой)
@@ -724,8 +837,7 @@ def step_build(cfg, niche, project, log=print, stop_flag=lambda: False, progress
                     dropped += 1
                     continue
                 if sh.get("_ban"):                       # соседи не тянутся — повторяем соседний кадр другим участком
-                    src_ = next((x for x in reversed(kept) if x.get("src") and x["kind"] in ("video", "image")
-                                 and not x.get("_bad") and not x.get("person")), None)
+                    src_ = next((x for x in reversed(kept) if _plain(x) and not x.get("_bad")), None)
                     if src_:
                         sh.update({k: src_[k] for k in ("src", "kind", "clip_dur") if k in src_})
                         sh["offset_n"] = int(src_.get("offset_n", 0)) + 1
@@ -859,6 +971,7 @@ def step_build(cfg, niche, project, log=print, stop_flag=lambda: False, progress
                     group.append(sh)
         flush()
 
+    shots = _fit_docs(shots)
     # карта и лист с печатью, разрезанные на несколько кадров, идут непрерывно (а не с начала в каждом куске)
     first_s = {}
     for sh in shots:
@@ -873,6 +986,7 @@ def step_build(cfg, niche, project, log=print, stop_flag=lambda: False, progress
                     sh["type_start"] = max(0.0, (sh.get("type_start") or 0) - cs)
                     sh["type_end"] = sh["type_end"] - cs
                     sh["no_type"] = sh["type_end"] <= 0.1
+    shots = _contiguous(shots, log)
     # ---------- 5. переходы (только плавный наплыв), кадры, хвосты под переходы ----------
     for i, sh in enumerate(shots):
         f0 = round(sh["s"] / SR * render.FPS)
@@ -1281,7 +1395,8 @@ def _who(spec, roles):
 
 
 def _doc_ok(seg_blocks, bi, si, doc_used):
-    """Лист с текстом: не больше 3 на главу, не подряд, фраза 5–24 слова и 2,5–10 с."""
+    """Лист с текстом: не больше 2 на главу (вместе с листами из сценария), не в соседних абзацах,
+    фраза 5–24 слова и 2,5–10 с."""
     sp = seg_blocks[bi]["specs"][si]
     words = len(sp.get("text", "").split())
     length = sp.get("t1", 0) - sp.get("t0", 0)
@@ -1300,9 +1415,9 @@ def _doc_ok(seg_blocks, bi, si, doc_used):
     script_docs = [(b_, s_) for b_ in range(len(seg_blocks)) for s_, sp_ in enumerate(seg_blocks[b_]["specs"])
                    if sp_.get("visual") == "document" and (b_, s_) not in doc_used]
     same_ch = [x for x in doc_used + script_docs if seg_blocks[x[0]].get("chapter") == ch]
-    if len(same_ch) >= 3:
+    if len(same_ch) >= 2:
         return False
-    if any(x[0] == bi and abs(x[1] - si) <= 1 for x in doc_used):
+    if any(abs(x[0] - bi) <= 1 for x in doc_used):
         return False
     if any(abs(x[0] - bi) == 1 for x in script_docs):
         return False
@@ -1682,7 +1797,7 @@ def _document_item(spec, b, shots_dir, length, t0):
         step = max(0.15, (length - 0.6) / max(1, len(words)))
         reveal = [0.3 + i * step for i in range(len(words))]
     # после последнего слова лист ещё висит — зритель должен успеть дочитать (≈0,25 с на слово, 2–4 с)
-    hold = max(2.5, min(5.0, 0.3 * len(words)))
+    hold = DOC_HOLD
     clip_len = length + hold
     out = shots_dir / f"doc_{_key(text, spec.get('doc_head', ''), f'{clip_len:.2f}', str(reveal[:3]), 'h2')}.mp4"
     if not out.exists():
