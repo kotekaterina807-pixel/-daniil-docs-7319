@@ -116,43 +116,73 @@ def _sfx_file(kind):
     return random.choice(files) if files else None
 
 
+def _late_person_photo(finder, spec, memo):
+    """Фото человека, которое не нашлось при подборе: ищем по имени вместе с темой ролика.
+    Только файлы, где в названии есть его имя и фамилия (иначе — карточка, а не чужое лицо)."""
+    who = spec.get("query") or spec.get("shown") or ""
+    if who in memo:
+        return memo[who]
+    memo[who] = None
+    try:
+        alt = getattr(finder, "person_alt", {}).get(who, "") or spec.get("shown", "")
+        for c in finder._person_photos(who, alt)[:4]:
+            if c.get("url") in finder.used or not c.get("thumb"):
+                continue
+            path = finder._download(c)
+            if path:
+                finder.used.add(c["url"])
+                finder.credits.append(c)
+                memo[who] = {"path": str(path), "kind": "image", "url": c["url"], "duration": 0, "person": True}
+                break
+    except Exception:
+        pass
+    return memo[who]
+
+
 def _sfx_events(shots):
-    """Звуковые акценты: вспышка и шлепок фото в стопке, машинка, пока печатается лист (и шорох листа),
-    скрип пера и «тук» точек на карте, низкий удар при появлении человека, «свуш» перед новой главой."""
+    """Звуки строго по своим местам:
+    - вспышка — только когда на экране появляется фото (не на видео и не на листе);
+    - скрип пера и «тук» меток — только пока на экране карта, ни до, ни после;
+    - машинка — только пока печатаются слова на листе;
+    - низкий удар — при появлении портрета героя; «свуш» — перед новой главой."""
     pick = lambda kind: (lambda f: str(f) if f else None)(_sfx_file(kind))   # каждый раз — случайный вариант
     tw, wh = pick("typewriter"), pick("whoosh")
     ev = []
     last_hit = -99.0
-    for sh in shots:
+    done_maps = set()
+    for i, sh in enumerate(shots):
         t0, t1 = sh["s"] / SR, sh["e"] / SR
         name = Path(str(sh.get("src", ""))).name
-        if sh.get("stack") is not None:                  # фото ложится в стопку — затвор, вспышка, шлепок
-            fl, pd = pick("flash"), pick("paper")
-            if fl and not sh.get("stack_solo"):
-                ev.append({"file": fl, "at": max(0.0, t0 - 0.02), "dur": 0.9, "vol": 0.28, "fade": 0.2})
-            if pd:
-                ev.append({"file": pd, "at": t0 + 0.3, "dur": 0.6, "vol": 0.22, "fade": 0.1})
-        if sh.get("person") and t0 - last_hit > 20:      # лицо героя — низкий удар (не чаще раза в 20 с)
-            h = pick("hit")
+        is_photo = sh.get("kind") == "image" and not name.startswith(("doc_", "map_", "person_"))
+        if is_photo and sh.get("stack") is not None and not sh.get("stack_solo"):
+            fl = pick("flash")                            # фото ложится в стопку — вспышка в момент появления
+            if fl:
+                ev.append({"file": fl, "at": t0, "dur": 0.9, "vol": 0.28, "fade": 0.2})
+        if sh.get("person") and not name.startswith("person_") and t0 - last_hit > 20:
+            h = pick("hit")                               # настоящий портрет героя — низкий удар (не чаще раза в 20 с)
             if h:
-                ev.append({"file": h, "at": max(0.0, t0 - 0.05), "dur": 2.0, "vol": 0.2, "fade": 0.6})
+                ev.append({"file": h, "at": t0, "dur": 2.0, "vol": 0.2, "fade": 0.6})
                 last_hit = t0
-        if name.startswith("map_") and sh.get("map_times"):
+        if name.startswith("map_") and sh.get("map_times") and name not in done_maps:
+            done_maps.add(name)                           # карта бывает разрезана на куски — звуки один раз
+            j = i
+            while j + 1 < len(shots) and Path(str(shots[j + 1].get("src", ""))).name == name:
+                j += 1
+            m_end = shots[j]["e"] / SR - 0.3              # конец карты на экране
             pn, pi = pick("pen"), pick("pin")
             for k, mt in enumerate(sh["map_times"]):
-                if k and pn:
-                    ev.append({"file": pn, "at": t0 + max(0.0, mt - 1.1), "dur": 1.1, "vol": 0.16, "fade": 0.1})
+                at = t0 + mt
+                if at >= m_end:
+                    break
+                if k and pn and at - 1.1 >= t0:
+                    ev.append({"file": pn, "at": at - 1.1, "dur": 1.1, "vol": 0.16, "fade": 0.1})
                 if pi:
-                    ev.append({"file": pi, "at": t0 + mt, "dur": 0.35, "vol": 0.3, "fade": 0.05})
-        if name.startswith("doc_"):
+                    ev.append({"file": pi, "at": at, "dur": 0.35, "vol": 0.3, "fade": 0.05})
+        if name.startswith("doc_") and tw and not sh.get("no_type"):
             a = sh.get("type_start") if sh.get("type_start") is not None else 0.3
             b = sh.get("type_end") if sh.get("type_end") is not None else (t1 - t0 - 0.6)
-            rs = pick("rustle")
-            if rs:
-                ev.append({"file": rs, "at": t0, "dur": 0.8, "vol": 0.25, "fade": 0.2})
-            if tw:
-                dur = max(0.3, min(b, t1 - t0) - a)             # ровно пока печатаются слова, ни секундой дольше
-                ev.append({"file": tw, "at": t0 + a, "dur": dur, "vol": 0.12, "fade": 0.08})
+            dur = max(0.3, min(b, t1 - t0) - a)           # ровно пока печатаются слова, ни секундой дольше
+            ev.append({"file": tw, "at": t0 + a, "dur": dur, "vol": 0.12, "fade": 0.08})
         elif wh and sh.get("role") == "card" and not any(e["file"] == wh and abs(e["at"] - t0) < 6 for e in ev):
             ev.append({"file": wh, "at": max(0.0, t0 - 0.55), "dur": 1.6, "vol": 0.3})   # один «свуш» на главу
     return ev[:800]
@@ -325,6 +355,8 @@ def step_build(cfg, niche, project, log=print, stop_flag=lambda: False, progress
     if fixes.get("archive"):
         script["archive"] = list(dict.fromkeys((script.get("archive") or []) + fixes["archive"]))
     finder.topic_items = []
+    finder.person_hint = re.sub(r"(?i)\b(incident|vorfall|случай|инцидент)\b", "",
+                                (script.get("archive") or [""])[0]).strip()
     if script.get("archive"):
         try:
             finder.topic_items = finder.topic_archive(script["archive"])
@@ -479,6 +511,7 @@ def step_build(cfg, niche, project, log=print, stop_flag=lambda: False, progress
     label_gap = float(cfg.get("label_min_gap_sec", 45))
     last_label = -1e9
     busy_until = [0.0]          # до какой секунды на экране уже есть подпись
+    late_photos = {}            # имя → фото, найденное в последний момент (или None)
     person_cards = {}           # сколько карточек уже сделано для каждого человека (каждый раз новый вид)
     use_count = {}
     last_item = [None]
@@ -583,6 +616,17 @@ def step_build(cfg, niche, project, log=print, stop_flag=lambda: False, progress
                 busy_until[0] = seg_start + t0 + 0.1 + dur
             if spec["visual"] == "person":
                 has_photo = any(it.get("person") for it in items)
+                if not has_photo:                       # последняя попытка: поиск по имени + теме ролика
+                    ph = _late_person_photo(finder, spec, late_photos)
+                    if ph:
+                        items.insert(0, ph)
+                        has_photo = True
+                        if cfg.get("show_labels", True) and length >= 1.8:
+                            lp = shots_dir / f"label2_{_key(spec['shown'], str(accent))}.png"
+                            extras.make_label(spec["shown"] + (" | " + spec["role"] if spec.get("role") else ""), lp, accent)
+                            dur = min(LABEL_SEC - 1, length - 0.2)
+                            add_overlay(lp, seg_start + t0 + 0.1, dur, "label", person=True)
+                            busy_until[0] = max(busy_until[0], seg_start + t0 + 0.1 + dur)
                 if not has_photo:
                     # фото в свободных источниках нет — карточка с инициалами и именем, первым кадром
                     var = person_cards[spec["shown"]] = person_cards.get(spec["shown"], -1) + 1
@@ -815,6 +859,20 @@ def step_build(cfg, niche, project, log=print, stop_flag=lambda: False, progress
                     group.append(sh)
         flush()
 
+    # карта и лист с печатью, разрезанные на несколько кадров, идут непрерывно (а не с начала в каждом куске)
+    first_s = {}
+    for sh in shots:
+        nm = Path(str(sh.get("src", ""))).name
+        if nm.startswith(("map_", "doc_")) and sh["kind"] == "video":
+            first_s.setdefault(nm, sh["s"])
+            sh["clip_start"] = round((sh["s"] - first_s[nm]) / SR, 3)
+            if sh["clip_start"] > 0:
+                sh["map_times"] = None                   # звуки карты — только у первого куска
+                cs = sh["clip_start"]
+                if sh.get("type_end") is not None:       # лист: печать во втором куске — только если ещё идёт
+                    sh["type_start"] = max(0.0, (sh.get("type_start") or 0) - cs)
+                    sh["type_end"] = sh["type_end"] - cs
+                    sh["no_type"] = sh["type_end"] <= 0.1
     # ---------- 5. переходы (только плавный наплыв), кадры, хвосты под переходы ----------
     for i, sh in enumerate(shots):
         f0 = round(sh["s"] / SR * render.FPS)
@@ -837,6 +895,8 @@ def step_build(cfg, niche, project, log=print, stop_flag=lambda: False, progress
         fr = max(3, min(fr, int(sh["frames"] * 0.4), int(nxt["frames"] * 0.4)))
         if sh.get("stack") is not None and nxt.get("stack") and not sh.get("stack_last"):
             fr = 0                                    # в стопке новое фото ложится сверху — без наплыва
+        if nxt.get("stack") is not None and not nxt.get("stack_solo"):
+            fr = 0                                    # фото со вспышкой появляется сразу — вспышка звучит ровно на нём
         sh["trans"], sh["tail"] = "fade", fr
     for i, sh in enumerate(shots):
         g = _grade(niche, sh["mood"], bool(cfg.get("old_look", True)))
@@ -845,7 +905,7 @@ def step_build(cfg, niche, project, log=print, stop_flag=lambda: False, progress
         sh["grade"] = g
         sh["out"] = str(shots_dir / (f"{i:04d}_" + _key(sh["kind"], sh["src"], str(sh["frames"]), str(sh["tail"]),
                                                           sh["grade"], str(sh.get("zoom_in")), str(sh.get("offset_n", 0)),
-                                                          str(sh.get("stack")), str(sh.get("stack_solo")), "v4") + ".mp4"))
+                                                          str(sh.get("stack")), str(sh.get("stack_solo")), str(sh.get("clip_start")), "v5") + ".mp4"))
 
     try:                                   # карта монтажа: время → кадр (для правок по таймкодам и проверки)
         _save_json(project / "монтаж_кадры.json", [

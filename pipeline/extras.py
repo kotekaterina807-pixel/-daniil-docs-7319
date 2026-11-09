@@ -384,31 +384,63 @@ def make_document_clip(text, head, reveal, length, out_mp4, seed=""):
     W, H = 1920, 1080
     base, (px, py, pw, ph) = _paper(W, H, seed or text)
     words = text.split()
-    f = _font(52, TYPE_FONTS)
-    fh = _font(34, TYPE_BOLD)
     margin = 90
-    # раскладка слов по строкам
     d0 = ImageDraw.Draw(base)
-    lines, cur = [], []
-    for i, w in enumerate(words):
-        test = " ".join(x for _, x in cur + [(i, w)])
-        if cur and d0.textlength(test, font=f) > pw - 2 * margin:
+    inner = pw - 2 * margin
+    # шапка: всегда внутри листа — уменьшаем шрифт, а если и так не влезает, переносим на 2 строки
+    head_lines, fh = [], None
+    if head:
+        H_ = head.upper()
+        for size in (34, 30, 27, 24):
+            fh = _font(size, TYPE_BOLD)
+            if d0.textlength(H_, font=fh) <= inner:
+                head_lines = [H_]
+                break
+        if not head_lines:
+            fh = _font(26, TYPE_BOLD)
+            cur_ = ""
+            for w in H_.split():
+                t_ = (cur_ + " " + w).strip()
+                if cur_ and d0.textlength(t_, font=fh) > inner:
+                    head_lines.append(cur_)
+                    cur_ = w
+                else:
+                    cur_ = t_
+            head_lines.append(cur_)
+            if len(head_lines) > 2:
+                head_lines = [head_lines[0], " ".join(head_lines[1:])]
+            last = head_lines[-1]
+            while d0.textlength(last, font=fh) > inner and len(last) > 4:
+                last = last[:-2].rstrip(" ,.;:") + "…"
+            head_lines[-1] = last
+    head_h = (len(head_lines) * 40 + 50) if head_lines else 0
+    # текст: если строк больше, чем помещается на листе, — шрифт меньше
+    for size, lh in ((52, 74), (46, 66), (40, 58), (35, 50), (30, 44)):
+        f = _font(size, TYPE_FONTS)
+        lines, cur = [], []
+        for i, w in enumerate(words):
+            test = " ".join(x for _, x in cur + [(i, w)])
+            if cur and d0.textlength(test, font=f) > inner:
+                lines.append(cur)
+                cur = []
+            cur.append((i, w))
+        if cur:
             lines.append(cur)
-            cur = []
-        cur.append((i, w))
-    if cur:
-        lines.append(cur)
-    lh = 74
-    top = py + (ph - len(lines) * lh) // 2 + (30 if head else 0)
+        if len(lines) * lh + head_h <= ph - 120 and all(d0.textlength(w, font=f) <= inner for w in words):
+            break
+    top = py + (ph - len(lines) * lh - head_h) // 2 + head_h
     pos = {}
     for li, ln in enumerate(lines):
         x = px + margin
         for i, w in ln:
             pos[i] = (x, top + li * lh)
             x += d0.textlength(w + " ", font=f)
-    if head:
-        d0.text((px + margin, top - 90), head.upper(), font=fh, fill=(120, 40, 30))
-        d0.line([px + margin, top - 44, px + pw - margin, top - 44], fill=(120, 40, 30), width=2)
+    if head_lines:
+        y0 = top - head_h
+        for k_, hl in enumerate(head_lines):
+            d0.text((px + margin, y0 + k_ * 40), hl, font=fh, fill=(120, 40, 30))
+        ly = y0 + len(head_lines) * 40 + 6
+        d0.line([px + margin, ly, px + pw - margin, ly], fill=(120, 40, 30), width=2)
     tmp = Path(tempfile.mkdtemp())
     reveal = list(reveal) + [length] * (len(words) - len(reveal))
     # печать ПО БУКВАМ: буквы слова появляются в темпе речи — от момента, когда диктор начал слово,

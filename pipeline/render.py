@@ -247,11 +247,13 @@ def motion_score(path, seconds=8):
         return 0.0
 
 
-def render_video_shot(src, total, out, grade, label=None, clip_dur=0, offset_n=0, speed=1.0):
+def render_video_shot(src, total, out, grade, label=None, clip_dur=0, offset_n=0, speed=1.0, clip_start=None):
     need = total / FPS
     slow = 1.0
     start = 0.0
-    if clip_dur and clip_dur < need:
+    if clip_start is not None:                          # карта/лист, разрезанные на куски, — продолжение с того же места
+        start = max(0.0, float(clip_start))
+    elif clip_dur and clip_dur < need:
         slow = min(1.6, need / clip_dur)                # короткий ролик слегка замедляем, а не зацикливаем
     if speed and speed < 0.99:
         slow = min(2.0, max(slow, 1.0 / speed))         # быстрый ролик — проигрываем медленнее
@@ -307,7 +309,7 @@ def render_shots(shots, workers, log=print, on_progress=lambda d, t: None):
                 render_card(s["src"], n, tmp)
             elif s["kind"] == "video":
                 render_video_shot(s["src"], n, tmp, s["grade"], s.get("label"), s.get("clip_dur", 0),
-                                 s.get("offset_n", 0), s.get("speed", 1.0))
+                                 s.get("offset_n", 0), s.get("speed", 1.0), s.get("clip_start"))
             elif s["kind"] == "image" and s["src"] and s.get("stack") is not None:
                 render_stack_shot(s["stack"], s["src"], n, tmp, s["grade"], s.get("stack_seed", s["src"]),
                                   s.get("zoom_in", True), s.get("label"), not s.get("stack_solo"))

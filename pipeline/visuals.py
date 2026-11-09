@@ -939,6 +939,14 @@ class VisualFinder:
                 break
             add(self._loc(n), need_name=True)
             add(self._openverse(n, min_w=400), need_name=True)
+        hint = (getattr(self, "person_hint", "") or "").strip()
+        if hint and len(out) < 3:                        # имя + тема ролика: «Zinaida Kolmogorova Dyatlov Pass»
+            for n in names[:2]:
+                add(self._web_images(f"{n} {hint}", min_w=250), need_name=True)
+                add(self._web_images(f"{n} {hint} photo", min_w=250), need_name=True)
+                add(self._wikimedia(f"{n} {hint}"), need_name=True)
+            if len(out):
+                self._diag(person, f"поиск с темой «{hint}»: фото {len(out)}")
         before = len(out)
         for n in names:                                  # и поиск фото в интернете — как в браузере
             if len(out) >= 8:
