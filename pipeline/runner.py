@@ -916,6 +916,7 @@ def step_build(cfg, niche, project, log=print, stop_flag=lambda: False, progress
              "who": sh.get("who", ""), "person": bool(sh.get("person"))} for sh in shots])
     except Exception:
         pass
+    _free_disk(project, shots_dir, shots, log)
     _review_before_render(cfg, project, shots, fixes, fixes_path, log, check_stop, progress)
     workers = max(2, min(6, (os.cpu_count() or 4) // 2))
     log(f"Монтаж: {len(shots)} кадров (потоков: {workers}). Кодирование: "
@@ -1445,6 +1446,51 @@ def _tsec(t):
     for x in parts:
         sec = sec * 60 + x
     return sec
+
+
+_SHOT_RE = re.compile(r"^\d{4}_[0-9a-f]+\.mp4$")
+
+
+def _gb_free(path):
+    import shutil
+    try:
+        return shutil.disk_usage(str(path)).free / 1e9
+    except OSError:
+        return 999.0
+
+
+def _free_disk(project, shots_dir, shots, log):
+    """Перед монтажом: удалить смонтированные куски прошлых сборок, которые этой сборке не нужны
+    (каждая правка оставляла свой набор — десятки гигабайт). Если места всё равно мало — почистить
+    куски у готовых старых проектов. Исходники, озвучка, листы, карты и готовые видео не трогаются."""
+    keep = {Path(sh["out"]).name for sh in shots if sh.get("out")}
+    freed = 0
+    for f in shots_dir.glob("*.mp4"):
+        if _SHOT_RE.match(f.name) and f.name not in keep:
+            try:
+                freed += f.stat().st_size
+                f.unlink()
+            except OSError:
+                pass
+    if _gb_free(project) < 15:
+        for other in Path(project).parent.iterdir():
+            if other == Path(project) or not (other / "shots").is_dir():
+                continue
+            if not any(other.glob("*.mp4")):          # у проекта нет готового видео — не трогаем
+                continue
+            for f in (other / "shots").glob("*.mp4"):
+                if _SHOT_RE.match(f.name):
+                    try:
+                        freed += f.stat().st_size
+                        f.unlink()
+                    except OSError:
+                        pass
+    free = _gb_free(project)
+    if freed:
+        log(f"  Освобождено на диске: {freed / 1e9:.1f} ГБ (куски прошлых сборок). Свободно: {free:.0f} ГБ.")
+    if free < 6:
+        raise RuntimeError(f"На диске свободно только {free:.1f} ГБ — для монтажа нужно хотя бы 6–8 ГБ. "
+                           f"Освободите место (корзина, загрузки, старые видео в папке output) и запустите снова.")
 
 
 def _review_before_render(cfg, project, shots, fixes, fixes_path, log, check_stop, progress):
