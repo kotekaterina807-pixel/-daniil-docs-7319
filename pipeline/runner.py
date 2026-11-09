@@ -1475,6 +1475,8 @@ def _apply_fixes(shots, fixes, fixes_path, finder, media_dir, log):
             n_rep += 1
         else:
             sh["_bad"] = sh["_ban"] = True
+            sh["person"] = False                 # чужой портрет убран — подпись с именем тоже не нужна
+            sh.pop("who", None)
             n_cut += 1
     if n_rep or n_cut:
         log(f"  Правки: заменено кадров {n_rep} (архив темы), убрано {n_cut}.")

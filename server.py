@@ -934,11 +934,16 @@ def _remote_loop():
                         if cmd.get("reselect"):
                             _reselect(d)
 
-                        def fjob(d=d, name=name):
+                        def fjob(d=d, name=name, cmd=cmd):
                             JOB.add_log(f"Правка по команде из чата с Claude: {d.name}")
                             try:
+                                over = {}
+                                if cmd.get("qa") is False:        # только убрать отмеченные кадры, без новой проверки
+                                    over["qa_check"] = False
+                                if cmd.get("review") is False:
+                                    over["claude_review"] = False
                                 res = _rebuild(d, mode="reselect" if cmd.get("reselect") else "fix",
-                                               times=cmd.get("times") or [], src="по команде из чата")
+                                               times=cmd.get("times") or [], src="по команде из чата", over=over)
                             except Exception as e:
                                 remote.status(config.load_config(), name, f"ошибка: {e}")
                                 raise
@@ -1064,7 +1069,7 @@ _WHAT = {"build": ("▶️ Начинаю делать видео", "✅ Вид�
          "reselect": ("🔄 Заново подбираю кадры для видео", "✅ Кадры подобраны заново, видео готово")}
 
 
-def _build(project, npath, mode="build", times=(), src=""):
+def _build(project, npath, mode="build", times=(), src="", over=None):
     """Сборка проекта. Если нужен выбор кадров в чате — возвращает это как результат, а не ошибку."""
     from pipeline import review
     JOB.project = project.name
@@ -1082,7 +1087,7 @@ def _build(project, npath, mode="build", times=(), src=""):
     try:
         for _ in range(8):                         # Claude прислал правки перед монтажом — собираем кадры заново
             try:
-                runner.step_build(dict(config.load_config(), _log_tail=lambda: list(JOB.log)),
+                runner.step_build(dict(config.load_config(), _log_tail=lambda: list(JOB.log), **(over or {})),
                                   config.load_niche(npath), project, JOB.add_log, lambda: JOB.stop, JOB.progress)
                 break
             except checkpoint.Restart:
