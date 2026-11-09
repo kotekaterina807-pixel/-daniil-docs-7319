@@ -905,7 +905,9 @@ def step_build(cfg, niche, project, log=print, stop_flag=lambda: False, progress
         sh["grade"] = g
         sh["out"] = str(shots_dir / (f"{i:04d}_" + _key(sh["kind"], sh["src"], str(sh["frames"]), str(sh["tail"]),
                                                           sh["grade"], str(sh.get("zoom_in")), str(sh.get("offset_n", 0)),
-                                                          str(sh.get("stack")), str(sh.get("stack_solo")), str(sh.get("clip_start")), "v5") + ".mp4"))
+                                                          str(sh.get("stack")), str(sh.get("stack_solo")),
+                                                          *([f"cs{sh['clip_start']}"] if sh.get("clip_start") else []),
+                                                          "v4") + ".mp4"))   # готовые кадры прошлых сборок подхватываются
 
     try:                                   # карта монтажа: время → кадр (для правок по таймкодам и проверки)
         _save_json(project / "монтаж_кадры.json", [
@@ -1636,7 +1638,7 @@ def _document_item(spec, b, shots_dir, length, t0):
     # после последнего слова лист ещё висит — зритель должен успеть дочитать (≈0,25 с на слово, 2–4 с)
     hold = max(2.5, min(5.0, 0.3 * len(words)))
     clip_len = length + hold
-    out = shots_dir / f"doc_{_key(text, spec.get('doc_head', ''), f'{clip_len:.2f}', str(reveal[:3]))}.mp4"
+    out = shots_dir / f"doc_{_key(text, spec.get('doc_head', ''), f'{clip_len:.2f}', str(reveal[:3]), 'h2')}.mp4"
     if not out.exists():
         extras.make_document_clip(text, spec.get("doc_head", ""), reveal, clip_len, out, seed=text)
     return {"path": str(out), "kind": "video", "url": "doc:" + text[:60], "duration": clip_len + 0.5, "hold": hold,
