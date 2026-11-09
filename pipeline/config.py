@@ -3,7 +3,7 @@ import json
 import os
 from pathlib import Path
 
-VERSION = "10.0 (09.11.2026)"
+VERSION = "10.1 (09.11.2026)"
 CONFIG_REV = 10      # при смене — обновляются настройки монтажа у уже сохранённых конфигов
 ROOT = Path(__file__).resolve().parent.parent
 CONFIG_PATH = ROOT / "config.json"
@@ -41,6 +41,8 @@ DEFAULTS = {
     "tg_token": "",                    # бот Telegram для отправки готовых видео (@BotFather)
     "tg_chat_id": "",                  # ваш чат с ботом — программа узнаёт сама после «Start»
     "tg_send": True,
+    "tg_notify": True,
+    "limit_watch": True,
     "old_look": True,
     "word_sync": True,
     "qa_check": True,

@@ -387,6 +387,14 @@
             <div><b>Отправлять каждое готовое видео</b><p class="muted small">Видео больше 50 МБ уходит лёгкой копией (лимит ботов Telegram), полное — в папке проекта</p></div>
             <label class="switch"><input type="checkbox" data-key="tg_send"><span></span></label>
           </div>
+          <div class="set-row">
+            <div><b>Сообщать о ходе работы</b><p class="muted small">Начало и конец сборки, правки, ошибки, а также когда кончился и когда сбросился лимит Claude</p></div>
+            <label class="switch"><input type="checkbox" data-key="tg_notify"><span></span></label>
+          </div>
+          <div class="set-row">
+            <div><b>Следить за лимитом Claude</b><p class="muted small">Раз в 30 минут программа коротко спрашивает Claude (самая лёгкая модель), не кончился ли лимит. Пока он исчерпан — проверяет в момент сброса</p></div>
+            <label class="switch"><input type="checkbox" data-key="limit_watch"><span></span></label>
+          </div>
           <h3 class="sec">Claude Code — проверка кадров по подписке</h3>
           <div class="set-row">
             <div><b>Вход в Claude Code</b><p class="muted small">Откроется окно Claude Code, уже с прокси программы. Выберите «Claude account with subscription», войдите в браузере, затем введите /exit. Делается один раз</p></div>

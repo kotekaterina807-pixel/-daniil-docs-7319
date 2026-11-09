@@ -340,7 +340,7 @@ PUBLIC_KEYS = ["auto_update", "remote_jobs", "leonardo_key", "ai_images", "pixab
                "tts_provider", "edge_voice", "anthropic_key", "openai_key", "elevenlabs_key", "elevenlabs_voice_id",
                "music_volume", "shot_seconds", "show_labels", "theme", "sound_done", "open_folder_after",
                "default_niche", "update_repo", "language", "visual_check", "eleven_speed", "eleven_stability", "eleven_style",
-               "tg_token", "tg_chat_id", "tg_send", "old_look", "report_repo", "report_token", "report_send"]
+               "tg_token", "tg_chat_id", "tg_send", "tg_notify", "limit_watch", "old_look", "report_repo", "report_token", "report_send"]
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -512,7 +512,7 @@ class Handler(BaseHTTPRequestHandler):
         if p == "/api/fix":
             d = _project_dir(data.get("id"))
             _add_fixes(d, data.get("times") or [], data.get("archive") or [])
-            ok = run_job("build", lambda: _rebuild(d, data.get("niche")))
+            ok = run_job("build", lambda: _rebuild(d, data.get("niche"), mode="fix", times=data.get("times") or []))
             return self._send(200 if ok else 409, {"ok": ok, "error": None if ok else "Уже идёт работа"})
         if p == "/api/rebuild":
             d = _project_dir(data.get("id"))
@@ -522,7 +522,7 @@ class Handler(BaseHTTPRequestHandler):
                 npath = sj.get("niche_file")
                 if not (npath and Path(npath).exists()):
                     npath = _niche_path(data.get("niche"))
-                return _build(d, Path(npath))
+                return _build(d, Path(npath), mode="rebuild")
             ok = run_job("build", job)
             return self._send(200 if ok else 409, {"ok": ok, "error": None if ok else "Уже идёт работа"})
         if p == "/api/choices":
@@ -905,6 +905,11 @@ def _remote_loop():
     while True:
         try:
             cfg = config.load_config()
+            try:
+                from pipeline import limits
+                limits.watch_step(cfg, JOB.running)
+            except Exception:
+                pass
             if not JOB.running and not STATE.get("restart"):
                 q = remote.pending(cfg)
                 if q:
@@ -923,7 +928,8 @@ def _remote_loop():
                         def fjob(d=d, name=name):
                             JOB.add_log(f"Правка по команде из чата с Claude: {d.name}")
                             try:
-                                res = _rebuild(d)
+                                res = _rebuild(d, mode="reselect" if cmd.get("reselect") else "fix",
+                                               times=cmd.get("times") or [], src="по команде из чата")
                             except Exception as e:
                                 remote.status(config.load_config(), name, f"ошибка: {e}")
                                 raise
@@ -942,7 +948,7 @@ def _remote_loop():
                         JOB.add_log(f"Сборка по команде из чата с Claude: {name}")
                         try:
                             project = runner.project_from_text(path, npath, JOB.add_log)
-                            res = _build(project, npath)
+                            res = _build(project, npath, src="по команде из чата")
                         except Exception as e:
                             remote.status(config.load_config(), name, f"ошибка: {e}")
                             raise
@@ -951,12 +957,6 @@ def _remote_loop():
                         return res
                     if run_job("build", job):
                         remote.status(cfg, name, "сборка началась")
-                        try:
-                            if cfg.get("tg_token") and cfg.get("tg_chat_id"):
-                                from pipeline import telegram
-                                telegram.send_text(cfg, f"▶️ Начинаю сборку по команде из чата: {name}")
-                        except Exception:
-                            pass
         except Exception:
             pass
         time.sleep(60)
@@ -1010,12 +1010,36 @@ def _reselect(d):
         (d / n).unlink(missing_ok=True)
 
 
-def _rebuild(d, niche=None):
+def _rebuild(d, niche=None, **kw):
     sj = runner._load_json(d / "script.json", {})
     npath = sj.get("niche_file")
     if not (npath and Path(npath).exists()):
         npath = _niche_path(niche)
-    return _build(d, Path(npath))
+    return _build(d, Path(npath), **kw)
+
+
+def notify(text):
+    """Короткое сообщение в Telegram о ходе работы (если включено в настройках)."""
+    cfg = config.load_config()
+    if not (cfg.get("tg_notify", True) and cfg.get("tg_token") and cfg.get("tg_chat_id")):
+        return
+    def go():
+        try:
+            from pipeline import telegram
+            telegram.send_text(cfg, text)
+        except Exception as e:
+            JOB.add_log(f"Telegram: сообщение не отправилось — {e}")
+    threading.Thread(target=go, daemon=True).start()
+
+
+def _dur(sec):
+    sec = int(sec)
+    h, m = sec // 3600, sec % 3600 // 60
+    return f"{h} ч {m} мин" if h else f"{m} мин {sec % 60} с"
+
+
+def _title(project):
+    return runner._load_json(Path(project) / "script.json", {}).get("title") or Path(project).name
 
 
 def _find_project(key):
@@ -1025,18 +1049,45 @@ def _find_project(key):
     return max(ds, key=lambda x: x.stat().st_mtime) if ds else None
 
 
-def _build(project, npath):
+_WHAT = {"build": ("▶️ Начинаю делать видео", "✅ Видео готово"),
+         "rebuild": ("▶️ Пересобираю видео", "✅ Видео пересобрано"),
+         "fix": ("🛠 Вношу правки в видео", "✅ Правки внесены"),
+         "reselect": ("🔄 Заново подбираю кадры для видео", "✅ Кадры подобраны заново, видео готово")}
+
+
+def _build(project, npath, mode="build", times=(), src=""):
     """Сборка проекта. Если нужен выбор кадров в чате — возвращает это как результат, а не ошибку."""
     from pipeline import review
     JOB.project = project.name
+    t0 = time.time()
+    start, done = _WHAT.get(mode, _WHAT["build"])
+    lang = (runner._load_json(project / "script.json", {}).get("language") or config.load_config().get("language") or "")
+    try:
+        lang = config.lang(lang)["name"] if lang else ""
+    except Exception:
+        pass
+    notify(f"{start}: «{_title(project)}»" + (f" ({lang})" if lang else "") + (f" {src}" if src else "")
+           + (f"\nКадры на: {', '.join(map(str, times))}" if times else ""))
     before = _tokens_left()
     try:
         runner.step_build(config.load_config(), config.load_niche(npath), project, JOB.add_log,
                           lambda: JOB.stop, JOB.progress)
     except review.NeedChoices as e:
         JOB.add_log("Кадры-кандидаты собраны. Отправьте листы Claude в чат и вставьте его ответ в программу.")
+        notify(f"⏸ «{_title(project)}»: нужен выбор кадров в программе.")
         return {"project": project.name, "need_choices": True, "sheets": e.sheets, "lines": e.lines}
+    except Exception as e:
+        stop = JOB.stop or "Остановлено пользователем" in str(e)
+        notify(f"⏹ Сборка «{_title(project)}» остановлена." if stop else
+               f"❌ Сборка «{_title(project)}» прервалась через {_dur(time.time() - t0)}:\n{str(e)[:300]}")
+        raise
     final = _final_video(project)
+    try:
+        vlen = f", длина {_dur(tts.wav_duration(project / 'narration.wav'))}"
+    except Exception:
+        vlen = ""
+    notify(f"{done}: «{_title(project)}»{vlen}, заняло {_dur(time.time() - t0)}."
+           + (" Видео пришлю следующим сообщением." if final and config.load_config().get("tg_send", True) else ""))
     cfg = config.load_config()
     if final and cfg.get("tg_send", True) and cfg.get("tg_token") and cfg.get("tg_chat_id"):
         threading.Thread(target=_tg_send_bg, args=(final, project.name), daemon=True).start()

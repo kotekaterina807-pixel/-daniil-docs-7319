@@ -15,6 +15,12 @@ class ClaudeCodeError(Exception):
     pass
 
 
+class LimitError(ClaudeCodeError):
+    def __init__(self, msg, raw=""):
+        super().__init__(msg)
+        self.raw = raw
+
+
 def find_exe():
     """Путь к Claude Code (не к приложению Claude для ПК)."""
     cands = []
@@ -74,16 +80,22 @@ def run(cfg, prompt, workdir, timeout=900):
     """Один запрос к Claude Code. Если лимит подписки на этот период исчерпан (на 30-минутном видео
     запросов много), не роняем сборку: ждём сброса лимита (проверка раз в 15 минут, до 6 часов)."""
     import time as _t
-    for k in range(25):
+    from . import limits
+    for k in range(40):
         try:
-            return _run_once(cfg, prompt, workdir, timeout)
-        except ClaudeCodeError as e:
-            if "лимит подписки" not in str(e) or k == 24:
+            out = _run_once(cfg, prompt, workdir, timeout)
+            limits.ok(cfg, building=True)
+            return out
+        except LimitError as e:
+            if k == 39:
                 raise
+            limits.hit(cfg, e.raw, building=True)
+            due = limits.reset_time(e.raw)
+            wait = 900 if not due else min(900, max(60, due + 60 - _t.time()))
             if LOG:
                 LOG(f"  Лимит подписки Claude на этот период исчерпан — жду сброса и продолжу сам "
-                    f"(проверка через 15 минут, попытка {k + 1}).")
-            _t.sleep(900)
+                    f"(следующая проверка через {int(wait // 60) or 1} мин, попытка {k + 1}).")
+            _t.sleep(wait)
 
 
 def run_cached(cfg, prompt, workdir, sheet, timeout=900):
@@ -133,8 +145,9 @@ def _run_once(cfg, prompt, workdir, timeout=900):
     if "login" in low and ("please run" in low or "not logged" in low or "invalid api key" in low):
         raise ClaudeCodeError("Claude Code не авторизован: откройте терминал, введите claude и выполните /login "
                               "(вход аккаунтом с подпиской).")
-    if "usage limit" in low or "limit reached" in low or "rate limit" in low:
-        raise ClaudeCodeError("Исчерпан лимит подписки Claude на этот период — дождитесь сброса лимита.")
+    from .limits import is_limit_text
+    if is_limit_text(low) and (p.returncode != 0 or len(out) < 600):
+        raise LimitError("Исчерпан лимит подписки Claude на этот период — дождитесь сброса лимита.", out + " " + err)
     if p.returncode != 0 and not out:
         raise ClaudeCodeError(f"Claude Code: ошибка {p.returncode}: {(err or out)[:300]}")
     return out
