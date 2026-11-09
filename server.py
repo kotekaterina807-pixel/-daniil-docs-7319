@@ -340,7 +340,7 @@ PUBLIC_KEYS = ["auto_update", "remote_jobs", "leonardo_key", "ai_images", "pixab
                "tts_provider", "edge_voice", "anthropic_key", "openai_key", "elevenlabs_key", "elevenlabs_voice_id",
                "music_volume", "shot_seconds", "show_labels", "theme", "sound_done", "open_folder_after",
                "default_niche", "update_repo", "language", "visual_check", "eleven_speed", "eleven_stability", "eleven_style",
-               "tg_token", "tg_chat_id", "tg_send", "tg_notify", "limit_watch", "old_look", "report_repo", "report_token", "report_send"]
+               "tg_token", "tg_chat_id", "tg_send", "tg_notify", "limit_watch", "claude_review", "review_wait_min", "old_look", "report_repo", "report_token", "report_send"]
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -910,8 +910,17 @@ def _remote_loop():
                 limits.watch_step(cfg, JOB.running)
             except Exception:
                 pass
+            if JOB.running and time.time() - STATE.get("live_t", 0) > 600:
+                STATE["live_t"] = time.time()
+                try:
+                    remote.live(cfg, {"project": JOB.project, "stage": JOB.stage,
+                                      "progress": round((JOB.frac or 0) * 100),
+                                      "minutes": round((time.time() - (JOB.t0 or time.time())) / 60),
+                                      "log": [str(x) for x in list(JOB.log)[-60:]]})
+                except Exception:
+                    pass
             if not JOB.running and not STATE.get("restart"):
-                q = remote.pending(cfg)
+                q = [x for x in remote.pending(cfg) if not x[0].lower().startswith("review")]
                 if q:
                     name, sha = q[0]
                     text = remote.take(cfg, name, sha)
@@ -1069,9 +1078,15 @@ def _build(project, npath, mode="build", times=(), src=""):
     notify(f"{start}: «{_title(project)}»" + (f" ({lang})" if lang else "") + (f" {src}" if src else "")
            + (f"\nКадры на: {', '.join(map(str, times))}" if times else ""))
     before = _tokens_left()
+    from pipeline import checkpoint
     try:
-        runner.step_build(config.load_config(), config.load_niche(npath), project, JOB.add_log,
-                          lambda: JOB.stop, JOB.progress)
+        for _ in range(8):                         # Claude прислал правки перед монтажом — собираем кадры заново
+            try:
+                runner.step_build(dict(config.load_config(), _log_tail=lambda: list(JOB.log)),
+                                  config.load_niche(npath), project, JOB.add_log, lambda: JOB.stop, JOB.progress)
+                break
+            except checkpoint.Restart:
+                continue
     except review.NeedChoices as e:
         JOB.add_log("Кадры-кандидаты собраны. Отправьте листы Claude в чат и вставьте его ответ в программу.")
         notify(f"⏸ «{_title(project)}»: нужен выбор кадров в программе.")

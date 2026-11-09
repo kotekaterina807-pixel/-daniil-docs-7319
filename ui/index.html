@@ -392,6 +392,10 @@
             <label class="switch"><input type="checkbox" data-key="tg_notify"><span></span></label>
           </div>
           <div class="set-row">
+            <div><b>Проверка Claude перед монтажом</b><p class="muted small">Когда кадры подобраны, программа отправляет раскадровку Claude и ждёт его ответа: «монтировать» или «заменить такие-то кадры». Напишите Claude «проверь кадры», когда придёт сообщение. Нет ответа 2 часа — монтирует сама</p></div>
+            <label class="switch"><input type="checkbox" data-key="claude_review"><span></span></label>
+          </div>
+          <div class="set-row">
             <div><b>Следить за лимитом Claude</b><p class="muted small">Раз в 30 минут программа коротко спрашивает Claude (самая лёгкая модель), не кончился ли лимит. Пока он исчерпан — проверяет в момент сброса</p></div>
             <label class="switch"><input type="checkbox" data-key="limit_watch"><span></span></label>
           </div>

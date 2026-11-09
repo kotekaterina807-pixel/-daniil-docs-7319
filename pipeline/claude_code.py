@@ -98,7 +98,7 @@ def run(cfg, prompt, workdir, timeout=900):
             _t.sleep(wait)
 
 
-def run_cached(cfg, prompt, workdir, sheet, timeout=900):
+def run_cached(cfg, prompt, workdir, sheet, timeout=900, check=None):
     """То же, что run, но ответ по этому листу запоминается в папке проекта: если сборку остановили
     (выключили компьютер, кончился лимит) — при повторной сборке уже просмотренные листы не спрашиваются снова."""
     import hashlib
@@ -111,13 +111,22 @@ def run_cached(cfg, prompt, workdir, sheet, timeout=900):
     cache = wd / "_ответы_claude"
     cache.mkdir(exist_ok=True)
     cf = cache / f"{key}.txt"
+    from .limits import is_limit_text
     if cf.exists():
-        return cf.read_text(encoding="utf-8")
-    ans = run(cfg, prompt, workdir, timeout)
-    try:
-        cf.write_text(ans, encoding="utf-8")
-    except OSError:
-        pass
+        old = cf.read_text(encoding="utf-8")
+        # старые версии запоминали вместо ответа сообщение «лимит исчерпан» — такое не считается ответом
+        if old.strip() and not (is_limit_text(old) and len(old) < 600) and (not check or check(old)):
+            return old
+        cf.unlink(missing_ok=True)
+    ans = ""
+    for _ in range(3):                    # пустой или непонятный ответ — спрашиваем ещё раз, не запоминаем
+        ans = run(cfg, prompt, workdir, timeout)
+        if ans.strip() and (not check or check(ans)):
+            try:
+                cf.write_text(ans, encoding="utf-8")
+            except OSError:
+                pass
+            return ans
     return ans
 
 

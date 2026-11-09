@@ -332,8 +332,8 @@ class VisualFinder:
     def _web_images(self, query, min_w=500):
         """Картинки из интернета по запросу — как поиск картинок в браузере. Стоковые агентства с водяными
         знаками и магазины отбрасываются; каждую картинку дальше смотрит Claude (смысл, знаки, надписи)."""
-        if self._down.get("web"):
-            return []
+        if self._down.get("web") and time.time() - float(self._down["web"]) < 600:
+            return []                    # связь пропала — 10 минут не пробуем, потом снова
 
         def fetch():
             out = []
@@ -360,12 +360,17 @@ class VisualFinder:
                     return out
                 return self._web_filter(r.json().get("results") or [], min_w)
             except requests.ConnectionError as e:
-                self._down["web"] = True
-                self.log(f"  Поиск картинок в интернете недоступен — дальше без него ({type(e).__name__}).")
+                if not self._down.get("web"):
+                    self.log(f"  Поиск картинок в интернете не ответил ({type(e).__name__}) — попробую снова через 10 минут.")
+                self._down["web"] = time.time()
+                raise
             except Exception as e:
                 self.log(f"  Поиск картинок в интернете: {e}")
             return out
-        return self._cached(("web", query, min_w), fetch)
+        try:
+            return self._cached(("web", query, min_w), fetch)
+        except requests.ConnectionError:
+            return []                    # неудачный поиск не запоминаем — повторится, когда связь вернётся
 
     # ---------- Openverse (CC0 и общественное достояние; без ключа) ----------
     def _openverse(self, query, min_w=1000):
@@ -923,6 +928,8 @@ class VisualFinder:
         for n in [x for x in names if not re.search("[а-яё]", x, re.I)][:1]:
             # раздел Commons «Category:Имя Фамилия» — там подлинные фото именно этого человека
             add(self._commons_category(n, depth=0, limit=12))
+        # подлинные фото темы (архив Commons), где в названии файла есть его имя и фамилия
+        add([c for c in getattr(self, "topic_items", None) or [] if c.get("kind") == "image"], need_name=True)
         for n in names:
             for q in (n, f"{n} portrait", f"{n} photograph"):
                 add(self._wikimedia(q), need_name=True)

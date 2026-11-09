@@ -854,6 +854,7 @@ def step_build(cfg, niche, project, log=print, stop_flag=lambda: False, progress
              "who": sh.get("who", ""), "person": bool(sh.get("person"))} for sh in shots])
     except Exception:
         pass
+    _review_before_render(cfg, project, shots, fixes, fixes_path, log, check_stop, progress)
     workers = max(2, min(6, (os.cpu_count() or 4) // 2))
     log(f"Монтаж: {len(shots)} кадров (потоков: {workers}). Кодирование: "
         f"{'видеокарта NVIDIA' if render.gpu_available() else 'процессор'}. Это самый долгий этап.")
@@ -1077,13 +1078,18 @@ def _choose_with_claude_code(cfg, project, finder, lines, rev_path, ch_path, top
         sheets = review.make_sheets(sheet_lines, project, log, prefix=prefix)
         done = [0]
 
+        empty = [0]
+
         def one(name):
             check_stop()
             ans = claude_code.run_cached(cfg, claude_code.PROMPT.format(sheet=name, topic=topic or "документальное видео"),
-                                         project, name)
+                                         project, name, check=lambda a: any(claude_code.parse(a)))
             done[0] += 1
             progress(0.36 + 0.08 * done[0] / max(1, len(sheets)), f"{label}: лист {done[0]}/{len(sheets)}")
-            return claude_code.parse(ans)
+            p, q = claude_code.parse(ans)
+            if not p and not q:
+                empty[0] += 1
+            return p, q
         picks, queries = {}, {}
         try:
             with ThreadPoolExecutor(max_workers=2) as ex:
@@ -1092,6 +1098,9 @@ def _choose_with_claude_code(cfg, project, finder, lines, rev_path, ch_path, top
                     queries.update(q)
         except claude_code.ClaudeCodeError as e:
             raise RuntimeError(str(e))
+        if sheets and empty[0] > max(1, len(sheets) // 10):
+            raise RuntimeError(f"Claude не ответил по {empty[0]} листам из {len(sheets)} — кадры не проверены, "
+                               f"монтаж не начинаю. Повторите сборку позже: уже полученные ответы сохранены.")
         return picks, queries
 
     log(f"Claude Code смотрит кадры ({len(lines)} строк сценария)...")
@@ -1376,6 +1385,45 @@ def _tsec(t):
     return sec
 
 
+def _review_before_render(cfg, project, shots, fixes, fixes_path, log, check_stop, progress):
+    """Раскадровка — Claude в чат, ждём «можно монтировать» или список кадров на замену."""
+    from . import checkpoint, telegram
+    wait_min = int(cfg.get("review_wait_min", 120) or 0)
+    if not cfg.get("claude_review", True) or wait_min <= 0 or not all(checkpoint._ok(cfg)):
+        return
+    progress(0.45, "Раскадровка для проверки Claude")
+    try:
+        sheets, index = checkpoint.storyboard(shots, project, SR)
+        base = checkpoint.publish(cfg, project, sheets, index, list(cfg.get("_log_tail", lambda: [])()))
+    except Exception as e:
+        log(f"  Раскадровка для Claude не отправилась ({e}) — монтирую без проверки.")
+        return
+    log(f"Кадры подобраны. Раскадровка ({len(sheets)} листов) отправлена Claude — жду проверки "
+        f"до {wait_min} мин. Напишите Claude в чат: «проверь кадры».")
+    telegram.notify(cfg, f"Кадры для «{project.name[:60]}» подобраны, монтаж ещё не начат.\n"
+                         f"Напиши Claude в чат: «проверь кадры». Жду до {wait_min} мин, потом монтирую сам.")
+    progress(0.45, "Жду проверки кадров Claude")
+    cmd = checkpoint.wait(cfg, project, check_stop, wait_min)
+    if cmd is None:
+        log("  Проверки Claude не было — монтирую как есть.")
+        telegram.notify(cfg, f"Проверки кадров не было за {wait_min} мин — начинаю монтаж как есть.")
+        return
+    times = [str(t) for t in cmd.get("times") or []]
+    if not times and not cmd.get("archive"):
+        log("  Claude проверил кадры: можно монтировать." + (f" {cmd.get('note')}" if cmd.get("note") else ""))
+        telegram.notify(cfg, "Claude проверил кадры — начинаю монтаж.")
+        return
+    fx = _load_json(fixes_path, {})
+    fx["times"] = list(dict.fromkeys((fx.get("times") or []) + times))
+    if cmd.get("archive"):
+        fx["archive"] = list(dict.fromkeys((fx.get("archive") or []) + list(cmd["archive"])))
+    _save_json(fixes_path, fx)
+    log(f"  Claude нашёл кадры на замену: {', '.join(times) or 'новые разделы архива'} — подбираю заново "
+        f"(озвучка и проверенные кадры остаются).")
+    telegram.notify(cfg, f"Claude отметил кадры на замену ({len(times)} шт.) — меняю и пришлю раскадровку снова.")
+    raise checkpoint.Restart()
+
+
 def _apply_fixes(shots, fixes, fixes_path, finder, media_dir, log):
     """Правки после просмотра: кадры на указанных таймкодах убираются (и не вернутся при следующих сборках).
     Замена — подлинное фото из архива темы; если архива нет — время забирают соседние кадры."""
@@ -1462,7 +1510,11 @@ def _quality_check(cfg, project, shots, finder, topic, log, progress):
             if e["no"] in bad:
                 e["shot"]["_bad"] = True
     except Exception as e:
-        log(f"  Контроль качества не выполнен ({e}) — монтирую как есть.")
+        raise RuntimeError(f"Контроль качества не выполнен ({e}) — монтаж непроверенных кадров не начинаю. "
+                           f"Повторите сборку: уже проверенные листы сохранены.")
+    if entries and rep.get("answered", 0) < 0.9 * len(entries):
+        raise RuntimeError(f"Контроль качества: Claude ответил только по {rep.get('answered', 0)} кадрам из "
+                           f"{len(entries)} — монтаж непроверенных кадров не начинаю. Повторите сборку позже.")
 
 
 def _map_item(spec, b, shots_dir, length, t0):

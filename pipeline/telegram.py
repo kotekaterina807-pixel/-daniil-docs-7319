@@ -61,6 +61,16 @@ def send_text(cfg, text):
     _call(cfg.get("tg_token", ""), "sendMessage", chat_id=cfg.get("tg_chat_id", ""), text=text)
 
 
+def notify(cfg, text):
+    """Короткое сообщение о ходе работы; молча ничего не делает, если Telegram не настроен."""
+    if not (cfg.get("tg_notify", True) and cfg.get("tg_token") and cfg.get("tg_chat_id")):
+        return
+    try:
+        send_text(cfg, text)
+    except Exception:
+        pass
+
+
 def _duration(path):
     try:
         p = subprocess.run([ffmpeg_exe(), "-i", str(path)], capture_output=True, text=True, timeout=60,

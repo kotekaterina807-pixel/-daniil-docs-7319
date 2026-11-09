@@ -175,7 +175,8 @@ def check(cfg, project, entries, finder, topic, log, progress=None, taken=None, 
 
     def one(name):
         ans = claude_code.run_cached(cfg, PROMPT.format(sheet=name, topic=topic or "документальное видео",
-                                                        draw=DRAW if draw_on else ""), project, name)
+                                                        draw=DRAW if draw_on else ""), project, name,
+                                     check=lambda a: bool(parse(a)))
         done[0] += 1
         if progress:
             progress(done[0] / len(names), f"Контроль качества: лист {done[0]}/{len(names)}")

@@ -3,7 +3,7 @@ import json
 import os
 from pathlib import Path
 
-VERSION = "10.1 (09.11.2026)"
+VERSION = "10.2 (09.11.2026)"
 CONFIG_REV = 10      # при смене — обновляются настройки монтажа у уже сохранённых конфигов
 ROOT = Path(__file__).resolve().parent.parent
 CONFIG_PATH = ROOT / "config.json"
@@ -43,6 +43,8 @@ DEFAULTS = {
     "tg_send": True,
     "tg_notify": True,
     "limit_watch": True,
+    "claude_review": True,
+    "review_wait_min": 120,
     "old_look": True,
     "word_sync": True,
     "qa_check": True,

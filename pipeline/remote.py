@@ -60,3 +60,13 @@ def status(cfg, name, text):
         _put(repo, token, "status/remote.json", body.encode("utf-8"), f"статус: {text[:60]}")
     except Exception:
         pass
+
+
+def live(cfg, data):
+    """Ход текущей сборки (раз в 10 минут) — Claude может посмотреть его в любой момент."""
+    repo, token = _cfg_ok(cfg)
+    if not repo:
+        return
+    data = dict(data, time=time.strftime("%Y-%m-%d %H:%M:%S"))
+    _put(repo, token, "status/live.json", json.dumps(data, ensure_ascii=False, indent=1).encode("utf-8"),
+         f"ход сборки: {data.get('stage', '')[:50]}")
