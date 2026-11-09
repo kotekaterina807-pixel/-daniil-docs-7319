@@ -65,14 +65,23 @@ def _put(repo, token, path, data, msg):
     body = {"message": msg, "content": base64.b64encode(data).decode()}
     if sha:
         body["sha"] = sha
-    for attempt in range(3):
-        r = requests.put(url, headers=_h(token), json=body, timeout=120)
+    for attempt in range(6):
+        try:
+            r = requests.put(url, headers=_h(token), json=body, timeout=120)
+        except requests.RequestException:
+            time.sleep(10 * (attempt + 1))
+            continue
         if r.status_code in (200, 201):
             return
-        if r.status_code in (409, 422) and attempt < 2:
+        if r.status_code in (409, 422) and attempt < 5:
             time.sleep(2)
             continue
+        if r.status_code in (403, 429, 502, 503) and attempt < 5:      # GitHub притормаживает частые загрузки
+            wait = int(r.headers.get("Retry-After") or 0) or 30 * (attempt + 1)
+            time.sleep(min(wait, 180))
+            continue
         raise ReportError(f"GitHub не принял файл {path}: {r.status_code} {r.text[:160]}")
+    raise ReportError(f"GitHub не принял файл {path}: нет связи")
 
 
 def video_grids(video, out_dir, every=2.0, per=20):
@@ -118,30 +127,33 @@ def send(cfg, project, log_lines, log=print):
     video = next((p for p in sorted(project.glob("*.mp4"), key=lambda p: p.stat().st_mtime, reverse=True)
                   if p.name != "video_only.mp4" and not p.name.endswith(("_telegram.mp4", ".part.mp4"))), None)
     folder = f"reports/{time.strftime('%Y-%m-%d_%H%M')}_{project.name[16:60] or project.name[:40]}"
-    files = []
-    for pat in ("раскадровка_*.jpg", "проверка_*.jpg"):
-        files += sorted(project.glob(pat))
-    for name in ("проверка.json", "subtitles.srt", "script.json", "план_кадров.json", "выбор_кадров.json"):
-        if (project / name).exists():
-            files.append(project / name)
     tmp = Path(tempfile.mkdtemp())
-    if video:
-        log("  Отчёт: кадры готового видео каждые 2 секунды...")
-        try:
-            files += video_grids(video, tmp)
-        except Exception as e:
-            log(f"  Отчёт: кадры видео не получились ({e}).")
+    # сначала самое важное (журнал, данные, кадры готового видео), картинки подбора — в конце
+    files = []
     (tmp / "журнал.txt").write_text(_mask("\n".join(log_lines or [])), encoding="utf-8")
     files.append(tmp / "журнал.txt")
     err = Path(__file__).resolve().parent.parent / "error_log.txt"       # подробности последних ошибок
     if err.exists():
         (tmp / "ошибки.txt").write_text(_mask(err.read_text(encoding="utf-8", errors="replace")[-6000:]), encoding="utf-8")
         files.append(tmp / "ошибки.txt")
+    for name in ("монтаж_кадры.json", "проверка.json", "выбор_кадров.json", "план_кадров.json", "script.json",
+                 "subtitles.srt", "правки.json"):
+        if (project / name).exists():
+            files.append(project / name)
+    if video:
+        log("  Отчёт: кадры готового видео каждые 2 секунды...")
+        try:
+            files += video_grids(video, tmp)
+        except Exception as e:
+            log(f"  Отчёт: кадры видео не получились ({e}).")
+    files += sorted(project.glob("проверка_*.jpg"))
+    files += sorted(project.glob("раскадровка_*.jpg"))[:40]
     info = {"project": project.name, "video": video.name if video else None,
             "sent": time.strftime("%Y-%m-%d %H:%M:%S"), "version": cfg.get("_version", "")}
     log(f"  Отчёт для Claude: отправляю {len(files)} файлов в GitHub...")
-    for f in files:
+    for k, f in enumerate(files):
         _put(repo, token, f"{folder}/{f.name}", f.read_bytes(), f"Отчёт: {project.name}")
+        time.sleep(1.0)                                   # не чаще ~60 файлов в минуту — иначе GitHub режет
     _put(repo, token, f"{folder}/info.json", json.dumps(info, ensure_ascii=False, indent=1).encode(), "info")
     _put(repo, token, "latest.txt", folder.encode(), "latest")
     return folder

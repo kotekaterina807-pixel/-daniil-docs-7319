@@ -30,7 +30,7 @@ def pending(cfg):
         return []
     items = r.json() if isinstance(r.json(), list) else []
     return sorted((x["name"], x["sha"]) for x in items
-                  if x.get("type") == "file" and x.get("name", "").lower().endswith(".txt"))
+                  if x.get("type") == "file" and x.get("name", "").lower().endswith((".txt", ".json")))
 
 
 def take(cfg, name, sha):

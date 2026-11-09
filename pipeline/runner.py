@@ -320,6 +320,16 @@ def step_build(cfg, niche, project, log=print, stop_flag=lambda: False, progress
     vis_cache_path = project / "visuals.json"
     vis_cache = _load_json(vis_cache_path, {})
     finder = VisualFinder(cfg, niche, media_dir, log)
+    fixes_path = project / "правки.json"                 # правки после просмотра: какие кадры убрать
+    fixes = _load_json(fixes_path, {})
+    if fixes.get("archive"):
+        script["archive"] = list(dict.fromkeys((script.get("archive") or []) + fixes["archive"]))
+    finder.topic_items = []
+    if script.get("archive"):
+        try:
+            finder.topic_items = finder.topic_archive(script["archive"])
+        except Exception as e:
+            log(f"  Архив темы не прочитан: {e}")
     from . import vision
     vision.reset()
     try:
@@ -647,25 +657,37 @@ def step_build(cfg, niche, project, log=print, stop_flag=lambda: False, progress
 
     if cfg.get("visual_check") == "claude_code" and cfg.get("qa_check", True):
         _quality_check(cfg, project, shots, finder, script.get("topic", ""), log, progress)
+    _apply_fixes(shots, fixes, fixes_path, finder, media_dir, log)
+    if True:
         # кадр забракован, а замены нет — его время отдаём соседнему кадру (лучше дольше хороший, чем плохой)
-        def stretchable(x, extra):
+        def stretchable(x, extra, cap=6.0):
             # карточки людей, листы с текстом и фото людей не растягиваем; и никакой кадр — дольше 8 с
             return (x.get("_qa") and not x.get("_bad") and not x.get("person")
-                    and not str(x["_qa"].get("url", "")).startswith(("card:", "doc:"))
-                    and (x["e"] - x["s"] + extra) / SR <= 6.0)
+                    and not str(x["_qa"].get("url", "")).startswith(("card:", "doc:", "map:"))
+                    and (x["e"] - x["s"] + extra) / SR <= cap)
         kept, dropped = [], 0
         for i, sh in enumerate(shots):
             if sh.get("_bad"):
                 extra = sh["e"] - sh["s"]
+                cap = 9.0 if sh.get("_ban") else 6.0     # убранный по правке кадр — убрать обязательно
                 nxt = shots[i + 1] if i + 1 < len(shots) else None
-                if kept and stretchable(kept[-1], extra):
+                if kept and stretchable(kept[-1], extra, cap):
                     kept[-1]["e"] = sh["e"]
                     dropped += 1
                     continue
-                if nxt is not None and stretchable(nxt, extra):
+                if nxt is not None and stretchable(nxt, extra, cap):
                     nxt["s"] = sh["s"]
                     dropped += 1
                     continue
+                if sh.get("_ban"):                       # соседи не тянутся — повторяем соседний кадр другим участком
+                    src_ = next((x for x in reversed(kept) if x.get("src") and x["kind"] in ("video", "image")
+                                 and not x.get("_bad") and not x.get("person")), None)
+                    if src_:
+                        sh.update({k: src_[k] for k in ("src", "kind", "clip_dur") if k in src_})
+                        sh["offset_n"] = int(src_.get("offset_n", 0)) + 1
+                        sh["_bad"] = sh["_ban"] = False
+                        sh["person"] = False
+                        sh.pop("who", None)
             kept.append(sh)
         shots = kept
         if dropped:
@@ -825,6 +847,13 @@ def step_build(cfg, niche, project, log=print, stop_flag=lambda: False, progress
                                                           sh["grade"], str(sh.get("zoom_in")), str(sh.get("offset_n", 0)),
                                                           str(sh.get("stack")), str(sh.get("stack_solo")), "v4") + ".mp4"))
 
+    try:                                   # карта монтажа: время → кадр (для правок по таймкодам и проверки)
+        _save_json(project / "монтаж_кадры.json", [
+            {"t": round(sh["s"] / SR, 2), "end": round(sh["e"] / SR, 2), "kind": sh["kind"],
+             "file": Path(str(sh.get("src") or "")).name, "url": (sh.get("_qa") or {}).get("url", ""),
+             "who": sh.get("who", ""), "person": bool(sh.get("person"))} for sh in shots])
+    except Exception:
+        pass
     workers = max(2, min(6, (os.cpu_count() or 4) // 2))
     log(f"Монтаж: {len(shots)} кадров (потоков: {workers}). Кодирование: "
         f"{'видеокарта NVIDIA' if render.gpu_available() else 'процессор'}. Это самый долгий этап.")
@@ -1077,7 +1106,8 @@ def _choose_with_claude_code(cfg, project, finder, lines, rev_path, ch_path, top
             " — вместо фото будет карточка с именем и кадры по его теме.")
     for who, notes in (getattr(finder, "person_diag", {}) or {}).items():
         log(f"    Поиск фото «{who}»: " + "; ".join(notes[:6]))
-    for rnd in (1, 2):                                   # до двух дополнительных кругов поиска
+    # до двух дополнительных кругов поиска; у длинного видео — один (иначе упирается в лимит подписки Claude)
+    for rnd in ((1,) if len(by_no) > 120 else (1, 2)):
         retry = [by_no[no] for no in by_no if len(choices.get(no, [])) < by_no[no]["n"] and queries.get(no)]
         if not retry:
             break
@@ -1333,6 +1363,73 @@ def _name_spoken(pp, text):
     words = [align.norm(w) for w in text.split()]
     stems = _stems(pp[1]) + _stems(pp[0])
     return any(w.startswith(st) for w in words for st in stems if st)
+
+
+def _tsec(t):
+    """«4:31» / «1:02:05» / 271 → секунды."""
+    if isinstance(t, (int, float)):
+        return float(t)
+    parts = [float(x) for x in str(t).strip().split(":")]
+    sec = 0.0
+    for x in parts:
+        sec = sec * 60 + x
+    return sec
+
+
+def _apply_fixes(shots, fixes, fixes_path, finder, media_dir, log):
+    """Правки после просмотра: кадры на указанных таймкодах убираются (и не вернутся при следующих сборках).
+    Замена — подлинное фото из архива темы; если архива нет — время забирают соседние кадры."""
+    if not fixes:
+        return
+    ban_urls = set(fixes.get("urls") or [])
+    ban_files = set(fixes.get("files") or [])
+    times = fixes.get("times") or []
+    resolved = []
+    for t in times:
+        sec = _tsec(t)
+        sh = next((x for x in shots if x["s"] <= sec * SR < x["e"]), None)
+        if not sh or sh["kind"] not in ("video", "image") or not sh.get("src"):
+            log(f"  Правка {t}: там лист, карта или карточка — пропускаю.")
+            continue
+        url = (sh.get("_qa") or {}).get("url", "")
+        if str(url).startswith(("doc:", "card:", "map:")):
+            log(f"  Правка {t}: там лист, карта или карточка — пропускаю.")
+            continue
+        if url:
+            ban_urls.add(url)
+        ban_files.add(Path(sh["src"]).name)
+        resolved.append(t)
+    if times:
+        fixes["urls"], fixes["files"] = sorted(ban_urls), sorted(ban_files)
+        fixes["done"] = list(fixes.get("done") or []) + resolved
+        fixes["times"] = []
+        _save_json(fixes_path, fixes)
+    finder.used |= ban_urls
+    pool = [c for c in getattr(finder, "topic_items", []) if c["url"] not in finder.used]
+    n_rep = n_cut = 0
+    for sh in shots:
+        url = (sh.get("_qa") or {}).get("url", "")
+        if not sh.get("src") or not (url in ban_urls or Path(str(sh["src"])).name in ban_files):
+            continue
+        new = None
+        while pool and not new:
+            c = pool.pop(0)
+            if finder._claim(c):
+                pth = finder._download(c)
+                if pth:
+                    new = (c, pth)
+        if new:
+            c, pth = new
+            sh.update({"src": str(pth), "kind": "image", "person": False, "offset_n": 0})
+            sh.pop("who", None)
+            sh.setdefault("_qa", {})["url"] = c["url"]
+            finder.credits.append(c)
+            n_rep += 1
+        else:
+            sh["_bad"] = sh["_ban"] = True
+            n_cut += 1
+    if n_rep or n_cut:
+        log(f"  Правки: заменено кадров {n_rep} (архив темы), убрано {n_cut}.")
 
 
 def _quality_check(cfg, project, shots, finder, topic, log, progress):

@@ -509,6 +509,11 @@ class Handler(BaseHTTPRequestHandler):
             return self._send(200, save_settings(data.get("values") or {}))
         if p == "/api/build_text":
             return self._build_text(data)
+        if p == "/api/fix":
+            d = _project_dir(data.get("id"))
+            _add_fixes(d, data.get("times") or [], data.get("archive") or [])
+            ok = run_job("build", lambda: _rebuild(d, data.get("niche")))
+            return self._send(200 if ok else 409, {"ok": ok, "error": None if ok else "Уже идёт работа"})
         if p == "/api/rebuild":
             d = _project_dir(data.get("id"))
 
@@ -905,6 +910,28 @@ def _remote_loop():
                 if q:
                     name, sha = q[0]
                     text = remote.take(cfg, name, sha)
+                    if name.lower().endswith(".json"):            # правка готового видео
+                        cmd = json.loads(text)
+                        d = _find_project(cmd.get("project", ""))
+                        if not d:
+                            remote.status(cfg, name, f"ошибка: проект «{cmd.get('project')}» не найден")
+                            continue
+                        _add_fixes(d, cmd.get("times") or [], cmd.get("archive") or [])
+                        if cmd.get("reselect"):
+                            _reselect(d)
+
+                        def fjob(d=d, name=name):
+                            JOB.add_log(f"Правка по команде из чата с Claude: {d.name}")
+                            try:
+                                res = _rebuild(d)
+                            except Exception as e:
+                                remote.status(config.load_config(), name, f"ошибка: {e}")
+                                raise
+                            remote.status(config.load_config(), name, "готово")
+                            return res
+                        if run_job("build", fjob):
+                            remote.status(cfg, name, f"правка началась: {d.name}")
+                        continue
                     inbox = config.OUTPUT_DIR / "_scripts"
                     inbox.mkdir(parents=True, exist_ok=True)
                     path = inbox / f"{time.strftime('%Y%m%d_%H%M%S')}_{Path(name).name}"
@@ -965,6 +992,37 @@ def _tg_send_bg(path, title):
         JOB.add_log(f"Telegram: не отправилось — {e}")
     finally:
         STATE["bg"] = STATE.get("bg", 1) - 1
+
+
+def _add_fixes(d, times, archive):
+    """Дописать правки в проект: таймкоды кадров, которые убрать, и разделы архива темы (Wikimedia Commons)."""
+    f = d / "правки.json"
+    fx = runner._load_json(f, {})
+    fx["times"] = list(dict.fromkeys((fx.get("times") or []) + [str(t) for t in times]))
+    if archive:
+        fx["archive"] = list(dict.fromkeys((fx.get("archive") or []) + list(archive)))
+    runner._save_json(f, fx)
+
+
+def _reselect(d):
+    """Подобрать кадры заново (озвучка, план кадров и готовые куски монтажа остаются)."""
+    for n in ("review.json", "выбор_кадров.json", "visuals.json"):
+        (d / n).unlink(missing_ok=True)
+
+
+def _rebuild(d, niche=None):
+    sj = runner._load_json(d / "script.json", {})
+    npath = sj.get("niche_file")
+    if not (npath and Path(npath).exists()):
+        npath = _niche_path(niche)
+    return _build(d, Path(npath))
+
+
+def _find_project(key):
+    """Проект по части названия папки (самый свежий)."""
+    key = (key or "").lower()
+    ds = [x for x in config.OUTPUT_DIR.iterdir() if x.is_dir() and not x.name.startswith("_") and key in x.name.lower()]
+    return max(ds, key=lambda x: x.stat().st_mtime) if ds else None
 
 
 def _build(project, npath):

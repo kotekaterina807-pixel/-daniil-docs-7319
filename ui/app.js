@@ -453,6 +453,7 @@ function renderProjects() {
           ${p.ready ? `<button class="ibtn" data-act="tg" title="Отправить в Telegram">${ICON.send}</button>` : ""}
           <button class="ibtn" data-act="project" title="Открыть папку">${ICON.folder}</button>
           <button class="ibtn" data-act="script" title="Открыть сценарий">${ICON.doc}</button>
+          ${p.ready ? `<button class="btn small" data-act="fix" title="Убрать плохие кадры по таймкодам">Правки</button>` : ""}
           ${p.ready ? `<button class="ibtn" data-act="rebuild" title="Пересобрать">${ICON.redo}</button>` : ""}
           ${p.building ? "" : `<button class="ibtn danger" data-act="delete" title="Удалить">${ICON.trash}</button>`}
         </div>
@@ -485,6 +486,16 @@ $("#projects").addEventListener("click", async (e) => {
     else if (act === "tg") {
       if (!S.cfg.tg_chat_id) { toast("Сначала подключите Telegram: Параметры → Сервисы и ключи", "err", 6000); return; }
       await api("/api/tg_send", { project: id }); toast("Отправляю в Telegram… Ход — в журнале на «Главной»", "ok", 5000);
+    }
+    else if (act === "fix") {
+      modal("Правки видео", `<p class="muted small">Время кадров, которые нужно убрать (как в плеере), через запятую. Программа заменит их подлинными фото из архива темы или отдаст их время соседним кадрам. Озвучка и остальные кадры не меняются — пересобирается только видеоряд.</p>
+        <textarea id="fixTimes" placeholder="Например: 4:31, 2:12, 12:05"></textarea>`, [
+        { text: "Отмена" },
+        { text: "Исправить", cls: "primary", onClick: async () => {
+          const times = $("#fixTimes").value.split(/[,;\s]+/).map((x) => x.trim()).filter((x) => /^\d+(:\d{1,2}){1,2}$/.test(x));
+          if (!times.length) { toast("Впишите время, например 4:31", "err"); return false; }
+          await api("/api/fix", { id, times }); toast(`Правка: ${times.length} кадров. Сборка началась`, "ok"); go("home"); return true; } },
+      ]);
     }
     else if (act === "rebuild") {
       await api("/api/rebuild", { id }); toast("Сборка началась", "ok"); go("home");

@@ -211,11 +211,86 @@ class VisualFinder:
             return out
         return self._cached(("wm", query), fetch)
 
+    def _commons_category(self, cat, depth=1, limit=120):
+        """Все фото раздела Wikimedia Commons (и его подразделов на depth уровней): подлинные снимки темы
+        или человека — например плёнки самой группы Дятлова. Только свободные лицензии."""
+        if self._down.get("wm"):
+            return []
+        cat = cat if cat.lower().startswith("category:") else "Category:" + cat
+
+        def fetch():
+            out, seen_cats, queue = [], set(), [(cat, 0)]
+            while queue and len(out) < limit:
+                c, d = queue.pop(0)
+                if c in seen_cats:
+                    continue
+                seen_cats.add(c)
+                try:
+                    r = self._get("https://commons.wikimedia.org/w/api.php", {
+                        "action": "query", "format": "json", "generator": "categorymembers", "gcmtitle": c,
+                        "gcmtype": "file|subcat", "gcmlimit": 100, "prop": "imageinfo|categories",
+                        "iiprop": "url|size|extmetadata", "iiurlwidth": 1920, "cllimit": "max"})
+                    pages = (r.json().get("query") or {}).get("pages") or {}
+                except requests.ConnectionError:
+                    self._down["wm"] = True
+                    break
+                except Exception:
+                    continue
+                for p in pages.values():
+                    t = p.get("title", "")
+                    if t.startswith("Category:"):
+                        if d < depth and len(seen_cats) < 12:
+                            queue.append((t, d + 1))
+                        continue
+                    if not re.search(r"\.(jpe?g|png|tiff?)$", t, re.I):
+                        continue
+                    it = self._wm_item(p, min_w=500, min_h=350, check_cats=False)
+                    if it:
+                        it["source"] = "Wikimedia Commons (архив темы)"
+                        it["topic"] = True
+                        out.append(it)
+            return out
+        return self._cached(("wmcat", cat, depth), fetch)
+
+    def topic_archive(self, terms):
+        """Архив темы: разделы Commons, найденные по названию темы (#! АРХИВ в сценарии)."""
+        out, seen = [], set()
+        for term in [t.strip() for t in terms if t and t.strip()][:4]:
+            cats = [term] if term.lower().startswith("category:") else []
+            if not cats:
+                try:
+                    r = self._get("https://commons.wikimedia.org/w/api.php", {
+                        "action": "query", "format": "json", "list": "search", "srsearch": term,
+                        "srnamespace": 14, "srlimit": 4})
+                    hits = [h.get("title", "") for h in (r.json().get("query") or {}).get("search") or []]
+                    key = [w for w in re.findall(r"\w{4,}", term.lower())]
+                    cats = [h for h in hits if any(w in h.lower() for w in key)][:2]
+                except Exception:
+                    cats = []
+            for c in cats:
+                for it in self._commons_category(c):
+                    if it["url"] not in seen:
+                        seen.add(it["url"])
+                        out.append(it)
+        if out:
+            self.log(f"  Архив темы (Wikimedia Commons): {len(out)} подлинных фото.")
+        return out
+
     # ---------- Поиск картинок в интернете (DuckDuckGo, без ключа) ----------
     STOCK_SITES = re.compile(r"getty|shutterstock|alamy|istock|dreamstime|depositphotos|123rf|pond5|stock\.adobe|"
                              r"bigstock|agefotostock|superstock|granger|bridgemanimages|pinterest|facebook|"
                              r"instagram|tiktok|youtube|ytimg|vk\.com|userapi|aliexpress|amazon|ebay|etsy|"
-                             r"redbubble|teepublic|zazzle|fineartamerica|pixels\.com|mediastorehouse", re.I)
+                             r"redbubble|teepublic|zazzle|fineartamerica|pixels\.com|mediastorehouse|"
+                             # знаменитости, кино, игры, таблоиды — чужие права и не по теме
+                             r"netflix|imdb|media-amazon|people\.com|eonline|hellomagazine|hello!|dailymail|"
+                             r"thesun\.co|mirror\.co\.uk|tmz|usmagazine|vogue|elle\.|harpersbazaar|cosmopolitan|"
+                             r"glamour|buzzfeed|boredpanda|fandom|wikia|gamepedia|game-maps|ign\.com|gamespot|"
+                             r"wallpaper|hdwallpapers|wallhaven|deviantart|artstation|giphy|tenor|memes?\b|"
+                             r"wireimage|filmmagic|rexfeatures|shutterfly|apimages|reuters|afp\.com|epa\.eu", re.I)
+    OFF_TOPIC = re.compile(r"then and now|celebrit|actress|actor\b|red carpet|premiere|baywatch|bikini|swimsuit|"
+                           r"netflix|movie poster|film still|trailer|video game|fallout|minecraft|fortnite|"
+                           r"\bmeme|clip ?art|cartoon|vector|\blogo\b|\bicon\b|weather forecast|"
+                           r"dog breeds?|funny|emoji|infographic|template|mockup|stock photo", re.I)
 
     def _bing_images(self, query, min_w):
         """Поиск картинок Bing (как в браузере). Возвращает сырые результаты [{image, thumbnail, url, title, width, height}]."""
@@ -243,7 +318,8 @@ class VisualFinder:
             title = res.get("title") or ""
             if not url.startswith("http") or (w and (w < min_w or h < 300)):   # размер неизвестен — проверим при скачивании
                 continue
-            if self.STOCK_SITES.search(url + " " + src) or ARCHIVE_BLOCK.search(title):
+            if self.STOCK_SITES.search(url + " " + src) or ARCHIVE_BLOCK.search(title) or \
+                    self.OFF_TOPIC.search(title + " " + url):
                 continue
             if re.search(r"\.(svg|gif)(\?|$)", url, re.I):
                 continue
@@ -844,6 +920,9 @@ class VisualFinder:
                     # а не об однофамильце с похожим именем («Frazier Glenn Miller Jr.»)
                     if name_ok(t.lower()) and re.sub(r"\s*\(.*?\)", "", t).strip().lower() in [x.lower() for x in names]:
                         add(self._wiki_page_image(t, lang))
+        for n in [x for x in names if not re.search("[а-яё]", x, re.I)][:1]:
+            # раздел Commons «Category:Имя Фамилия» — там подлинные фото именно этого человека
+            add(self._commons_category(n, depth=0, limit=12))
         for n in names:
             for q in (n, f"{n} portrait", f"{n} photograph"):
                 add(self._wikimedia(q), need_name=True)
