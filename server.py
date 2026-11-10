@@ -943,6 +943,8 @@ def _remote_loop():
                                     over["qa_check"] = False
                                 if cmd.get("review") is False:
                                     over["claude_review"] = False
+                                if cmd.get("qa_retry") is False:  # одна проверка, без второго круга поиска замен
+                                    over["qa_retry"] = False
                                 res = _rebuild(d, mode="reselect" if cmd.get("reselect") else "fix",
                                                times=cmd.get("times") or [], src="по команде из чата", over=over)
                             except Exception as e:
