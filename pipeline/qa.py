@@ -181,7 +181,7 @@ def check(cfg, project, entries, finder, topic, log, progress=None, taken=None, 
         if progress:
             progress(done[0] / len(names), f"Контроль качества: лист {done[0]}/{len(names)}")
         return parse(ans)
-    with ThreadPoolExecutor(max_workers=2) as ex:
+    with ThreadPoolExecutor(max_workers=int(cfg.get("claude_workers", 4))) as ex:
         for v in ex.map(one, names):
             verdicts.update(v)
     by_no = {e["no"]: e for e in entries}

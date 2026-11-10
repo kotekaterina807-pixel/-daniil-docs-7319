@@ -377,9 +377,21 @@ class VisualFinder:
                         "author": dom, "license": "из интернета", "tags": title})
         return out
 
+    def _web_dead(self):
+        """Ни Bing, ни DuckDuckGo не отвечают по делу 8 раз подряд и ни разу не ответили — выключаем поиск
+        в интернете до конца сборки (на некоторых компьютерах он не работает вовсе и только тратит часы)."""
+        with self._lock:
+            self._web_fails = getattr(self, "_web_fails", 0) + 1
+            if self._web_fails >= 8 and not getattr(self, "_web_ok", False) and self._down.get("web") != "off":
+                self._down["web"] = "off"
+                self.log("  Поиск картинок в интернете на этом компьютере не работает — дальше без него "
+                         "(архив темы, Wikimedia, архивы библиотек, Pixabay).")
+
     def _web_images(self, query, min_w=500):
         """Картинки из интернета по запросу — как поиск картинок в браузере. Стоковые агентства с водяными
         знаками и магазины отбрасываются; каждую картинку дальше смотрит Claude (смысл, знаки, надписи)."""
+        if self._down.get("web") == "off":
+            return []                    # на этом компьютере поиск картинок не работает — не тратим время
         if self._down.get("web") and time.time() - float(self._down["web"]) < 600:
             return []                    # связь пропала — 10 минут не пробуем, потом снова
 
@@ -392,6 +404,7 @@ class VisualFinder:
                 except Exception as e:
                     self._diag(query, f"Bing: {e}")
                 if raw:
+                    self._web_ok = True
                     return self._web_filter(raw, min_w)
                 s = requests.Session()
                 s.headers.update(BROWSER_UA)
@@ -400,6 +413,7 @@ class VisualFinder:
                 m = re.search(r"vqd=[\"']?([\d-]+)", page.text)
                 if not m:
                     self._diag(query, f"DuckDuckGo: не отдал страницу поиска ({page.status_code})")
+                    self._web_dead()
                     return out
                 s.headers["Referer"] = "https://duckduckgo.com/"
                 r = s.get("https://duckduckgo.com/i.js", params={"l": "wt-wt", "o": "json", "q": query, "vqd": m.group(1),
@@ -410,7 +424,9 @@ class VisualFinder:
             except requests.ConnectionError as e:
                 if not self._down.get("web"):
                     self.log(f"  Поиск картинок в интернете не ответил ({type(e).__name__}) — попробую снова через 10 минут.")
-                self._down["web"] = time.time()
+                if self._down.get("web") != "off":
+                    self._down["web"] = time.time()
+                self._web_dead()
                 raise
             except Exception as e:
                 self.log(f"  Поиск картинок в интернете: {e}")

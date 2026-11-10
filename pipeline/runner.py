@@ -1173,16 +1173,34 @@ def _choose_in_chat(cfg, project, finder, seg_blocks, jobs, vis_cache, log, chec
                         spec["auto_role"] = seg_blocks[bi]["specs"][si]["auto_role"] = role
             if spec["visual"] != "person" and spec["n"] < 2 and spec.get("t1", 0) - spec.get("t0", 0) >= 4.6:
                 spec["n"] = 2                     # минимум два разных кадра на обычную фразу
-            cands = review.collect(finder, spec, taken)
             q = spec["query"] if spec["visual"] != "person" else \
                 f"фото человека: {spec['query']}, затем — {spec.get('fill_query', '')}"
-            keep = ("kind", "url", "thumb", "duration", "source", "page", "title", "author", "license", "person", "local", "segment")
             lines.append({"no": no, "sig": sig[no - 1], "text": spec["text"], "query": q, "n": spec["n"],
                           "show": pl.get("show", ""),
                           "person": spec.get("shown", "") if spec["visual"] == "person"
                           else (spec["auto_person"][1] if spec.get("auto_person") else ""),
-                          "cands": [{k: c.get(k) for k in keep} for c in cands]})
-            progress(0.10 + 0.25 * no / len(jobs), f"Поиск кадров {no}/{len(jobs)}")
+                          "cands": [], "_spec": spec})
+        # поиск по всем фразам сразу, по 6 параллельно (раньше — строго по одной: 3 часа на 500 фраз).
+        # Результаты поиска запоминаются, поэтому распределение кадров ниже (без повторов) идёт мгновенно.
+        todo = [ln for ln in lines if "_spec" in ln]
+        done_n = [0]
+
+        def warm(ln):
+            check_stop()
+            try:
+                review.collect(finder, ln["_spec"], set())
+            except Exception:
+                pass
+            done_n[0] += 1
+            progress(0.10 + 0.22 * done_n[0] / max(1, len(todo)), f"Поиск кадров {done_n[0]}/{len(todo)}")
+        from concurrent.futures import ThreadPoolExecutor as _TPE
+        with _TPE(max_workers=6) as ex_:
+            list(ex_.map(warm, todo))
+        keep = ("kind", "url", "thumb", "duration", "source", "page", "title", "author", "license", "person", "local", "segment")
+        for ln in todo:
+            cands = review.collect(finder, ln.pop("_spec"), taken)
+            ln["cands"] = [{k: c.get(k) for k in keep} for c in cands]
+        progress(0.35, f"Поиск кадров {len(todo)}/{len(todo)}")
         review.save_review(rev_path, lines)
     for (bi, si), ln in zip(jobs, lines):         # фразы-листы (по плану режиссёра) — и при повторной сборке
         if ln.get("doc"):
@@ -1269,7 +1287,7 @@ def _choose_with_claude_code(cfg, project, finder, lines, rev_path, ch_path, top
             return p, q
         picks, queries = {}, {}
         try:
-            with ThreadPoolExecutor(max_workers=2) as ex:
+            with ThreadPoolExecutor(max_workers=int(cfg.get("claude_workers", 4))) as ex:
                 for p, q in ex.map(one, sheets):
                     picks.update(p)
                     queries.update(q)
@@ -1294,7 +1312,10 @@ def _choose_with_claude_code(cfg, project, finder, lines, rev_path, ch_path, top
         log(f"    Поиск фото «{who}»: " + "; ".join(notes[:6]))
     # до двух дополнительных кругов поиска; у длинного видео — один (иначе упирается в лимит подписки Claude)
     for rnd in ((1,) if len(by_no) > 120 else (1, 2)):
-        retry = [by_no[no] for no in by_no if len(choices.get(no, [])) < by_no[no]["n"] and queries.get(no)]
+        # у длинного видео — только строки, где нет НИ ОДНОГО кадра (где один есть, он просто дольше на экране)
+        need_ = (lambda no: not choices.get(no)) if len(by_no) > 120 else \
+                (lambda no: len(choices.get(no, [])) < by_no[no]["n"])
+        retry = [by_no[no] for no in by_no if need_(no) and queries.get(no)]
         if not retry:
             break
         log(f"  Круг {rnd + 1}: не хватает подходящих кадров в {len(retry)} строках — ищу по запросам Claude...")
@@ -1709,13 +1730,20 @@ def _quality_check(cfg, project, shots, finder, topic, log, progress):
     """Каждый кадр — с точными словами, которые звучат в этот момент; Claude Code меняет неподходящие."""
     from . import qa
     used = {sh["_qa"]["url"] for sh in shots if sh.get("_qa") and sh["_qa"].get("url")}
+    # подлинные фото темы (архив) и портреты из сценария Claude уже выбрал по смыслу и эпохе — второй раз не смотрим
+    trusted = {c.get("url") for c in getattr(finder, "topic_items", None) or []}
+    trusted |= set((getattr(finder, "manual_photos", None) or {}).values())
     entries = []
+    skipped = 0
     for sh in shots:
         q = sh.get("_qa")
         if not q or sh["kind"] not in ("video", "image") or not sh.get("src"):
             continue
         if str(q.get("url", "")).startswith(("doc:", "card:", "map:")):
             continue                                   # листы с текстом и карточки людей — сделаны программой
+        if q.get("url") in trusted:
+            skipped += 1
+            continue
         rec = q["blk"].get("words")
         if rec:
             said = " ".join(w for st, en, w in rec if q["a"] - 0.1 <= st < q["b"])
@@ -1727,6 +1755,8 @@ def _quality_check(cfg, project, shots, finder, topic, log, progress):
         alts.sort(key=lambda c: 0 if c.get("person") and q["spec"]["visual"] == "person" else 1)
         entries.append({"no": len(entries) + 1, "time": sh["s"] / SR, "said": said[:220], "shot": sh,
                         "alts": alts[:3]})
+    if skipped:
+        log(f"  Подлинные фото темы и портреты ({skipped} кадров) уже выбраны Claude — повторно не проверяю.")
     try:
         rep = qa.check(cfg, project, entries, finder, topic, log,
                        lambda f, msg: progress(0.42 + 0.03 * f, msg), taken=used)
