@@ -117,12 +117,16 @@ def _sfx_file(kind):
     return random.choice(files) if files else None
 
 
-def _topic_rules(script, cfg):
-    """Тема для Claude + жёсткое правило эпохи: видео о прошлом — только кадры, которые выглядят как то время."""
+def _topic_rules(script, cfg, niche=None):
+    """Тема для Claude + стиль ниши. У каждой ниши свои правила кадров (niches/*.json → visual_rules);
+    если их нет — жёсткое правило эпохи: видео о прошлом — только кадры, которые выглядят как то время."""
     t = script.get("topic", "") or "документальное видео"
+    era = script.get("era") or "прошлое (не современность)"
+    vr = (niche or {}).get("visual_rules")
+    if vr:
+        return f"{t}\nЭПОХА И МЕСТО: {era}.\nСТИЛЬ НИШИ (обязателен для каждого кадра): {vr}"
     if not cfg.get("old_look", True):
         return t
-    era = script.get("era") or "прошлое (не современность)"
     return (f"{t}\nЭПОХА И МЕСТО: {era}. ЖЁСТКОЕ ПРАВИЛО ЭПОХИ: подходят только кадры, которые выглядят как то время и то "
             f"место: подлинные архивные фото темы, старые чёрно-белые фото, люди в одежде того времени, старая техника, "
             f"старые документы; природа — только дикая, без примет современности, и похожая на место действия. "
@@ -565,7 +569,7 @@ def step_build(cfg, niche, project, log=print, stop_flag=lambda: False, progress
         log("  Кадры проверяет Claude Code (по подписке Claude).")
     if mode in ("chat", "claude_code"):
         _choose_in_chat(cfg, project, finder, seg_blocks, jobs, vis_cache, log, check_stop, progress,
-                        auto=(mode == "claude_code"), topic=_topic_rules(script, cfg))
+                        auto=(mode == "claude_code"), topic=_topic_rules(script, cfg, niche))
     else:
         def run_job(job):
             bi, si = job
@@ -813,7 +817,7 @@ def step_build(cfg, niche, project, log=print, stop_flag=lambda: False, progress
         f"повторно использовано роликов: {reused}.")
 
     if cfg.get("visual_check") == "claude_code" and cfg.get("qa_check", True):
-        _quality_check(cfg, project, shots, finder, _topic_rules(script, cfg), log, progress)
+        _quality_check(cfg, project, shots, finder, _topic_rules(script, cfg, niche), log, progress)
     _apply_fixes(shots, fixes, fixes_path, finder, media_dir, log)
     if True:
         # кадр забракован, а замены нет — его время отдаём соседнему кадру (лучше дольше хороший, чем плохой)
