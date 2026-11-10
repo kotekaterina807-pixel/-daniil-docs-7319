@@ -5,6 +5,7 @@ import io
 import json
 import mimetypes
 import os
+import re
 import secrets
 import shutil
 import socket
@@ -958,11 +959,14 @@ def _remote_loop():
                     path.write_text(text.replace("\r\n", "\n"), encoding="utf-8-sig")
                     npath = _niche_path(cfg.get("niche"))
 
-                    def job(path=path, npath=npath, name=name):
+                    def job(path=path, npath=npath, name=name, text=text):
                         JOB.add_log(f"Сборка по команде из чата с Claude: {name}")
                         try:
                             project = runner.project_from_text(path, npath, JOB.add_log)
-                            res = _build(project, npath, src="по команде из чата")
+                            over = {}
+                            if re.search(r"(?im)^#!\s*РЕЖИМ:\s*быстр", text):   # быстрая сборка: без повторного круга
+                                over = {"qa_retry": False, "claude_review": False}  # проверки и без ожидания раскадровки
+                            res = _build(project, npath, src="по команде из чата", over=over)
                         except Exception as e:
                             remote.status(config.load_config(), name, f"ошибка: {e}")
                             raise

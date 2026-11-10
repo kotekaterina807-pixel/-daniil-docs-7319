@@ -211,7 +211,7 @@ def check(cfg, project, entries, finder, topic, log, progress=None, taken=None, 
                 continue
         bad.append(no)
     taken = set(taken or ()) | used
-    if _round == 1 and bad:                          # второй шанс: новый поиск по запросам Claude и ещё одна проверка
+    if _round == 1 and bad and cfg.get("qa_retry", True):   # второй шанс: новый поиск по запросам Claude и ещё одна проверка
         retry = []
         for no in bad:
             qs = searches.get(no) or []
