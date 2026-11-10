@@ -255,7 +255,13 @@ class VisualFinder:
     def topic_archive(self, terms):
         """Архив темы: разделы Commons, найденные по названию темы (#! АРХИВ в сценарии)."""
         out, seen = [], set()
-        for term in [t.strip() for t in terms if t and t.strip()][:4]:
+        for term in [t.strip() for t in terms if t and t.strip()]:
+            if term.lower().startswith("http"):           # сайт-архив темы: страница и её разделы на шаг вглубь
+                for it in self._site_photos(term):
+                    if it["url"] not in seen:
+                        seen.add(it["url"])
+                        out.append(it)
+        for term in [t.strip() for t in terms if t and t.strip() and not t.strip().lower().startswith("http")][:4]:
             cats = [term] if term.lower().startswith("category:") else []
             if not cats:
                 try:
@@ -275,6 +281,48 @@ class VisualFinder:
         if out:
             self.log(f"  Архив темы (Wikimedia Commons): {len(out)} подлинных фото.")
         return out
+
+    def _site_photos(self, url, limit=220):
+        """Подлинные фото с сайта-архива темы (#! АРХИВ: https://...): картинки этой страницы и страниц,
+        на которые она ссылается в пределах того же сайта (один шаг). Мелкие значки и логотипы — нет."""
+        from urllib.parse import urljoin, urlparse
+        host = urlparse(url).netloc
+
+        def fetch():
+            items, pages, seen = [], [url], set()
+            try:
+                html0 = self._get(url, {}).text
+            except Exception as e:
+                self.log(f"  Сайт архива {host} недоступен ({type(e).__name__}).")
+                return []
+            links = [urljoin(url, h) for h in re.findall(r'href="([^"#?]+)"', html0)]
+            pages += [h for h in dict.fromkeys(links) if urlparse(h).netloc == host
+                      and not re.search(r"\.(jpe?g|png|gif|pdf|zip)$", h, re.I)][:40]
+            for k, pg in enumerate(pages):
+                try:
+                    html_ = html0 if k == 0 else self._get(pg, {}).text
+                except Exception:
+                    continue
+                for src in re.findall(r'(?:src|href)="([^"]+\.jpe?g)"', html_, re.I):
+                    thumb = urljoin(pg, src)
+                    full = thumb.replace("/thumbs/", "/gallery/")   # превью → полный размер (как на сайте)
+                    if full in seen or re.search(r"logo|icon|banner|avatar|button|flag|sprite", full, re.I):
+                        continue
+                    seen.add(full)
+                    name = Path(urlparse(full).path).stem.replace("-", " ").replace("_", " ")
+                    items.append({"kind": "image", "url": full, "thumb": thumb, "source": f"{host} (архив темы)",
+                                  "page": pg, "title": name, "author": host, "license": f"архив {host}",
+                                  "tags": name, "topic": True})
+                    if len(items) >= limit:
+                        return items
+            return items
+        try:
+            got = self._cached(("site", url, limit), fetch)
+        except Exception:
+            got = []
+        if got:
+            self.log(f"  Архив темы ({host}): {len(got)} подлинных фото.")
+        return got
 
     # ---------- Поиск картинок в интернете (DuckDuckGo, без ключа) ----------
     STOCK_SITES = re.compile(r"getty|shutterstock|alamy|istock|dreamstime|depositphotos|123rf|pond5|stock\.adobe|"

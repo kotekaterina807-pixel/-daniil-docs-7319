@@ -469,7 +469,7 @@ def step_build(cfg, niche, project, log=print, stop_flag=lambda: False, progress
     finder.topic_items = []
     finder.manual_photos = script.get("photos") or {}
     finder.person_hint = re.sub(r"(?i)\b(incident|vorfall|случай|инцидент)\b", "",
-                                (script.get("archive") or [""])[0]).strip()
+                                next((a for a in script.get("archive") or [] if not a.lower().startswith("http")), "")).strip()
     if script.get("archive"):
         try:
             finder.topic_items = finder.topic_archive(script["archive"])
