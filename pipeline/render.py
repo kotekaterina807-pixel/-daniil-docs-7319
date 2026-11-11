@@ -630,11 +630,15 @@ def assemble(shots, out, workdir, log=print, group_size=20, on_progress=lambda d
 # Музыка: каждый трек сначала выравнивается по громкости (тихий и громкий трек звучат одинаково),
 # в ней чуть приглушается диапазон голоса (2–3 кГц), чтобы слова звучали чище, и она мягко уходит
 # вниз, пока говорит диктор, и плавно возвращается в паузах. Итог: музыка на ~15–18 дБ тише голоса.
-DUCK = "sidechaincompress=threshold=0.03:ratio=6:attack=30:release=900:makeup=1"
+DUCK = "sidechaincompress=threshold=0.02:ratio=8:attack=20:release=800:makeup=1"
+# голос выравнивается по громкости до сведения: тихая озвучка не тонет в музыке, а сжатие музыки под голос
+# срабатывает всегда. Звуки (фото, листы, карта) тише, чтобы не перебивать диктора.
+VOICE_NORM = "loudnorm=I=-18:TP=-2:LRA=7"
+SFX_GAIN = 0.5
 
 
 def _music_chain(music_volume):
-    k = max(0.0, float(music_volume)) / 0.12 * 0.14         # ползунок 0.12 (по умолчанию) = нормальный уровень
+    k = max(0.0, float(music_volume)) / 0.12 * 0.10         # ползунок 0.12 (по умолчанию) = нормальный уровень
     return ("aformat=sample_rates=48000:channel_layouts=stereo,loudnorm=I=-24:TP=-4:LRA=11,"
             f"equalizer=f=2500:t=q:w=1.2:g=-4,volume={k:.3f}")
 
@@ -666,7 +670,7 @@ def _sfx_track(sfx, total_sec, out):
         if a >= n:
             continue
         clip = clip[: n - a]
-        buf[a:a + len(clip)] += clip * float(e["vol"])
+        buf[a:a + len(clip)] += clip * float(e["vol"]) * SFX_GAIN
     if not np.any(buf):
         return None
     import wave
@@ -682,7 +686,7 @@ def _sfx_track(sfx, total_sec, out):
 def _final_mix_sfx(cmd, music, out, total_sec, music_volume, sfx, fade_out_start):
     cmd = list(cmd)
     idx = 2
-    parts = ["[1:a]aformat=sample_rates=48000:channel_layouts=stereo,asplit=2[n1][n2]"]
+    parts = [f"[1:a]aformat=sample_rates=48000:channel_layouts=stereo,{VOICE_NORM},asplit=2[n1][n2]"]
     mix = ["[n1]"]
     if music:
         cmd += ["-stream_loop", "-1", "-i", str(music)]
@@ -716,7 +720,7 @@ def final_mix(video, narration, music, out, total_sec, music_volume=0.12, sfx=No
             pass                                     # звуки не сложились — сводим как раньше
     if music:
         cmd += ["-stream_loop", "-1", "-i", str(music)]
-        filt = (f"[1:a]aformat=sample_rates=48000:channel_layouts=stereo,asplit=2[n1][n2];"
+        filt = (f"[1:a]aformat=sample_rates=48000:channel_layouts=stereo,{VOICE_NORM},asplit=2[n1][n2];"
                 f"[2:a]{_music_chain(music_volume)}[m];"
                 f"[m][n2]{DUCK}[duck];"
                 f"[n1][duck]amix=inputs=2:duration=first:normalize=0,"
