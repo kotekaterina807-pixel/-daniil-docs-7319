@@ -631,9 +631,8 @@ def assemble(shots, out, workdir, log=print, group_size=20, on_progress=lambda d
 # в ней чуть приглушается диапазон голоса (2–3 кГц), чтобы слова звучали чище, и она мягко уходит
 # вниз, пока говорит диктор, и плавно возвращается в паузах. Итог: музыка на ~15–18 дБ тише голоса.
 DUCK = "sidechaincompress=threshold=0.02:ratio=8:attack=20:release=800:makeup=1"
-# голос выравнивается по громкости до сведения: тихая озвучка не тонет в музыке, а сжатие музыки под голос
-# срабатывает всегда. Звуки (фото, листы, карта) тише, чтобы не перебивать диктора.
-VOICE_NORM = "loudnorm=I=-18:TP=-2:LRA=7"
+# Музыка тише и сильнее прижимается под голос; звуки (фото, листы, карта) тише, чтобы не перебивать диктора.
+VOICE_NORM = "anull"      # выравнивание голоса (loudnorm) убрано: на ПК пользователя после него пропал звук
 SFX_GAIN = 0.5
 
 
@@ -732,3 +731,18 @@ def final_mix(video, narration, music, out, total_sec, music_volume=0.12, sfx=No
             "-c:a", "aac", "-b:a", "192k", "-ar", "48000", "-t", f"{total_sec:.3f}",
             "-movflags", "+faststart", str(out)]
     _run(cmd)
+
+
+def audio_level(path):
+    """Средняя громкость и пик звука готового файла в дБ (None, None — звуковой дорожки нет или ffmpeg не ответил)."""
+    try:
+        p = subprocess.run([ffmpeg_exe(), "-hide_banner", "-nostats", "-i", str(path), "-vn", "-af", "volumedetect",
+                            "-f", "null", "-"], capture_output=True, text=True, encoding="utf-8", errors="replace",
+                           timeout=600, creationflags=_NO_WINDOW)
+    except Exception:
+        return None, None
+    import re as _re
+    m = _re.search(r"mean_volume:\s*(-?[\d.]+|-inf) dB", p.stderr)
+    x = _re.search(r"max_volume:\s*(-?[\d.]+|-inf) dB", p.stderr)
+    num = lambda g: (-99.0 if g.group(1) == "-inf" else float(g.group(1))) if g else None
+    return num(m), num(x)

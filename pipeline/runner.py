@@ -1061,6 +1061,16 @@ def step_build(cfg, niche, project, log=print, stop_flag=lambda: False, progress
     if sfx:
         log(f"  Звуки: {len(sfx)} (вспышки фото, машинка и шорох листов, перо на карте, удар на лицах, переходы к главам).")
     render.final_mix(video_only, narration, music, final, total_sec, float(cfg.get("music_volume", 0.12)), sfx=sfx)
+    # проверка звука в готовом файле: если тишина — сводим проще (без эффектов, затем без музыки)
+    mean, peak = render.audio_level(final)
+    log(f"  Звук в итоге: средняя громкость {mean} дБ, пик {peak} дБ." if mean is not None else "  Звук в итоге: проверить не удалось.")
+    for label, kw in (("без звуковых эффектов", dict(music=music, sfx=None)), ("только голос", dict(music=None, sfx=None))):
+        if mean is not None and peak is not None and peak > -45:
+            break
+        log(f"  Звук в итоге тихий или пропал — свожу заново ({label}).")
+        render.final_mix(video_only, narration, kw["music"], final, total_sec, float(cfg.get("music_volume", 0.12)), sfx=kw["sfx"])
+        mean, peak = render.audio_level(final)
+        log(f"  Звук после пересведения: средняя {mean} дБ, пик {peak} дБ.")
 
     # ---------- 6. субтитры, описание, обложки ----------
     extras.write_srt(subs, project / "subtitles.srt")
