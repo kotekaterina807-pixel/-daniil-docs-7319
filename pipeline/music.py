@@ -29,10 +29,19 @@ TEXT = {"спокойная": "calm", "спокойно": "calm", "грустн�
 _NW = 0x08000000 if os.name == "nt" else 0
 
 
+FOLDER = {"спокойная": "calm", "calm": "calm", "загадочная": "mystery", "mystery": "mystery", "мрачная": "mystery",
+          "тревожная": "tense", "tense": "tense", "напряжённая": "tense", "напряженная": "tense",
+          "эпичная": "epic", "epic": "epic", "пролог": "epic", "prolog": "epic", "хук": "epic"}
+
+
 def tracks(niche_id=""):
+    """Треки из папки music (или music/<ниша>), включая подпапки настроений:
+    music/пролог, music/загадочная, music/тревожная, music/спокойная, music/эпичная."""
     for d in (MUSIC_DIR / niche_id, MUSIC_DIR) if niche_id else (MUSIC_DIR,):
         if d.exists():
             files = sorted(p for p in d.iterdir() if p.suffix.lower() in EXT)
+            for sub in sorted(x for x in d.iterdir() if x.is_dir() and x.name.lower() in FOLDER):
+                files += sorted(p for p in sub.iterdir() if p.suffix.lower() in EXT)
             if files:
                 return files
     return []
@@ -89,7 +98,9 @@ def classify(files, log=print):
         for i, f in enumerate(ranked):
             out[f] = MOODS[min(2, i * 3 // max(1, len(ranked)))]
     for f in files:                                     # название трека подсказывает лучше любого анализа
-        if EPIC.search(f.stem):
+        if f.parent.name.lower() in FOLDER:             # трек разложен по папке настроения — это главнее всего
+            out[f] = FOLDER[f.parent.name.lower()]
+        elif EPIC.search(f.stem):
             out[f] = "epic"
         elif TENSE.search(f.stem):
             out[f] = "tense"
@@ -99,9 +110,18 @@ def classify(files, log=print):
     return out
 
 
+def chapter_hint(ch):
+    """[музыка] тревожная | Spooked — конкретный трек (часть названия файла)."""
+    for s in ch.get("segments", []):
+        v = str(s.get("music", ""))
+        if "|" in v:
+            return v.split("|", 1)[1].strip().lower()
+    return ""
+
+
 def chapter_mood(ch):
     for s in ch.get("segments", []):
-        m = TEXT.get(str(s.get("music", "")).lower().strip())
+        m = TEXT.get(str(s.get("music", "")).split("|")[0].lower().strip())
         if m:
             return m
     moods = [s.get("mood", "normal") for s in ch.get("segments", [])]
@@ -123,11 +143,13 @@ def build_bed(script, chapter_starts, total_sec, niche_id, out, log=print):
         a = starts[i]
         b = starts[i + 1] if i + 1 < len(starts) else total_sec
         want = chapter_mood(ch)
-        if parts and parts[-1][3] == want:              # глава того же настроения — тот же трек продолжается
-            parts[-1][2] = b
+        hint = chapter_hint(ch)
+        named = [f for f in files if hint and hint in f.stem.lower()]
+        if parts and parts[-1][3] == want and (not hint or (named and parts[-1][0] == named[0])):
+            parts[-1][2] = b                            # глава того же настроения — тот же трек продолжается
             continue
         alt = {"epic": "tense"}.get(want, "")             # эпичных треков нет — самый напряжённый
-        pool = [f for f in files if moods.get(f) == want and f not in used] or \
+        pool = named[:1] or [f for f in files if moods.get(f) == want and f not in used] or \
                [f for f in files if moods.get(f) == want] or \
                [f for f in files if alt and moods.get(f) == alt and f not in used] or \
                [f for f in files if f not in used] or files
