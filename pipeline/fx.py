@@ -269,7 +269,10 @@ def make_geo_map_clip(title, points, times, length, out_mp4, seed="", log=None):
     # подписи мест не налезают друг на друга и на точки: для каждой — свободная сторона
     taken = [(x - 18, y - 18, x + 18, y + 18) for x, y in P]
     lab = []
-    for (name, _, _), (x, y) in zip(points, P):
+    for k_, ((name, _, _), (x, y)) in enumerate(zip(points, P)):
+        if any(points[j][0] == name for j in range(k_)):  # возвращение в то же место — вторая подпись не нужна
+            lab.append(None)
+            continue
         tw = d0.textlength(name, font=fl)
         cands = [(x + 26, y - 26), (x - 26 - tw, y - 26), (x - tw / 2, y - 76), (x - tw / 2, y + 26),
                  (x + 26, y + 8), (x - 26 - tw, y + 8), (x + 26, y - 62), (x - 26 - tw, y - 62)]
@@ -339,8 +342,9 @@ def make_geo_map_clip(title, points, times, length, out_mp4, seed="", log=None):
                 d.ellipse([x - 14, y - 14, x + 14, y + 14], outline=red, width=4)
                 d.ellipse([x - 6, y - 6, x + 6, y + 6], fill=red)
                 a = min(1.0, (t - times[i]) / 0.4)
-                _text_halo(d, lab[i], name, fl, (ink[0], ink[1], ink[2], int(255 * a)),
-                           halo=(236, 228, 204, int(230 * a)))
+                if lab[i] is not None:
+                    _text_halo(d, lab[i], name, fl, (ink[0], ink[1], ink[2], int(255 * a)),
+                               halo=(236, 228, 204, int(230 * a)))
             fr = im.resize((W, H), Image.BICUBIC, box=(bx0, by0, bx0 + cw, by0 + ch))
             prev_key, prev_img = key, fr
             wr.add(fr)
@@ -566,70 +570,86 @@ def _case_card(title, sub, seed):
     return im.rotate(random.Random(seed).uniform(-2, 2), resample=Image.BICUBIC, expand=True)
 
 
+_CHAIN = [0, 1, 5, 3, 2, 4, 6, 7, 8, 9, 10, 11]      # места по кругу вокруг карточки дела — нить идёт от лица к лицу
+
+
 def make_board_clip(title, sub, pins, new_names, length, out_mp4, seed="", times=None, focus_names=None):
-    """pins: [{"name", "role", "photo"}] — все люди на доске по порядку; new_names — кто появляется в этом кадре;
-    times — когда каждый новый появляется (когда диктор называет имя); focus_names — к кому подъехать,
-    если новых нет (возвращение к доске). Камера: вся доска → к каждому новому по очереди → отъезд."""
+    """Доска расследования, которая растёт по ходу фильма.
+    pins: [{"name", "role", "photo"}] — все люди на доске по порядку появления; new_names — кто добавляется сейчас.
+    Каждый новый человек: камера стоит на предыдущем, красная нить тянется от него к новому месту,
+    камера плавно едет вдоль нити, фото прикалывается, камера держится на лице, в конце — мягкий отъезд
+    на всю цепочку. Первый человек — нить от карточки дела. Без новых (focus_names) — возвращение
+    к доске: общий план, потом подъезд к названным."""
     board = _cork(seed or title).convert("RGBA")
     cxy = (BW2 / 2, BH2 / 2)
     cc = _case_card(title, sub, seed)
-    anchor = cxy                                   # нити уходят под карточку дела — из-под её края
     case_pin = (cxy[0], cxy[1] - cc.height / 2 + 30)
-    pos = {}
-    cards = {}
-    for i, p in enumerate(pins[:len(_SLOTS)]):
-        pos[p["name"]] = _SLOTS[i]
+    order = [p for p in pins if p.get("name")][:len(_CHAIN)]
+    pos, cards = {}, {}
+    for i, p in enumerate(order):
+        pos[p["name"]] = _SLOTS[_CHAIN[i]]
         cards[p["name"]] = _polaroid(p.get("photo"), p["name"], p.get("role", ""), seed + p["name"])
-    olds = [p for p in pins if p["name"] in pos and p["name"] not in new_names]
-    news = [p for p in pins if p["name"] in pos and p["name"] in new_names]
+    names = [p["name"] for p in order]
+    pin_of = lambda nm: (pos[nm][0], pos[nm][1] - PIN_DY)
+    prev_of = {nm: (pin_of(names[i - 1]) if i else case_pin) for i, nm in enumerate(names)}
+    olds = [nm for nm in names if nm not in new_names]
+    news = [nm for nm in names if nm in new_names]
+
     under = board.copy()                           # пробка и старые нити
     du = ImageDraw.Draw(under)
-    for p in olds:
-        x, y = pos[p["name"]]
-        _string(du, anchor, (x, y - PIN_DY))
-    top = Image.new("RGBA", board.size, (0, 0, 0, 0))   # карточка дела, старые фото, булавки
+    for nm in olds:
+        _string(du, prev_of[nm], pin_of(nm))
+    top = Image.new("RGBA", board.size, (0, 0, 0, 0))
     top.alpha_composite(cc, (int(cxy[0] - cc.width / 2), int(cxy[1] - cc.height / 2)))
     dt = ImageDraw.Draw(top)
-    for p in olds:
-        x, y = pos[p["name"]]
-        c = cards[p["name"]]
+    for nm in olds:
+        x, y = pos[nm]
+        c = cards[nm]
         top.alpha_composite(c, (int(x - c.width / 2), int(y - c.height / 2)))
-        _pin(dt, x, y - PIN_DY)
+        _pin(dt, *pin_of(nm))
     _pin(dt, *case_pin)
     static = under.copy()
     static.alpha_composite(top)
+
     n = max(1, int(round(length * FPS)))
     T = n / FPS
-    if times and len(times) >= len(news):
-        t_new = [max(0.4, min(T - 1.0, float(x))) for x in times[:len(news)]]
+    DRAW = 1.7                                     # сколько тянется нить
+    if times and len(times) >= len(news) and all(x is not None for x in times[:len(news)]):
+        t_new = [max(DRAW + 0.5, min(T - 1.6, float(x))) for x in times[:len(news)]]
     else:
-        step = min(4.5, max(1.3, (T - 2.5) / max(1, len(news))))
-        t_new = [0.6 + k * step for k in range(len(news))]
-    full = (0.0, 0.0, float(BW2), float(BH2))
+        t_new = [min(T - 1.6, DRAW + 0.6 + k * (DRAW + 2.4)) for k in range(len(news))]
+    for k in range(1, len(t_new)):
+        t_new[k] = max(t_new[k], t_new[k - 1] + DRAW + 1.6)
 
-    def close_on(names):
-        xs = [pos[nm][0] for nm in names]
-        ys = [pos[nm][1] for nm in names]
-        fx_, fy_ = sum(xs) / len(xs), sum(ys) / len(ys)
-        vh = min(float(BH2), max(1250.0, ((max(xs) - min(xs)) + 1100) * 9 / 16, (max(ys) - min(ys)) + 1200))
+    def close_on(pts, pad=1150.0):
+        xs = [p_[0] for p_ in pts]
+        ys = [p_[1] for p_ in pts]
+        fx_, fy_ = (max(xs) + min(xs)) / 2, (max(ys) + min(ys)) / 2
+        vh = min(float(BH2), max(1300.0, ((max(xs) - min(xs)) + pad) * 9 / 16, (max(ys) - min(ys)) + pad))
         vw = vh * 16 / 9
         x0 = min(max(0.0, fx_ - vw / 2), BW2 - vw)
         y0 = min(max(0.0, fy_ - vh / 2), BH2 - vh)
         return (x0, y0, x0 + vw, y0 + vh)
-    keys = [(0.0, full)]
-    if news:                                       # к каждому новому человеку — когда он появляется
-        for p, tn in zip(news, t_new):
-            v = close_on([p["name"]])
-            keys.append((max(keys[-1][0] + 0.3, tn - 0.6), keys[-1][1]))
-            keys.append((max(keys[-1][0] + 0.9, tn + 0.9), v))
+
+    face = lambda nm: (pos[nm][0], pos[nm][1] - 40)
+    chain_view = close_on([pos[nm] for nm in names] + [cxy], pad=1500.0)
+    keys = []
+    if news:
+        first_from = names[names.index(news[0]) - 1] if names.index(news[0]) else None
+        start = close_on([face(first_from)]) if first_from else close_on([cxy], pad=1600.0)
+        keys.append((0.0, start))
+        for nm, tn in zip(news, t_new):
+            a_ = tn - DRAW                         # нить начинает тянуться
+            keys.append((max(keys[-1][0] + 0.2, a_), keys[-1][1]))
+            keys.append((tn + 0.5, close_on([face(nm)])))   # камера доезжает вдоль нити до нового лица
+        if T - keys[-1][0] > 2.2:                   # мягкий отъезд на всю цепочку
+            keys.append((T - 1.5, keys[-1][1]))
+            keys.append((T, chain_view))
     else:
-        tgt = [nm for nm in (focus_names or []) if nm in pos]
-        mid = close_on(tgt) if tgt else (BW2 * 0.14, BH2 * 0.14, BW2 * 0.86, BH2 * 0.86)
-        keys += [(0.5, full), (min(T - 0.5, 2.6), mid)]
-    if T - keys[-1][0] > 2.5:                       # в конце — отъезд на всю доску
-        keys.append((T - 1.8, keys[-1][1]))
-        wide = (BW2 * 0.06, BH2 * 0.06, BW2 * 0.94, BH2 * 0.94)
-        keys.append((T, wide))
+        tgt = [face(nm) for nm in (focus_names or []) if nm in pos]
+        keys += [(0.0, chain_view), (0.6, chain_view)]
+        if tgt:
+            keys.append((min(T - 0.4, 2.8), close_on(tgt)))
 
     def view(t):
         for (ta, va), (tb, vb) in zip(keys, keys[1:]):
@@ -639,33 +659,42 @@ def make_board_clip(title, sub, pins, new_names, length, out_mp4, seed="", times
         return keys[-1][1]
 
     with _Writer(out_mp4) as wr:
+        prev_key, prev_img = None, None
         for f in range(n):
             t = f / FPS
-            started = [(p, tn) for p, tn in zip(news, t_new) if t >= tn]
-            if not started:
+            drawing = [(nm, tn) for nm, tn in zip(news, t_new) if t >= tn - DRAW]
+            v = view(t)
+            key = (tuple(round(min(1.0, (t - tn + DRAW) / DRAW), 3) for nm, tn in drawing),
+                   tuple(round(min(1.0, max(0.0, t - tn) / 0.45), 3) for nm, tn in drawing),
+                   tuple(round(x, 1) for x in v))
+            if key == prev_key:
+                wr.add(prev_img)
+                continue
+            if not drawing:
                 im = static.copy()
             else:
                 im = under.copy()
                 d = ImageDraw.Draw(im)
-                for p, tn in started:              # новые нити — под карточкой дела
-                    x, y = pos[p["name"]]
-                    sq = _ease((t - tn - 0.3) / 0.8)
-                    if sq > 0:
-                        _string(d, anchor, (x, y - PIN_DY), sq)
+                for nm, tn in drawing:             # нить тянется от предыдущего к новому
+                    sq = _ease((t - (tn - DRAW)) / DRAW)
+                    _string(d, prev_of[nm], pin_of(nm), max(0.02, sq))
                 im.alpha_composite(top)
                 d = ImageDraw.Draw(im)
-                for p, tn in started:
-                    x, y = pos[p["name"]]
-                    q = min(1.0, (t - tn) / 0.35)
-                    c = cards[p["name"]]
-                    s_ = 1.12 - 0.12 * _ease(q)
+                for nm, tn in drawing:
+                    if t < tn:
+                        continue
+                    x, y = pos[nm]
+                    q = min(1.0, (t - tn) / 0.45)  # фото «прикалывают»: чуть крупнее и тень, потом садится
+                    c = cards[nm]
+                    s_ = 1.10 - 0.10 * _ease(q)
                     cc_ = c.resize((int(c.width * s_), int(c.height * s_)), Image.BICUBIC)
                     if q < 1:
-                        cc_.putalpha(cc_.getchannel("A").point(lambda v, q=q: int(v * q)))
-                    im.alpha_composite(cc_, (int(x - cc_.width / 2), int(y - cc_.height / 2)))
-                    _pin(d, x, y - PIN_DY)
-            v = view(t)
-            wr.add(im.convert("RGB").resize((W, H), Image.BICUBIC, box=v))
+                        cc_.putalpha(cc_.getchannel("A").point(lambda v_, q=q: int(v_ * min(1.0, q * 2))))
+                    im.alpha_composite(cc_, (int(x - cc_.width / 2), int(y - cc_.height / 2 - 30 * (1 - _ease(q)))))
+                    _pin(d, *pin_of(nm))
+            fr = im.convert("RGB").resize((W, H), Image.BICUBIC, box=v)
+            prev_key, prev_img = key, fr
+            wr.add(fr)
     return out_mp4
 
 
@@ -704,38 +733,63 @@ def focus_canvas(path, max_w=3840):
 
 
 def focus_views(canvas_size, boxes_px, total_sec):
-    """Ключевые положения камеры: весь кадр → цель 1 → цель 2 … → весь кадр. Возвращает функцию t → (x0,y0,x1,y1)."""
+    """Камера по фото, как в документальном кино: общий план → мягкий наезд на первую цель →
+    плавное смещение ко второй, к третьей (на каждой — едва заметный дрейф, кадр «живой») →
+    мягкий отъезд на весь снимок. Возвращает функцию t → (x0, y0, x1, y1)."""
     cw, chh = canvas_size
     full = (0.0, 0.0, float(cw), float(chh))
-    max_zoom = min(3.0, chh / (H * 0.62))            # не увеличиваем сильнее, чем позволяет разрешение фото
+    max_zoom = min(2.8, chh / (H * 0.5))             # не сильнее, чем позволяет разрешение фото
     views = []
     for (x0, y0, x1, y1) in boxes_px:
         bw, bh = max(8.0, x1 - x0), max(8.0, y1 - y0)
-        vh = max(bh * 1.55, bw * 1.55 * 9 / 16, chh / max(1.0, max_zoom))
-        vh = min(vh, chh)
+        vh = max(bh * 1.7, bw * 1.7 * 9 / 16, chh / max(1.0, max_zoom))
+        vh = min(vh, chh * 0.8)                       # приближение всегда заметно
         vw = vh * 16 / 9
         cx, cy = (x0 + x1) / 2, (y0 + y1) / 2
         vx = min(max(0.0, cx - vw / 2), cw - vw)
         vy = min(max(0.0, cy - vh / 2), chh - vh)
-        views.append((vx, vy, vx + vw, vy + vh))
+        v = (vx, vy, vx + vw, vy + vh)
+        # та же цель второй раз (почти та же рамка) — не нужна: камера стояла бы на месте
+        if any(abs(v[0] - u[0]) < vw * 0.25 and abs(v[1] - u[1]) < vh * 0.25 for u in views):
+            continue
+        views.append(v)
     if not views:
         return lambda t: full
     T = total_sec
-    intro, outro, move = 0.7, (1.2 if T > 5 else 0.0), 1.1
+    intro = min(1.0, T * 0.12)
+    outro = min(2.0, max(0.0, T * 0.16)) if T > 4.5 else 0.0
     body = max(0.1, T - intro - outro)
     per = body / len(views)
+    move = min(1.9, per * 0.55)                      # переезд — неторопливый
+
+    def drift(v, k):                                  # медленный наезд на 5% за время стоянки
+        x0, y0, x1, y1 = v
+        cx, cy = (x0 + x1) / 2, (y0 + y1) / 2
+        z = 1 - 0.05 * k
+        return (cx - (x1 - x0) / 2 * z, cy - (y1 - y0) / 2 * z, cx + (x1 - x0) / 2 * z, cy + (y1 - y0) / 2 * z)
+
     keys = [(0.0, full), (intro, full)]
     for i, v in enumerate(views):
         st = intro + i * per
-        keys.append((st + min(move, per * 0.6), v))
-        keys.append((st + per, v))
+        keys.append((st + move, ("hold", v, st + move, st + per)))
+        keys.append((st + per, ("hold", v, st + move, st + per)))
     if outro:
         keys.append((T, full))
 
+    def val(key, t):
+        if isinstance(key[1], tuple) and key[1] and key[1][0] == "hold":
+            _, v, a_, b_ = key[1]
+            return drift(v, max(0.0, min(1.0, (t - a_) / max(1e-6, b_ - a_))))
+        return key[1]
+
     def at(t):
-        for (ta, va), (tb, vb) in zip(keys, keys[1:]):
-            if t <= tb:
-                k = _ease2((t - ta) / max(1e-6, tb - ta))
+        for ka, kb in zip(keys, keys[1:]):
+            if t <= kb[0]:
+                va, vb = val(ka, min(t, ka[0]) if False else ka[0]), val(kb, kb[0])
+                if isinstance(ka[1], tuple) and ka[1] and ka[1][0] == "hold" and \
+                        isinstance(kb[1], tuple) and kb[1] and kb[1][0] == "hold" and ka[1][1] == kb[1][1]:
+                    return val(ka, t)                 # стоянка на цели — дрейф
+                k = _ease2((t - ka[0]) / max(1e-6, kb[0] - ka[0]))
                 return tuple(a + (b - a) * k for a, b in zip(va, vb))
-        return keys[-1][1]
+        return val(keys[-1], T)
     return at

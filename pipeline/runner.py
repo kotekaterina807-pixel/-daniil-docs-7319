@@ -268,19 +268,22 @@ def _sfx_events(shots):
     tw, wh = pick("typewriter"), pick("whoosh")
     ev = []
     last_hit = -99.0
+    last_photo = -99.0
     done_maps = set()
     for i, sh in enumerate(shots):
         t0, t1 = sh["s"] / SR, sh["e"] / SR
         name = Path(str(sh.get("src", ""))).name
         is_photo = sh.get("kind") == "image" and not name.startswith(("doc_", "map_", "person_"))
-        if is_photo and sh.get("stack") is not None and not sh.get("stack_solo"):
-            fl = pick("flash")                            # фото ложится в стопку — вспышка в момент появления
+        if is_photo and sh.get("stack") is not None and not sh.get("stack_solo") and t0 - last_photo > 3.5 \
+                and not sh.get("prolog"):
+            fl = pick("slide")                            # фото ложится в стопку — мягкий шелест (не чаще раза в 3,5 с)
             if fl:
-                ev.append({"file": fl, "at": t0, "dur": 0.9, "vol": 0.28, "fade": 0.2})
+                ev.append({"file": fl, "at": t0 - 0.15, "dur": 0.75, "vol": 0.16, "fade": 0.2})
+                last_photo = t0
         if sh.get("person") and not name.startswith("person_") and t0 - last_hit > 20:
             h = pick("hit")                               # настоящий портрет героя — низкий удар (не чаще раза в 20 с)
             if h:
-                ev.append({"file": h, "at": t0, "dur": 2.0, "vol": 0.2, "fade": 0.6})
+                ev.append({"file": h, "at": t0, "dur": 2.0, "vol": 0.14, "fade": 0.6})
                 last_hit = t0
         if name.startswith("map_") and sh.get("map_times") and name not in done_maps:
             done_maps.add(name)                           # карта бывает разрезана на куски — звуки один раз
@@ -296,23 +299,23 @@ def _sfx_events(shots):
                     break
                 sd = min(2.8, max(1.4, 0.8 * (mts[k] - mts[k - 1]))) if k else 0.0   # сколько прокладывается пунктир
                 if k and pn and at - sd >= t0:
-                    ev.append({"file": pn, "at": at - sd, "dur": sd, "vol": 0.14, "fade": 0.15})
+                    ev.append({"file": pn, "at": at - sd, "dur": sd, "vol": 0.09, "fade": 0.15})
                 if pi:
-                    ev.append({"file": pi, "at": at, "dur": 0.35, "vol": 0.3, "fade": 0.05})
+                    ev.append({"file": pi, "at": at, "dur": 0.35, "vol": 0.18, "fade": 0.05})
         if sh.get("role") == "curtain":                   # занавес после пролога — глухой удар в темноту
             h = pick("hit")
             if h:
-                ev.append({"file": h, "at": t0, "dur": 2.2, "vol": 0.42, "fade": 0.9})
+                ev.append({"file": h, "at": t0, "dur": 2.2, "vol": 0.3, "fade": 0.9})
             continue
         if sh.get("prolog") and sh.get("first_of_seg") and wh and i and t0 > 1.0:
-            ev.append({"file": wh, "at": max(0.0, t0 - 0.35), "dur": 0.9, "vol": 0.14, "fade": 0.3})
+            ev.append({"file": wh, "at": max(0.0, t0 - 0.35), "dur": 0.9, "vol": 0.09, "fade": 0.3})
         if name.startswith("doc_") and tw and not sh.get("no_type"):
             a = sh.get("type_start") if sh.get("type_start") is not None else 0.3
             b = sh.get("type_end") if sh.get("type_end") is not None else (t1 - t0 - 0.6)
             dur = max(0.3, min(b, t1 - t0) - a)           # ровно пока печатаются слова, ни секундой дольше
-            ev.append({"file": tw, "at": t0 + a, "dur": dur, "vol": 0.12, "fade": 0.08})
+            ev.append({"file": tw, "at": t0 + a, "dur": dur, "vol": 0.08, "fade": 0.08})
         elif wh and sh.get("role") == "card" and not any(e["file"] == wh and abs(e["at"] - t0) < 6 for e in ev):
-            ev.append({"file": wh, "at": max(0.0, t0 - 0.55), "dur": 1.6, "vol": 0.3})   # один «свуш» на главу
+            ev.append({"file": wh, "at": max(0.0, t0 - 0.55), "dur": 1.6, "vol": 0.18})   # один «свуш» на главу
     return ev[:800]
 
 
@@ -558,7 +561,11 @@ def step_build(cfg, niche, project, log=print, stop_flag=lambda: False, progress
             # кадры строго под речь: единица — фраза (длинное предложение делится по запятым),
             # смена кадра — в паузе перед словами, строки кадров сценария — подсказки для этих фраз
             units = _speech_units(sents, b["pauses"], span, b.get("words"))
-            specs, ranges, texts = _assign_specs(specs, units)
+            if len(specs) == 1 and specs[0][1] in focus_q and units:
+                # абзац только с [фокус] — одно фото на весь абзац: наезд, переходы между лицами, отъезд
+                specs, ranges, texts = list(specs), [(units[0][0], units[-1][1])], [" ".join(u[2] for u in units)]
+            else:
+                specs, ranges, texts = _assign_specs(specs, units)
             if b.get("words"):                       # фото человека — ровно на его имени
                 ranges = _person_on_name(specs, ranges, b["words"])
             k = len(specs)
@@ -1456,6 +1463,9 @@ def _choose_with_claude_code(cfg, project, finder, lines, rev_path, ch_path, top
             if no in by_no:
                 ks = [k for k in ks if 1 <= k <= len(by_no[no]["cands"])]
                 choices[no] = list(dict.fromkeys(choices.get(no, []) + ks))
+    for no, ln_ in by_no.items():                 # фото по прямой ссылке из сценария — берём всегда
+        if ln_["cands"] and ln_["cands"][0].get("source") == "manual" and 1 not in choices.get(no, []):
+            choices[no] = [1] + [k for k in choices.get(no, []) if k != 1]
     short = sum(1 for no in by_no if not choices.get(no))
     if short:
         log(f"  Строк без своих кадров: {short} — их время займут соседние кадры той же сцены (без повторов).")
@@ -1642,6 +1652,8 @@ def _assign_specs(script_specs, units):
             hit = [i for i, (_, _, t) in enumerate(units)
                    if any(st and any(align.norm(w).startswith(st[0]) for w in t.split()) for st in names)]
             k = min(len(units) - 2, max(hit + [0]))
+            while k < len(units) - 2 and units[k][1] - units[0][0] < 6.0:
+                k += 1                                 # нить, фото и пауза на лице — не меньше ~6 с
         head = [("board", bd)], [(units[0][0], units[k][1])], [" ".join(u[2] for u in units[:k + 1])]
         if k >= len(units) - 1:
             return head
@@ -1654,7 +1666,7 @@ def _assign_specs(script_specs, units):
     for j, (v, q) in enumerate(others):            # подсказки по порядку
         u = min(n - 1, j * n // max(1, len(others)))
         if not vis[u][1] or v == "archive":
-            vis[u] = [v if v in ("archive", "photo", "stock") else "stock", q]
+            vis[u] = [v if v in ("archive", "photo", "stock", "newsreel") else "stock", q]
     for v, q in script_specs:
         if v != "person":
             continue
@@ -1883,6 +1895,7 @@ def _quality_check(cfg, project, shots, finder, topic, log, progress):
     # подлинные фото темы (архив) и портреты из сценария Claude уже выбрал по смыслу и эпохе — второй раз не смотрим
     trusted = {c.get("url") for c in getattr(finder, "topic_items", None) or []}
     trusted |= set((getattr(finder, "manual_photos", None) or {}).values())
+    trusted |= set(getattr(finder, "direct_urls", None) or ())
     entries = []
     skipped = 0
     for sh in shots:

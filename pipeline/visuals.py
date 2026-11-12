@@ -876,6 +876,9 @@ class VisualFinder:
             # точный поиск картинок по названию (как в браузере) — сразу после Wikimedia
             order = [self._wikimedia, self._web_images, self._loc, self._ia_video, self._openverse,
                      self._stock, self._pixabay_photos, self._aic, self._met]
+        elif visual == "newsreel":
+            # [хроника] — подлинная киносъёмка той эпохи (Internet Archive, общественное достояние), потом сток
+            order = [self._ia_video, self._stock, self._wikimedia]
         elif visual == "photo":
             order = [self._web_images, self._wikimedia, self._pixabay_photos, self._openverse, self._stock,
                      self._aic, self._met]

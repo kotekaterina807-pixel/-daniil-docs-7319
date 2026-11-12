@@ -120,6 +120,19 @@ def paper_drop(path, seed=5):
     _save(path, slide + thud * 0.8 + flap)
 
 
+def slide(path, seed=29):
+    """Фото на экране: мягкий шелест — снимок скользит по сукну стола. Без щелчков и хлопков, тихо."""
+    rng = np.random.default_rng(seed)
+    n = int(0.75 * SR)
+    t = np.arange(n) / SR
+    noise = rng.standard_normal(n)
+    band = _onepole(noise, 0.55) - _onepole(noise, 0.93)              # «бумажная» полоса частот
+    env = np.sin(np.pi * np.clip(t / 0.62, 0, 1)) ** 1.6                # плавно нарастает и уходит
+    tb = np.clip(t - 0.5, 0, None)
+    touch = np.sin(2 * np.pi * 120 * tb) * np.exp(-tb / 0.05) * (t >= 0.5) * 0.25   # еле слышное касание
+    _save(path, band * env + touch)
+
+
 def rustle(path, seed=9):
     """Лист бумаги кладут на стол — короткий сухой шорох."""
     rng = np.random.default_rng(seed)
@@ -175,7 +188,8 @@ def ensure(sfx_dir):
             for nm, sd in (("flash_auto.wav", 11), ("flash_auto2.wav", 23), ("flash_auto3.wav", 31)):
                 if nm not in names:                            # несколько вариантов — не звучит одинаково
                     flash(sfx_dir / nm, seed=sd)
-        for kind, fn in (("paper", paper_drop), ("rustle", rustle), ("pen", pen), ("pin", pin), ("hit", hit)):
+        for kind, fn in (("paper", paper_drop), ("rustle", rustle), ("pen", pen), ("pin", pin), ("hit", hit),
+                         ("slide", slide)):
             if not any(n.startswith(kind) for n in names):
                 fn(sfx_dir / f"{kind}_auto.wav")
         (sfx_dir / "whoosh_auto.wav").unlink(missing_ok=True)        # старый «вжух» не понравился — заменён

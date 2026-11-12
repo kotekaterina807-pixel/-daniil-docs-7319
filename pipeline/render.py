@@ -275,6 +275,9 @@ def render_video_shot(src, total, out, grade, label=None, clip_dur=0, offset_n=0
         slow = min(1.6, need / clip_dur)                # короткий ролик слегка замедляем, а не зацикливаем
     if speed and speed < 0.99:
         slow = min(2.0, max(slow, 1.0 / speed))         # быстрый ролик — проигрываем медленнее
+    elif clip_start is not None:
+        pass                                            # продолжение куска — начало не трогаем (раньше здесь
+        #                                                 срабатывало «пропустить начало» и карта начиналась заново)
     elif clip_dur and offset_n:
         # повторное использование ролика — берём другой его участок
         free = max(clip_dur - need, 0)
@@ -661,14 +664,14 @@ def assemble(shots, out, workdir, log=print, group_size=20, on_progress=lambda d
 # Музыка: каждый трек сначала выравнивается по громкости (тихий и громкий трек звучат одинаково),
 # в ней чуть приглушается диапазон голоса (2–3 кГц), чтобы слова звучали чище, и она мягко уходит
 # вниз, пока говорит диктор, и плавно возвращается в паузах. Итог: музыка на ~15–18 дБ тише голоса.
-DUCK = "sidechaincompress=threshold=0.02:ratio=8:attack=20:release=800:makeup=1"
+DUCK = "sidechaincompress=threshold=0.015:ratio=12:attack=15:release=900:makeup=1"
 # Музыка тише и сильнее прижимается под голос; звуки (фото, листы, карта) тише, чтобы не перебивать диктора.
 VOICE_NORM = "anull"      # выравнивание голоса (loudnorm) убрано: на ПК пользователя после него пропал звук
-SFX_GAIN = 0.5
+SFX_GAIN = 0.4
 
 
 def _music_chain(music_volume):
-    k = max(0.0, float(music_volume)) / 0.12 * 0.10         # ползунок 0.12 (по умолчанию) = нормальный уровень
+    k = max(0.0, float(music_volume)) / 0.12 * 0.075        # ползунок 0.12 (по умолчанию) = нормальный уровень
     return ("aformat=sample_rates=48000:channel_layouts=stereo,loudnorm=I=-24:TP=-4:LRA=11,"
             f"equalizer=f=2500:t=q:w=1.2:g=-4,volume={k:.3f}")
 
@@ -713,6 +716,35 @@ def _sfx_track(sfx, total_sec, out):
     return out
 
 
+LOUD = "loudnorm=I=-16:TP=-1.5:LRA=11"
+
+
+def _run_loud(cmd, filt, out, total_sec):
+    """Громкость всего ролика — ровно (линейно), в два прохода. Раньше loudnorm работал «на лету»: в паузах
+    диктора он сам поднимал громкость — музыка и звуки между фразами становились громче голоса."""
+    lin = None
+    try:
+        meas = [c if c != "error" else "info" for c in cmd]
+        p = subprocess.run(meas + ["-filter_complex", filt.replace(LOUD, LOUD + ":print_format=json"),
+                                   "-map", "[a]", "-t", f"{total_sec:.3f}", "-f", "null", "-"],
+                           capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=1800,
+                           creationflags=_NO_WINDOW)
+        import json as _json
+        import re as _re
+        m = _re.search(r"\{[^{}]*\"input_i\"[^{}]*\}", p.stderr)
+        if m:
+            d = _json.loads(m.group(0))
+            lin = (f"loudnorm=I=-16:TP=-1.5:LRA=20:measured_I={d['input_i']}:measured_TP={d['input_tp']}:"
+                   f"measured_LRA={d['input_lra']}:measured_thresh={d['input_thresh']}:"
+                   f"offset={d['target_offset']}:linear=true,alimiter=limit=0.89")
+    except Exception:
+        lin = None
+    cmd = list(cmd) + ["-filter_complex", filt.replace(LOUD, lin) if lin else filt, "-map", "0:v", "-map", "[a]",
+                       "-c:v", "copy", "-c:a", "aac", "-b:a", "192k", "-ar", "48000", "-t", f"{total_sec:.3f}",
+                       "-movflags", "+faststart", str(out)]
+    _run(cmd)
+
+
 def _final_mix_sfx(cmd, music, out, total_sec, music_volume, sfx, fade_out_start):
     cmd = list(cmd)
     idx = 2
@@ -734,10 +766,7 @@ def _final_mix_sfx(cmd, music, out, total_sec, music_volume, sfx, fade_out_start
         idx += 1
     parts.append("".join(mix) + f"amix=inputs={len(mix)}:duration=first:normalize=0,"
                  f"loudnorm=I=-16:TP=-1.5:LRA=11,afade=t=in:d=1.5,afade=t=out:st={fade_out_start:.2f}:d=3[a]")
-    cmd += ["-filter_complex", ";".join(parts), "-map", "0:v", "-map", "[a]", "-c:v", "copy",
-            "-c:a", "aac", "-b:a", "192k", "-ar", "48000", "-t", f"{total_sec:.3f}",
-            "-movflags", "+faststart", str(out)]
-    _run(cmd)
+    _run_loud(cmd, ";".join(parts), out, total_sec)
 
 
 def final_mix(video, narration, music, out, total_sec, music_volume=0.12, sfx=None):
@@ -758,10 +787,7 @@ def final_mix(video, narration, music, out, total_sec, music_volume=0.12, sfx=No
     else:
         filt = (f"[1:a]aformat=sample_rates=48000:channel_layouts=stereo,"
                 f"loudnorm=I=-16:TP=-1.5:LRA=11,afade=t=out:st={fade_out_start:.2f}:d=3[a]")
-    cmd += ["-filter_complex", filt, "-map", "0:v", "-map", "[a]", "-c:v", "copy",
-            "-c:a", "aac", "-b:a", "192k", "-ar", "48000", "-t", f"{total_sec:.3f}",
-            "-movflags", "+faststart", str(out)]
-    _run(cmd)
+    _run_loud(cmd, filt, out, total_sec)
 
 
 def audio_level(path):

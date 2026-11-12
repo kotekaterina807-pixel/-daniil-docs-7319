@@ -34,6 +34,12 @@ class NeedChoices(Exception):
 def collect(finder, spec, taken):
     """До CANDS кандидатов для строки: сначала видео, без повторов по всему видео."""
     out = []
+    q0 = str(spec.get("query") or "").strip()
+    if re.match(r"^https?://", q0) and spec["visual"] != "person":
+        # прямая ссылка на подлинное фото из сценария ([фокус] / [archive] https://…) — только оно
+        finder.__dict__.setdefault("direct_urls", set()).add(q0)
+        return [{"kind": "image", "url": q0, "thumb": q0, "source": "manual", "page": q0,
+                 "title": (spec.get("text") or "")[:80], "author": "", "license": "", "tags": ""}]
     topic = [c for c in getattr(finder, "topic_items", []) if c["url"] not in taken]
     if spec["visual"] == "person":
         allp = [c for c in finder._person_photos(spec["query"], spec.get("shown", ""), spec.get("when", ""))
