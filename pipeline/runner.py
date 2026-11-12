@@ -634,7 +634,8 @@ def step_build(cfg, niche, project, log=print, stop_flag=lambda: False, progress
         log("  Кадры проверяет Claude Code (по подписке Claude).")
     if mode in ("chat", "claude_code"):
         _choose_in_chat(cfg, project, finder, seg_blocks, jobs, vis_cache, log, check_stop, progress,
-                        auto=(mode == "claude_code"), topic=_topic_rules(script, cfg, niche))
+                        auto=(mode == "claude_code"), topic=_topic_rules(script, cfg, niche),
+                        photos=script.get("photos"))
     else:
         def run_job(job):
             bi, si = job
@@ -1194,7 +1195,7 @@ def step_build(cfg, niche, project, log=print, stop_flag=lambda: False, progress
 
 
 def _choose_in_chat(cfg, project, finder, seg_blocks, jobs, vis_cache, log, check_stop, progress,
-                    auto=False, topic=""):
+                    auto=False, topic="", photos=None):
     """Кадры выбирает Claude в чате по листам с превью (см. pipeline/review.py)."""
     from . import review
     rev_path, ch_path = project / "review.json", project / "выбор_кадров.json"
@@ -1237,6 +1238,8 @@ def _choose_in_chat(cfg, project, finder, seg_blocks, jobs, vis_cache, log, chec
                 plan_roles.setdefault(en_, r_)
         lines = []
         doc_used = []
+        board_names = [nm for blk in seg_blocks for sp_ in blk.get("specs", [])
+                       if sp_.get("visual") == "board" for nm, _ in _board_people(sp_.get("board") or sp_.get("query", ""))]
         named = {}
         pp_key = lambda pp: (_stems(pp[0])[-1:] or [""])[0]
         for no, (bi, si) in enumerate(jobs, 1):
@@ -1247,7 +1250,7 @@ def _choose_in_chat(cfg, project, finder, seg_blocks, jobs, vis_cache, log, chec
                 spec["queries"] = pl["queries"]
                 if spec["visual"] == "person":
                     spec["fill_query"] = pl["queries"][0]
-            if pl.get("source") == "лист" and spec["visual"] not in ("person", "document") \
+            if cfg.get("auto_docs", False) and pl.get("source") == "лист" and spec["visual"] not in ("person", "document") \
                     and not spec.get("auto_person") and _doc_ok(seg_blocks, bi, si, doc_used):
                 sp0 = seg_blocks[bi]["specs"][si]          # ключевая фраза — лист, где печатаются слова диктора
                 sp0["visual"], sp0["doc_text"] = "document", sp0["text"].strip()
@@ -1280,6 +1283,8 @@ def _choose_in_chat(cfg, project, finder, seg_blocks, jobs, vis_cache, log, chec
                     # «он бросает оркестр», «руководителя нет» — о герое, которого уже назвали в этой главе:
                     # показываем его другие фото (в форме, с оркестром…). До первого упоминания — никогда.
                     cand = next((pp for pp in pl["people"] if pp_key(pp) in named.get(ch_, set())), None)
+                if cand and _board_only(cand, board_names, photos):
+                    cand = None                       # человек с доски без проверенного фото — только силуэт на доске
                 if cand:
                     spec["auto_person"] = cand
                     seg_blocks[bi]["specs"][si]["auto_person"] = cand
@@ -1629,8 +1634,19 @@ def _assign_specs(script_specs, units):
     if mp and units:                               # карта маршрута — на весь абзац одним кадром
         return [("map", mp)], [(units[0][0], units[-1][1])], [" ".join(u[2] for u in units)]
     bd = next((q for v, q in script_specs if v == "board"), None)
-    if bd and units:                               # доска расследования — тоже на весь абзац
-        return [("board", bd)], [(units[0][0], units[-1][1])], [" ".join(u[2] for u in units)]
+    if bd and units:                               # доска расследования — до последнего названного на ней имени
+        rest = [(v, q) for v, q in script_specs if v != "board"]
+        k = len(units) - 1
+        if rest and len(units) > 1:
+            names = [_stems(nm)[-1:] for nm, _ in _board_people(bd)]
+            hit = [i for i, (_, _, t) in enumerate(units)
+                   if any(st and any(align.norm(w).startswith(st[0]) for w in t.split()) for st in names)]
+            k = min(len(units) - 2, max(hit + [0]))
+        head = [("board", bd)], [(units[0][0], units[k][1])], [" ".join(u[2] for u in units[:k + 1])]
+        if k >= len(units) - 1:
+            return head
+        s2, r2, t2 = _assign_specs(rest, units[k + 1:])
+        return head[0] + s2, head[1] + r2, head[2] + t2
     n = len(units)
     vis = [["stock", ""] for _ in range(n)]
     persons = {}
@@ -1788,22 +1804,63 @@ def _review_before_render(cfg, project, shots, fixes, fixes_path, log, check_sto
 
 def _apply_fixes(shots, fixes, fixes_path, finder, media_dir, log):
     """Правки после просмотра: кадры на указанных таймкодах убираются (и не вернутся при следующих сборках).
-    Замена — подлинное фото из архива темы; если архива нет — время забирают соседние кадры."""
+    Замена — подлинное фото из архива темы, ближе всего по смыслу к фразе; если архива нет — время забирают соседние.
+    Сначала применяются прошлые правки, и только потом новые таймкоды ищутся в уже исправленном монтаже:
+    иначе повторная правка попадает в старый кадр, а не в тот, что Claude видел на раскадровке."""
     if not fixes:
         return
     ban_urls = set(fixes.get("urls") or [])
     ban_files = set(fixes.get("files") or [])
+    pool = []
+    n_rep = n_cut = 0
+
+    def words(t):
+        return {align.norm(w) for w in re.split(r"[^\w]+", str(t or "")) if len(w) > 3}
+
+    def replace_banned():
+        nonlocal pool, n_rep, n_cut
+        finder.used |= ban_urls
+        pool = [c for c in getattr(finder, "topic_items", []) if c["url"] not in finder.used]
+        for sh in shots:
+            url = (sh.get("_qa") or {}).get("url", "")
+            if not sh.get("src") or sh.get("_ban") or not (url in ban_urls or Path(str(sh["src"])).name in ban_files):
+                continue
+            q = sh.get("_qa") or {}
+            sp = q.get("spec") or {}
+            want = words(sp.get("text")) | words(sp.get("query")) | words(" ".join(sp.get("queries") or []))
+            pool.sort(key=lambda c: -len(want & words(f"{c.get('title', '')} {c.get('page', '')}")))
+            new = None
+            while pool and not new:
+                c = pool.pop(0)
+                if finder._claim(c):
+                    pth = finder._download(c)
+                    if pth:
+                        new = (c, pth)
+            if new:
+                c, pth = new
+                sh.update({"src": str(pth), "kind": "image", "person": False, "offset_n": 0})
+                sh.pop("who", None)
+                sh.setdefault("_qa", {})["url"] = c["url"]
+                finder.credits.append(c)
+                n_rep += 1
+            else:
+                sh["_bad"] = sh["_ban"] = True
+                sh["person"] = False                 # чужой портрет убран — подпись с именем тоже не нужна
+                sh.pop("who", None)
+                n_cut += 1
+
+    replace_banned()                                # прошлые правки
     times = fixes.get("times") or []
     resolved = []
     for t in times:
         sec = _tsec(t)
-        sh = next((x for x in shots if x["s"] <= sec * SR < x["e"]), None)
+        sh = next((x for x in shots if x["s"] <= sec * SR < x["e"] and not x.get("_ban")), None)
         if not sh or sh["kind"] not in ("video", "image") or not sh.get("src"):
-            log(f"  Правка {t}: там лист, карта или карточка — пропускаю.")
+            log(f"  Правка {t}: там карта, доска или карточка — пропускаю.")
             continue
         url = (sh.get("_qa") or {}).get("url", "")
-        if str(url).startswith(("doc:", "card:", "map:")):
-            log(f"  Правка {t}: там лист, карта или карточка — пропускаю.")
+        if str(url).startswith(("card:", "map:", "radio:", "board:")):
+            log(f"  Правка {t}: там карта, доска или карточка — пропускаю.")
             continue
         if url:
             ban_urls.add(url)
@@ -1814,32 +1871,7 @@ def _apply_fixes(shots, fixes, fixes_path, finder, media_dir, log):
         fixes["done"] = list(fixes.get("done") or []) + resolved
         fixes["times"] = []
         _save_json(fixes_path, fixes)
-    finder.used |= ban_urls
-    pool = [c for c in getattr(finder, "topic_items", []) if c["url"] not in finder.used]
-    n_rep = n_cut = 0
-    for sh in shots:
-        url = (sh.get("_qa") or {}).get("url", "")
-        if not sh.get("src") or not (url in ban_urls or Path(str(sh["src"])).name in ban_files):
-            continue
-        new = None
-        while pool and not new:
-            c = pool.pop(0)
-            if finder._claim(c):
-                pth = finder._download(c)
-                if pth:
-                    new = (c, pth)
-        if new:
-            c, pth = new
-            sh.update({"src": str(pth), "kind": "image", "person": False, "offset_n": 0})
-            sh.pop("who", None)
-            sh.setdefault("_qa", {})["url"] = c["url"]
-            finder.credits.append(c)
-            n_rep += 1
-        else:
-            sh["_bad"] = sh["_ban"] = True
-            sh["person"] = False                 # чужой портрет убран — подпись с именем тоже не нужна
-            sh.pop("who", None)
-            n_cut += 1
+        replace_banned()                            # новые правки
     if n_rep or n_cut:
         log(f"  Правки: заменено кадров {n_rep} (архив темы), убрано {n_cut}.")
 
@@ -2066,6 +2098,14 @@ def _radio_item(spec, b, shots_dir, length, header):
     if not out.exists():
         fx.make_radio_clip(lines, s["audio"], clip_len, out, header=header, seed=s.get("text", ""))
     return {"path": str(out), "kind": "video", "url": "radio:" + out.stem, "duration": clip_len + 0.5}
+
+
+def _board_only(pp, names, photos):
+    """Человек есть на доске расследования, но проверенного фото (#! ФОТО) для него нет."""
+    last = (_stems(pp[0])[-1:] or _stems(pp[1])[-1:] or [""])[0]
+    if not last or not any((_stems(nm)[-1:] or [""])[0] == last for nm in names):
+        return False
+    return not any((_stems(k)[-1:] or [""])[0] == last for k in (photos or {}))
 
 
 def _board_people(q):
