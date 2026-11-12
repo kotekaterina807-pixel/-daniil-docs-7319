@@ -19,10 +19,13 @@ TENSE = re.compile(r"anxi|tens|suspens|horror|danger|chase|omin|scary|creep|thri
                    r"storm|battle|war|pursuit|nightmare|trevog|страх|тревог", re.I)
 CALM = re.compile(r"calm|peace|soft|gentle|dream|sad|melanch|reflect|lullab|seren|quiet|tender|sorrow|"
                   r"memor|nostalg|piano|slow|спокой|грус", re.I)
+EPIC = re.compile(r"epic|cinemat|trailer|hero|battle|power|rise|orchestr|anthem|action|drum|war|legend|titan|"
+                  r"эпич|битв", re.I)
 MOODS = ("calm", "mystery", "tense")
 TEXT = {"спокойная": "calm", "спокойно": "calm", "грустная": "calm", "загадочная": "mystery",
         "таинственная": "mystery", "мрачная": "mystery", "тревожная": "tense", "напряжённая": "tense",
-        "напряженная": "tense", "страшная": "tense"}
+        "напряженная": "tense", "страшная": "tense", "драматичная": "tense", "драматическая": "tense",
+        "эпичная": "epic", "эпично": "epic", "мощная": "epic"}
 _NW = 0x08000000 if os.name == "nt" else 0
 
 
@@ -86,7 +89,9 @@ def classify(files, log=print):
         for i, f in enumerate(ranked):
             out[f] = MOODS[min(2, i * 3 // max(1, len(ranked)))]
     for f in files:                                     # название трека подсказывает лучше любого анализа
-        if TENSE.search(f.stem):
+        if EPIC.search(f.stem):
+            out[f] = "epic"
+        elif TENSE.search(f.stem):
             out[f] = "tense"
         elif CALM.search(f.stem):
             out[f] = "calm"
@@ -121,12 +126,15 @@ def build_bed(script, chapter_starts, total_sec, niche_id, out, log=print):
         if parts and parts[-1][3] == want:              # глава того же настроения — тот же трек продолжается
             parts[-1][2] = b
             continue
+        alt = {"epic": "tense"}.get(want, "")             # эпичных треков нет — самый напряжённый
         pool = [f for f in files if moods.get(f) == want and f not in used] or \
-               [f for f in files if moods.get(f) == want] or [f for f in files if f not in used] or files
+               [f for f in files if moods.get(f) == want] or \
+               [f for f in files if alt and moods.get(f) == alt and f not in used] or \
+               [f for f in files if f not in used] or files
         f = random.choice(pool)
         used.append(f)
         parts.append([f, a, b, want])
-        desc.append(f"{ch.get('title', '')}: {f.stem} ({ {'calm': 'спокойная', 'mystery': 'загадочная', 'tense': 'тревожная'}[want]})")
+        desc.append(f"{ch.get('title', '')}: {f.stem} ({ {'calm': 'спокойная', 'mystery': 'загадочная', 'tense': 'тревожная', 'epic': 'эпичная'}[want]})")
     if len(parts) == 1:
         return parts[0][0], desc[0]
     X = 3.0                                             # переход между треками, с

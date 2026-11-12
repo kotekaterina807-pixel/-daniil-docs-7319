@@ -248,9 +248,21 @@ def wav_duration(path):
         return w.getnframes() / float(w.getframerate())
 
 
+def spoken(text, say):
+    """Текст для диктора: слова из словаря произношения («#! ПРОИЗНОШЕНИЕ: слово = как читать») заменены.
+    На экране и в субтитрах остаётся исходное слово."""
+    import re as _re
+    for w, x in sorted((say or {}).items(), key=lambda kv: -len(kv[0])):
+        text = _re.sub(r"(?<![\wÄÖÜäöüß])" + _re.escape(w) + r"(?![\wÄÖÜäöüß])", x, text)
+    return text
+
+
 def synthesize(cfg, niche, text, out_wav, prev_text="", next_text="", log=print):
     """Озвучивает абзац через ElevenLabs и сохраняет WAV. Возвращает длительность в секундах."""
     out_wav = Path(out_wav)
+    say = cfg.get("say") or {}
+    if say:
+        text, prev_text, next_text = spoken(text, say), spoken(prev_text, say), spoken(next_text, say)
     mp3s = []
     if provider_of(cfg) == "lumean":
         mp3 = out_wav.with_name(f"{out_wav.stem}_0.mp3")
