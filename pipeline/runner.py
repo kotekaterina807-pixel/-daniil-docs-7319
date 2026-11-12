@@ -1431,6 +1431,10 @@ def _choose_with_claude_code(cfg, project, finder, lines, rev_path, ch_path, top
     for no, ks in picks.items():
         if no in by_no:
             choices[no] = [k for k in ks if 1 <= k <= len(by_no[no]["cands"])]
+    for no, ln_ in by_no.items():                 # фото по прямой ссылке / портрет из сценария — берём сразу,
+        if ln_["cands"] and ln_["cands"][0].get("source") in ("manual", "указано в сценарии") \
+                and 1 not in choices.get(no, []):     # иначе второй круг заменял их чужими кадрами
+            choices[no] = [1] + [k for k in choices.get(no, []) if k != 1]
     found = [ln for ln in lines if ln.get("person") and any(c.get("person") for c in ln["cands"])]
     missing = [ln["person"] for ln in lines if ln.get("person") and ln not in found]
     if missing:
