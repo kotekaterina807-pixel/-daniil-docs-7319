@@ -282,9 +282,13 @@ def render_video_shot(src, total, out, grade, label=None, clip_dur=0, offset_n=0
     elif clip_dur and clip_dur > need + 1.0:
         start = 0.4                                     # пропускаем самое начало ролика
     extra, lf = _overlay_label(label, need, 1)
-    chain = (f"[0:v]setpts={slow:.4f}*(PTS-STARTPTS),scale={W}:{H}:force_original_aspect_ratio=increase:flags=lanczos,"
+    # продолжение карты/доски/листа: без -stream_loop. В новых ffmpeg (7.x, на Windows) -ss вместе с -stream_loop
+    # переставал работать — каждый кусок карты начинался заново. Хвост, если не хватает, — последний кадр.
+    loop = [] if clip_start is not None else ["-stream_loop", "-1"]
+    pad = "tpad=stop_mode=clone:stop_duration=30," if clip_start is not None else ""
+    chain = (f"[0:v]{pad}setpts={slow:.4f}*(PTS-STARTPTS),scale={W}:{H}:force_original_aspect_ratio=increase:flags=lanczos,"
              f"crop={W}:{H},setsar=1,fps={FPS},{grade or 'null'},format=yuv420p[v0];{lf}")
-    _run([ffmpeg_exe(), "-y", "-hide_banner", "-loglevel", "error", "-ss", f"{start:.2f}", "-stream_loop", "-1",
+    _run([ffmpeg_exe(), "-y", "-hide_banner", "-loglevel", "error", "-ss", f"{start:.2f}", *loop,
           "-i", str(src), *extra, "-filter_complex", chain, "-map", "[v]", "-frames:v", str(total), *enc(), str(out)])
 
 
