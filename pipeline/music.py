@@ -25,7 +25,8 @@ MOODS = ("calm", "mystery", "tense")
 TEXT = {"спокойная": "calm", "спокойно": "calm", "грустная": "calm", "загадочная": "mystery",
         "таинственная": "mystery", "мрачная": "mystery", "тревожная": "tense", "напряжённая": "tense",
         "напряженная": "tense", "страшная": "tense", "драматичная": "tense", "драматическая": "tense",
-        "эпичная": "epic", "эпично": "epic", "мощная": "epic"}
+        "эпичная": "epic", "эпично": "epic", "мощная": "epic", "нет": "none", "без музыки": "none",
+        "тишина": "none"}
 _NW = 0x08000000 if os.name == "nt" else 0
 
 
@@ -148,6 +149,10 @@ def build_bed(script, chapter_starts, total_sec, niche_id, out, log=print):
         if parts and parts[-1][3] == want and (not hint or (named and parts[-1][0] == named[0])):
             parts[-1][2] = b                            # глава того же настроения — тот же трек продолжается
             continue
+        if want == "none":                              # глава без музыки (хук: только звуки) — тишина
+            parts.append([None, a, b, want])
+            desc.append(f"{ch.get('title', '') or 'Пролог'}: без музыки")
+            continue
         alt = {"epic": "tense"}.get(want, "")             # эпичных треков нет — самый напряжённый
         pool = named[:1] or [f for f in files if moods.get(f) == want and f not in used] or \
                [f for f in files if moods.get(f) == want] or \
@@ -158,13 +163,17 @@ def build_bed(script, chapter_starts, total_sec, niche_id, out, log=print):
         parts.append([f, a, b, want])
         desc.append(f"{ch.get('title', '')}: {f.stem} ({ {'calm': 'спокойная', 'mystery': 'загадочная', 'tense': 'тревожная', 'epic': 'эпичная'}[want]})")
     if len(parts) == 1:
-        return parts[0][0], desc[0]
+        return (parts[0][0], desc[0]) if parts[0][0] else (None, desc[0])
     X = 3.0                                             # переход между треками, с
     cmd = [ffmpeg_exe(), "-y", "-hide_banner", "-loglevel", "error"]
     flt = []
     for k, (f, a, b, _) in enumerate(parts):
-        cmd += ["-stream_loop", "-1", "-i", str(f)]
         dur = (b - a) + (X if k + 1 < len(parts) else 1.0)
+        if f is None:
+            cmd += ["-f", "lavfi", "-t", f"{dur + 1:.2f}", "-i", "anullsrc=r=48000:cl=stereo"]
+            flt.append(f"[{k}:a]atrim=0:{dur:.2f},asetpts=PTS-STARTPTS[t{k}]")
+            continue
+        cmd += ["-stream_loop", "-1", "-i", str(f)]
         flt.append(f"[{k}:a]aformat=sample_rates=48000:channel_layouts=stereo,loudnorm=I=-24:TP=-4:LRA=11,"
                    f"atrim=0:{dur:.2f},asetpts=PTS-STARTPTS[t{k}]")
     cur = "[t0]"
@@ -175,5 +184,6 @@ def build_bed(script, chapter_starts, total_sec, niche_id, out, log=print):
     p = subprocess.run(cmd, capture_output=True, timeout=1800, creationflags=_NW)
     if p.returncode != 0 or not Path(out).exists():
         log(f"  Музыка по главам не сложилась ({p.stderr.decode(errors='replace')[-160:]}) — один трек на всё видео.")
-        return parts[0][0], desc[0]
+        first = next((p_[0] for p_ in parts if p_[0]), None)
+        return first, desc[0]
     return Path(out), "; ".join(desc)

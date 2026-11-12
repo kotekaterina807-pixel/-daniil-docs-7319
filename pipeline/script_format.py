@@ -24,6 +24,7 @@ HEADER = """# СЦЕНАРИЙ. Можно править в Блокноте и
 #                            если свободного фото нет — на экране появится подпись с именем
 #   Строк кадров у абзаца несколько: они идут по порядку предложений, каждая — под своё предложение.
 #   [надпись] Главное | пояснение — всплывающая подпись на экране (строку можно удалить)
+#   [звук] мотор, сирена — фоновые звуки абзаца: мотор, ветер (шторм), эфир (помехи), сирена, гром
 #   [радио] Кто | фраза в оригинале | перевод — радиопереговоры: голос «из эфира», на экране осциллограф,
 #                  фраза и перевод (абзац только из строк [радио] — отдельный блок переговоров)
 #   [фокус] запрос фото | цель 1 ; цель 2 ; цель 3 — фото, на котором камера по очереди приближается
@@ -88,6 +89,8 @@ def to_text(script: dict) -> str:
                 lines.append(f"[человек] {s['person']}")
             if s.get("music"):
                 lines.append(f"[музыка] {s['music']}")
+            if s.get("sfx"):
+                lines.append("[звук] " + ", ".join(s["sfx"]))
             lines.append(f"[переход] {MOOD_TO_TEXT.get(s.get('mood', 'normal'), 'обычный')}")
             lines.append("")
     return "\n".join(lines)
@@ -105,10 +108,10 @@ def apply_text(script: dict, text: str) -> dict:
         if not block:
             return
         txt, label, person, mood, music = [], "", "", "normal", ""
-        shots, radio_lines, focus = [], [], {}
+        shots, radio_lines, focus, sounds = [], [], {}, []
         for ln in block:
             m = re.match(r"^\[(archive|stock|photo|newsreel|фото|видео|архив|хроника)\]\s*(.*)$", ln.strip(), re.I)
-            tag = re.match(r"^\[(надпись|человек|переход|документ|музыка|карта|радио|фокус|доска)\]\s*(.*)$",
+            tag = re.match(r"^\[(надпись|человек|переход|документ|музыка|карта|радио|фокус|доска|звук)\]\s*(.*)$",
                            ln.strip(), re.I)
             if m:
                 kind = {"фото": "photo", "видео": "stock", "архив": "archive", "хроника": "newsreel"}.get(m.group(1).lower(),
@@ -138,6 +141,8 @@ def apply_text(script: dict, text: str) -> dict:
                 elif name == "доска":
                     if val:
                         shots.append(("board", val))
+                elif name == "звук":
+                    sounds += [x.strip().lower() for x in re.split(r"[,;]", val) if x.strip()]
                 elif name == "музыка":
                     music = val.lower()
                 elif name == "человек":
@@ -161,12 +166,15 @@ def apply_text(script: dict, text: str) -> dict:
                    "label": label, "person": person, "mood": mood, "shots": shots, "music": music}
             if focus:
                 seg["focus"] = focus
+            if sounds:
+                seg["sfx"] = sounds
             current["segments"].append(seg)
         if radio_lines:                               # переговоры — свой блок (после текста абзаца, если он есть)
             current["segments"].append({"text": " ".join(r["de"] or r["en"] for r in radio_lines),
                                         "radio": radio_lines, "visual": "radio", "query": "",
                                         "shots": [("radio", "")], "label": "", "person": "",
-                                        "mood": mood, "music": "" if body else music})
+                                        "mood": mood, "music": "" if body else music,
+                                        **({"sfx": sounds} if sounds and not body else {})})
         block = []
 
     for raw in text.splitlines():

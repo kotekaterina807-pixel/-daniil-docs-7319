@@ -258,6 +258,14 @@ def _late_person_photo(finder, spec, memo):
     return memo[who]
 
 
+SOUND_KINDS = {"мотор": "engine", "самолёт": "engine", "самолет": "engine", "engine": "engine",
+               "ветер": "wind", "шторм": "wind", "буря": "wind", "wind": "wind",
+               "эфир": "static", "помехи": "static", "радио": "static", "static": "static",
+               "сирена": "alarm", "тревога": "alarm", "зуммер": "alarm", "alarm": "alarm",
+               "гром": "thunder", "thunder": "thunder"}
+BED_VOL = {"engine": 0.16, "wind": 0.14, "static": 0.09, "alarm": 0.12, "thunder": 0.22}
+
+
 def _sfx_events(shots):
     """Звуки строго по своим местам:
     - вспышка — только когда на экране появляется фото (не на видео и не на листе);
@@ -270,6 +278,7 @@ def _sfx_events(shots):
     last_hit = -99.0
     last_photo = -99.0
     done_maps = set()
+    done_beds = set()
     for i, sh in enumerate(shots):
         t0, t1 = sh["s"] / SR, sh["e"] / SR
         name = Path(str(sh.get("src", ""))).name
@@ -303,6 +312,22 @@ def _sfx_events(shots):
                     ev.append({"file": pn, "at": at - sd, "dur": sd, "vol": 0.07, "fade": 0.3})
                 if pi:                                    # точка появилась — мягкий короткий тон
                     ev.append({"file": pi, "at": at, "dur": 0.9, "vol": 0.1, "fade": 0.3})
+        bed = sh.get("bed") or {}
+        snd = bed.get("sfx") or []
+        if snd and bed.get("id") not in done_beds:
+            done_beds.add(bed.get("id"))                  # [звук] абзаца: фон на весь абзац или разовый звук
+            b0, b1 = bed["s"] / SR, bed["e"] / SR
+            for nm_ in snd:
+                kind = SOUND_KINDS.get(nm_.split()[0])
+                f_ = pick(kind) if kind else None
+                if not f_:
+                    continue
+                if kind in ("engine", "wind", "static"):
+                    ev.append({"file": f_, "at": b0, "dur": b1 - b0 + 0.6, "vol": BED_VOL[kind],
+                               "fade": 0.9, "fade_in": 0.6})
+                else:
+                    ev.append({"file": f_, "at": b0 + (0.4 if kind == "alarm" else 0.2), "dur": 3.2 if kind == "alarm" else 5.5,
+                               "vol": BED_VOL[kind], "fade": 0.5})
         if sh.get("role") == "curtain":                   # занавес после пролога — глухой удар в темноту
             h = pick("hit")
             if h:
@@ -1060,6 +1085,9 @@ def step_build(cfg, niche, project, log=print, stop_flag=lambda: False, progress
     for o in overlays:
         o.pop("person", None)
     for sh in shots:
+        blk_ = (sh.get("_qa") or {}).get("blk") or {}
+        if (blk_.get("seg") or {}).get("sfx"):         # [звук] абзаца — запомнить до того, как служебное уйдёт
+            sh["bed"] = {"id": id(blk_), "s": blk_["start"], "e": blk_["end"], "sfx": list(blk_["seg"]["sfx"])}
         sh.pop("_qa", None)
 
     # ---------- 4б. «стопка фото»: подряд идущие фото ложатся друг на друга (как в документальных фильмах) ----------

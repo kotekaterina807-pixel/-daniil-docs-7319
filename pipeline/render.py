@@ -718,6 +718,9 @@ def _sfx_track(sfx, total_sec, out, gain=1.0):
         L = int(e["dur"] * sr)
         reps = int(np.ceil(L / len(src)))                 # короткий звук (машинка) повторяется на всю длину
         clip = np.tile(src, (max(1, reps), 1))[:L].copy()
+        fi = int(min(L, e.get("fade_in", 0) * sr))
+        if fi > 1:
+            clip[:fi] *= np.linspace(0, 1, fi, dtype=np.float32)[:, None]
         fd = int(min(L, e.get("fade", 0.4) * sr))
         if fd > 1:
             clip[-fd:] *= np.linspace(1, 0, fd, dtype=np.float32)[:, None]

@@ -211,6 +211,104 @@ def hit(path, seed=19):
     _save(path, boom + body + click)
 
 
+def _loopable(x, fade=1.5):
+    """Конец плавно переходит в начало — звук можно повторять без щелчка."""
+    k = int(fade * SR)
+    head, tail = x[:k].copy(), x[-k:].copy()
+    w = np.linspace(0, 1, k)
+    x = x[k:].copy()
+    x[-k:] = tail * (1 - w) + head * w
+    return x
+
+
+def _lp(x, hz):
+    a = float(np.exp(-2 * np.pi * hz / SR))
+    from scipy.signal import lfilter  # noqa — есть не везде
+    return lfilter([1 - a], [1, -a], x)
+
+
+def _lowpass(x, hz):
+    try:
+        return _lp(x, hz)
+    except Exception:
+        return _onepole(x, float(np.exp(-2 * np.pi * hz / SR)))
+
+
+def engine(path, seconds=30.0, seed=43):
+    """Гул поршневого самолёта изнутри: низкое «бу-бу-бу» мотора, гул винта, слабая вибрация корпуса."""
+    rng = np.random.default_rng(seed)
+    n = int((seconds + 1.5) * SR)
+    t = np.arange(n) / SR
+    f0 = 31 + 0.8 * np.sin(2 * np.pi * 0.07 * t) + 0.3 * np.sin(2 * np.pi * 0.23 * t)  # обороты чуть «плавают»
+    ph = 2 * np.pi * np.cumsum(f0) / SR
+    x = sum(np.sin(k * ph + k) / k ** 0.8 for k in range(1, 9))
+    x *= 0.75 + 0.25 * np.sin(ph * 0.5) ** 2                       # поршни: пульсация
+    prop = np.sin(2 * np.pi * np.cumsum(f0 * 2.6) / SR) * 0.35      # винт
+    rumble = _lowpass(rng.standard_normal(n), 180) * 6
+    air = _lowpass(rng.standard_normal(n), 900) * 0.6 * (0.8 + 0.2 * np.sin(2 * np.pi * 0.11 * t))
+    y = _lowpass(x + prop, 420) + rumble + air
+    _save(path, _loopable(y))
+
+
+def wind(path, seconds=30.0, seed=47):
+    """Ветер и шторм: воющий порыв то сильнее, то слабее, низкий шум волн."""
+    rng = np.random.default_rng(seed)
+    n = int((seconds + 1.5) * SR)
+    t = np.arange(n) / SR
+    g = 0.55 + 0.45 * np.clip(np.sin(2 * np.pi * 0.09 * t) + 0.5 * np.sin(2 * np.pi * 0.23 * t + 1), -1, 1)
+    hiss = _lowpass(rng.standard_normal(n), 700) * g
+    howl = np.sin(2 * np.pi * np.cumsum(380 + 140 * g) / SR) * 0.05 * g ** 2
+    sea = _lowpass(rng.standard_normal(n), 120) * 5 * (0.7 + 0.3 * np.sin(2 * np.pi * 0.13 * t) ** 2)
+    _save(path, _loopable(hiss + howl + sea))
+
+
+def static(path, seconds=20.0, seed=53):
+    """Эфир: шипение старого приёмника, треск, «плывущий» тон настройки."""
+    rng = np.random.default_rng(seed)
+    n = int((seconds + 1.5) * SR)
+    t = np.arange(n) / SR
+    hiss = rng.standard_normal(n)
+    hiss = hiss - _lowpass(hiss, 1200)
+    hiss = _lowpass(hiss, 5000) * 0.5
+    crack = np.zeros(n)
+    for _ in range(int(seconds * 9)):
+        a = rng.integers(0, n - 2000)
+        L = rng.integers(40, 900)
+        crack[a:a + L] += rng.standard_normal(L) * rng.uniform(0.4, 2.0) * np.exp(-np.arange(L) / (L / 3))
+    whistle = np.sin(2 * np.pi * np.cumsum(900 + 300 * np.sin(2 * np.pi * 0.05 * t)) / SR) * 0.04
+    swell = 0.7 + 0.3 * np.sin(2 * np.pi * 0.17 * t) ** 2
+    _save(path, _loopable((hiss + crack * 0.6 + whistle) * swell))
+
+
+def alarm(path, seed=59):
+    """Тревожный зуммер в кабине (старый электромеханический): три коротких гудка, глухо, как сквозь мотор."""
+    n = int(3.2 * SR)
+    t = np.arange(n) / SR
+    tone = np.sign(np.sin(2 * np.pi * 440 * t)) * 0.5 + np.sign(np.sin(2 * np.pi * 330 * t)) * 0.35
+    env = np.zeros(n)
+    for k in range(3):
+        a, b = int((0.15 + k * 0.95) * SR), int((0.15 + k * 0.95 + 0.55) * SR)
+        e = np.ones(b - a)
+        r = int(0.02 * SR)
+        e[:r] = np.linspace(0, 1, r)
+        e[-r:] = np.linspace(1, 0, r)
+        env[a:b] = e
+    y = _lowpass(tone * env, 1800)
+    y = y - _lowpass(y, 200)
+    _save(path, y)
+
+
+def thunder(path, seed=61):
+    """Далёкий гром: треск и долгий низкий раскат."""
+    rng = np.random.default_rng(seed)
+    n = int(6.0 * SR)
+    t = np.arange(n) / SR
+    env = (1 - np.exp(-t / 0.08)) * np.exp(-t / 1.6)
+    env *= 0.6 + 0.4 * np.abs(_lowpass(rng.standard_normal(n), 3) * 40).clip(0, 1)
+    y = _lowpass(rng.standard_normal(n), 140) * env * 8 + _lowpass(rng.standard_normal(n), 900) * env * np.exp(-t / 0.4)
+    _save(path, y)
+
+
 def ensure(sfx_dir):
     """Если своих звуков нет — делаем свои один раз."""
     sfx_dir = Path(sfx_dir)
@@ -224,7 +322,9 @@ def ensure(sfx_dir):
                 if nm not in names:                            # несколько вариантов — не звучит одинаково
                     flash(sfx_dir / nm, seed=sd)
         for kind, fn in (("paper", paper_drop), ("rustle", rustle), ("pen", pen), ("pin", pin), ("hit", hit),
-                         ("slide", slide), ("drop", drop), ("mark", mark), ("trace", trace)):
+                         ("slide", slide), ("drop", drop), ("mark", mark), ("trace", trace),
+                         ("engine", engine), ("wind", wind), ("static", static), ("alarm", alarm),
+                         ("thunder", thunder)):
             if not any(n.startswith(kind) for n in names):
                 fn(sfx_dir / f"{kind}_auto.wav")
         (sfx_dir / "whoosh_auto.wav").unlink(missing_ok=True)        # старый «вжух» не понравился — заменён
