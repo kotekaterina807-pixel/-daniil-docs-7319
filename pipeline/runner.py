@@ -896,7 +896,7 @@ def step_build(cfg, niche, project, log=print, stop_flag=lambda: False, progress
                     "s": b["start"] + int((t0 + edges[j]) * SR), "e": b["start"] + int((t0 + edges[j + 1]) * SR),
                     "mood": s.get("mood", "normal"), "first_of_seg": first_in_seg, "zoom_in": zoom_flip,
                     "person": bool((it or {}).get("person")), "hold": float((it or {}).get("hold") or 0),
-                    "who": _who(spec, roles) if (it or {}).get("person") else "",
+                    "who": _who(dict(spec, lang=cfg.get("language", "ru")), roles) if (it or {}).get("person") else "",
                     "type_start": (it or {}).get("type_start"), "type_end": (it or {}).get("type_end"),
                     "map_times": (it or {}).get("map_times"),
                     "focus": spec.get("focus") if (it and it["kind"] == "image" and n == 1) else None,
@@ -1543,6 +1543,11 @@ def _who(spec, roles):
         role = roles.get(ru) or roles.get(en) or spec.get("auto_role", "")
     else:
         return ""
+    if spec.get("lang", "ru") != "ru":               # видео не на русском — подпись без кириллицы
+        if re.search(r"[а-яё]", name, re.I):
+            name = spec.get("query", "") if spec.get("visual") == "person" else spec["auto_person"][0]
+        if re.search(r"[а-яё]", role or "", re.I):
+            role = ""
     return name + (" | " + role if role else "")
 
 
