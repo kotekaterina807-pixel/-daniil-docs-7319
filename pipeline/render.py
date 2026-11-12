@@ -82,6 +82,9 @@ def prepare_base(path, blur_dark=False):
         fg = im.resize((fw, fh), Image.LANCZOS)
         bg.paste(fg, ((bw - fw) // 2, (bh - fh) // 2))
         base = bg
+    if max(bw / im.width, bh / im.height) > 1.25 and not blur_dark:
+        # маленькое фото растянуто — мягкая резкость возвращает чёткость контуров (без «пережаренности»)
+        base = base.filter(ImageFilter.UnsharpMask(radius=1.6, percent=55, threshold=3))
     if blur_dark:
         base = ImageEnhance.Brightness(base.filter(ImageFilter.GaussianBlur(8))).enhance(0.45)
     return base
@@ -139,6 +142,21 @@ def render_image_shot(src, total, out, grade, zoom_in=True, label=None):
     chain = f"[0:v]{grade or 'null'},format=yuv420p[v0];{lf}"
     amp = ZOOM * min(1.0, max(0.4, total / FPS / 5.0))   # короткий кадр — движение медленнее и мягче
     _pipe(_kb_frames(base, total, zoom_in, amp), total, out, chain, extra)
+
+
+def render_focus_shot(src, total, out, grade, boxes):
+    """Фото в высоком разрешении: камера по очереди мягко приближается к целям и отъезжает в конце."""
+    from . import fx
+    canvas, conv = fx.focus_canvas(src)
+    px = [conv(b) for b in boxes]
+    at = fx.focus_views(canvas.size, px, total / FPS)
+    chain = f"[0:v]{grade or 'null'},format=yuv420p[v]"
+
+    def frames():
+        for k in range(total):
+            x0, y0, x1, y1 = at(k / FPS)
+            yield canvas.resize((W, H), Image.BICUBIC, box=(x0, y0, x1, y1)).tobytes()
+    _pipe(frames(), total, out, chain, [])
 
 
 # ---------- «стопка фотографий», как в документальных фильмах ----------
@@ -310,6 +328,8 @@ def render_shots(shots, workers, log=print, on_progress=lambda d, t: None):
             elif s["kind"] == "video":
                 render_video_shot(s["src"], n, tmp, s["grade"], s.get("label"), s.get("clip_dur", 0),
                                  s.get("offset_n", 0), s.get("speed", 1.0), s.get("clip_start"))
+            elif s["kind"] == "image" and s.get("focus_boxes"):
+                render_focus_shot(s.get("focus_src") or s["src"], n, tmp, s["grade"], s["focus_boxes"])
             elif s["kind"] == "image" and s["src"] and s.get("stack") is not None:
                 render_stack_shot(s["stack"], s["src"], n, tmp, s["grade"], s.get("stack_seed", s["src"]),
                                   s.get("zoom_in", True), s.get("label"), not s.get("stack_solo"))
@@ -433,6 +453,13 @@ def _transition(name, a, b, p):
         out = _mix(a, b, e)
         sat = abs(1 - 2 * e)                                  # в середине перехода — чёрно-белое
         out[W * H:] = (128 + (out[W * H:].astype(np.float32) - 128) * sat + 0.5).astype(np.uint8)
+        return out
+    if name == "flash":                                   # короткая белая вспышка между кадрами
+        out = _mix(a, b, e)
+        k = max(0.0, 1 - abs(1 - 2 * p) * 1.6)
+        if k > 0:
+            y = out[:W * H].astype(np.float32)
+            out[:W * H] = np.clip(y + (255 - y) * k * 0.85, 0, 255).astype(np.uint8)
         return out
     if name == "circleopen":
         m, mc = _circle_mask(e)

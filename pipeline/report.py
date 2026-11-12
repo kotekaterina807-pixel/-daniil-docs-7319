@@ -137,7 +137,7 @@ def send(cfg, project, log_lines, log=print):
         (tmp / "ошибки.txt").write_text(_mask(err.read_text(encoding="utf-8", errors="replace")[-6000:]), encoding="utf-8")
         files.append(tmp / "ошибки.txt")
     for name in ("монтаж_кадры.json", "проверка.json", "выбор_кадров.json", "план_кадров.json", "script.json",
-                 "subtitles.srt", "правки.json"):
+                 "subtitles.srt", "правки.json", "произношение.txt", "фокус.json"):
         if (project / name).exists():
             files.append(project / name)
     if video:

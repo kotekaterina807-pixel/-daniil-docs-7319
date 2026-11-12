@@ -968,6 +968,8 @@ def _remote_loop():
                             over = {}
                             if re.search(r"(?im)^#!\s*РЕЖИМ:\s*быстр", text):   # быстрая сборка: без повторного круга
                                 over = {"qa_retry": False, "claude_review": False}  # проверки и без ожидания раскадровки
+                            if re.search(r"(?im)^#!\s*ПРОВЕРКА:\s*(да|yes|on)", text):  # Claude смотрит раскадровку до монтажа
+                                over["claude_review"] = True
                             res = _build(project, npath, src="по команде из чата", over=over)
                         except Exception as e:
                             remote.status(config.load_config(), name, f"ошибка: {e}")

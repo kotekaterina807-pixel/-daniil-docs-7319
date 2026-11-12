@@ -19,6 +19,8 @@ DOC_HOLD = 3.0       # лист после последнего напечата
 DOC_PAUSE = 2.6      # лист в конце главы: тишина, чтобы зритель дочитал до названия следующей главы
 CARD_SEC = 1.8       # название главы поверх видео
 TITLE_SEC = 4.0      # заставка с названием в начале
+CURTAIN_SEC = 2.2    # «занавес» после пролога: затемнение и удар, потом глава 1
+PROLOG_SHOT = 1.6    # в прологе кадры короче — современный быстрый монтаж
 LABEL_SEC = 5.0      # сколько держится всплывающая подпись
 
 # Переходы: только плавный наплыв, короткий
@@ -174,8 +176,9 @@ def _plain(x):
     """Обычный кадр (видео/фото), которым можно заполнить время. Листы, карты, карточки и люди — нет."""
     nm = Path(str(x.get("src") or "")).name
     return (bool(x.get("src")) and x.get("kind") in ("video", "image") and not x.get("person")
-            and not nm.startswith(("doc_", "map_", "person_", "card_"))
-            and not str((x.get("_qa") or {}).get("url", "")).startswith(("doc:", "map:", "card:")))
+            and not nm.startswith(("doc_", "map_", "person_", "card_", "radio_", "board_"))
+            and not x.get("focus")
+            and not str((x.get("_qa") or {}).get("url", "")).startswith(("doc:", "map:", "card:", "radio:", "board:")))
 
 
 def _fit_docs(shots):
@@ -286,14 +289,23 @@ def _sfx_events(shots):
                 j += 1
             m_end = shots[j]["e"] / SR - 0.3              # конец карты на экране
             pn, pi = pick("pen"), pick("pin")
-            for k, mt in enumerate(sh["map_times"]):
+            mts = sh["map_times"]
+            for k, mt in enumerate(mts):
                 at = t0 + mt
                 if at >= m_end:
                     break
-                if k and pn and at - 1.1 >= t0:
-                    ev.append({"file": pn, "at": at - 1.1, "dur": 1.1, "vol": 0.16, "fade": 0.1})
+                sd = min(2.8, max(1.4, 0.8 * (mts[k] - mts[k - 1]))) if k else 0.0   # сколько прокладывается пунктир
+                if k and pn and at - sd >= t0:
+                    ev.append({"file": pn, "at": at - sd, "dur": sd, "vol": 0.14, "fade": 0.15})
                 if pi:
                     ev.append({"file": pi, "at": at, "dur": 0.35, "vol": 0.3, "fade": 0.05})
+        if sh.get("role") == "curtain":                   # занавес после пролога — глухой удар в темноту
+            h = pick("hit")
+            if h:
+                ev.append({"file": h, "at": t0, "dur": 2.2, "vol": 0.42, "fade": 0.9})
+            continue
+        if sh.get("prolog") and sh.get("first_of_seg") and wh and i and t0 > 1.0:
+            ev.append({"file": wh, "at": max(0.0, t0 - 0.35), "dur": 0.9, "vol": 0.14, "fade": 0.3})
         if name.startswith("doc_") and tw and not sh.get("no_type"):
             a = sh.get("type_start") if sh.get("type_start") is not None else 0.3
             b = sh.get("type_end") if sh.get("type_end") is not None else (t1 - t0 - 0.6)
@@ -304,11 +316,12 @@ def _sfx_events(shots):
     return ev[:800]
 
 
-OLD_LOOK = ("gblur=sigma=0.9,"                          # чуть мягче, как старая плёнка/камера
-            "eq=saturation=0.62:contrast=1.04:gamma=0.95,"
-            "eq=brightness='0.012*sin(t*17)+0.008*sin(t*5.3)':eval=frame,"   # лёгкое мерцание плёнки
-            "colorbalance=rs=0.06:gs=0.02:bs=-0.07:rm=0.04:bm=-0.05:rh=0.03:bh=-0.04,"
-            "noise=alls=13:allf=t+u,vignette=PI/4")    # «староватая» плёнка: тёплый выцветший цвет, зерно, виньетка
+OLD_LOOK = ("gblur=sigma=0.6,"                          # чуть мягче, как старая плёнка/камера
+            "eq=saturation=0.66:contrast=1.04:gamma=0.96,"
+            "eq=brightness='0.006*sin(t*17)+0.004*sin(t*5.3)':eval=frame,"   # едва заметное мерцание плёнки
+            "colorbalance=rs=0.05:gs=0.02:bs=-0.06:rm=0.03:bm=-0.04:rh=0.02:bh=-0.03,"
+            "noise=alls=5:allf=t")                     # тонкое зерно; виньетка — одна, мягкая, в стиле ниши
+LIGHT_LOOK = "noise=alls=4:allf=t"                   # карты, доска, переговоры — свои цвета, только зерно
 
 
 def _grade(niche, mood, old_look=False):
@@ -356,6 +369,18 @@ def step_build(cfg, niche, project, log=print, stop_flag=lambda: False, progress
             log(f"Язык видео: {L['name']}.")
     if not str(cfg.get("edge_voice", "")).lower().startswith(code + "-"):
         cfg["edge_voice"] = L["edge_voice"]
+    style = (script.get("style") or "").strip()
+    styles = niche.get("styles") or {}
+    if style and style in styles:                    # стиль внутри ниши: цвет, музыка, оформление под тему
+        niche = {**niche, **styles[style], "id": niche.get("id", ""), "styles": styles}
+        log(f"Стиль ролика: {styles[style].get('name', style)}.")
+    elif style:
+        log(f"  Стиль «{style}» в нише не найден — обычное оформление ниши.")
+    cfg["say"] = script.get("say") or {}
+    if cfg["say"]:
+        log(f"  Словарь произношения: {len(cfg['say'])} слов.")
+    use_title = script.get("title_card", niche.get("title_card", True)) is not False
+    title_sec = TITLE_SEC if use_title else 0.0
     accent = tuple(niche.get("accent", [200, 30, 30]))
 
     audio_dir, media_dir, shots_dir = project / "audio", project / "media", project / "shots"
@@ -381,9 +406,13 @@ def step_build(cfg, niche, project, log=print, stop_flag=lambda: False, progress
     segs = [s for ch in script["chapters"] for s in ch["segments"]]
     log(f"Озвучка: {len(segs)} абзацев ({'Lumean' if provider == 'lumean' else 'ElevenLabs'}, {L['name']})...")
     todo = []
+    from . import radio as _radio
     for i, s in enumerate(segs):
-        s["audio"] = str(audio_dir / f"{_key('elevenlabs', voice, s['text'], 'p3')}.wav")
-        if not Path(s["audio"]).exists():
+        if s.get("radio"):
+            s["audio"] = str(audio_dir / f"radio_{_radio.key(s['radio'], cfg)}.wav")
+        else:
+            s["audio"] = str(audio_dir / f"{_key('elevenlabs', voice, tts.spoken(s['text'], cfg['say']), 'p3')}.wav")
+        if not Path(s["audio"]).exists() or (s.get("radio") and not Path(s["audio"]).with_suffix(".json").exists()):
             todo.append(i)
     done = [len(segs) - len(todo)]
 
@@ -391,9 +420,12 @@ def step_build(cfg, niche, project, log=print, stop_flag=lambda: False, progress
         if stop_flag():
             return
         s = segs[i]
-        prev_t = segs[i - 1]["text"] if i else ""
-        next_t = segs[i + 1]["text"] if i + 1 < len(segs) else ""
-        tts.synthesize(cfg, niche, s["text"], s["audio"], prev_t, next_t, log)
+        if s.get("radio"):                            # переговоры: голоса «из эфира»
+            _radio.make(cfg, niche, s["radio"], s["audio"], log)
+        else:
+            prev_t = segs[i - 1]["text"] if i and not segs[i - 1].get("radio") else ""
+            next_t = segs[i + 1]["text"] if i + 1 < len(segs) and not segs[i + 1].get("radio") else ""
+            tts.synthesize(cfg, niche, s["text"], s["audio"], prev_t, next_t, log)
         done[0] += 1
         progress(0.10 * done[0] / len(segs), f"Озвучка {done[0]}/{len(segs)}")
         if done[0] % 5 == 0 or done[0] == len(segs):
@@ -416,13 +448,19 @@ def step_build(cfg, niche, project, log=print, stop_flag=lambda: False, progress
         out.setnchannels(1)
         out.setsampwidth(2)
         out.setframerate(SR)
-        title_len = int(TITLE_SEC * SR)
-        out.writeframes(b"\x00\x00" * title_len)
-        blocks.append({"type": "title", "start": 0, "end": title_len})
+        title_len = int(title_sec * SR)
+        if title_len:
+            out.writeframes(b"\x00\x00" * title_len)
+            blocks.append({"type": "title", "start": 0, "end": title_len})
         pos = title_len
         for ci, ch in enumerate(script["chapters"]):
-            chapter_starts.append((ch["title"], 0.0 if ci == 0 else pos / SR))
-            if ci > 0:
+            chapter_starts.append((ch["title"] or ("Prolog" if ch.get("prolog") else ""), 0.0 if ci == 0 else pos / SR))
+            if ci > 0 and script["chapters"][ci - 1].get("prolog"):     # занавес после пролога
+                cur = int(CURTAIN_SEC * SR)
+                out.writeframes(b"\x00\x00" * cur)
+                blocks.append({"type": "curtain", "start": pos, "end": pos + cur})
+                pos += cur
+            if ci > 0 and not ch.get("prolog"):
                 card = int(CARD_SEC * SR)
                 out.writeframes(b"\x00\x00" * card)
                 blocks.append({"type": "card", "chapter": ci, "start": pos, "end": pos + card})
@@ -435,9 +473,16 @@ def step_build(cfg, niche, project, log=print, stop_flag=lambda: False, progress
                 if si_ == len(ch["segments"]) - 1 and any(v == "document" for v, _ in s.get("shots") or []):
                     pause += int(DOC_PAUSE * SR)          # дальше название главы — листу нужно время повисеть
                 out.writeframes(b"\x00\x00" * pause)
-                sents, pauses, dur_s = timing.sentence_times(s["text"], s["audio"])
                 rec = None
-                if cfg.get("word_sync", True):            # точное время каждого слова — по распознаванию речи
+                if s.get("radio"):                        # переговоры: время фраз известно точно
+                    s["radio_timed"] = _radio.make(cfg, niche, s["radio"], s["audio"], log)
+                    dur_s = n / SR
+                    sents = [(ln["a"], ln["b"], ln.get("de") or ln.get("en", "")) for ln in s["radio_timed"]] \
+                        or [(0.0, dur_s, s["text"])]
+                    pauses = []
+                else:
+                    sents, pauses, dur_s = timing.sentence_times(s["text"], s["audio"])
+                if not s.get("radio") and cfg.get("word_sync", True):   # точное время каждого слова — по распознаванию речи
                     try:
                         rec = align.words(s["audio"], cfg.get("language", "ru"), log)
                         if rec and len(sents) > 1:
@@ -452,12 +497,17 @@ def step_build(cfg, niche, project, log=print, stop_flag=lambda: False, progress
                         rec = None
                 for a, b, t in sents:
                     subs.append({"text": t, "start": pos / SR + a, "end": pos / SR + b})
-                blocks.append({"type": "seg", "seg": s, "chapter": ci, "start": pos, "end": pos + n + pause,
+                blocks.append({"type": "seg", "seg": s, "chapter": ci, "prolog": bool(ch.get("prolog")),
+                               "start": pos, "end": pos + n + pause,
                                "pauses": pauses, "sent_bounds": [b for _, b, _ in sents[:-1]],
                                "sents": sents, "words": rec})
                 pos += n + pause
     total_sec = pos / SR
     log(f"Длительность видео: {total_sec / 60:.1f} мин.")
+    try:
+        _pron_check(project, [b for b in blocks if b["type"] == "seg"], cfg.get("say") or {}, log)
+    except Exception as e:
+        log(f"  Проверка произношения не выполнена: {e}")
     if synced[0]:
         log(f"  Кадры привязаны к словам диктора (распознавание речи): абзацев {synced[0]}.")
 
@@ -496,6 +546,12 @@ def step_build(cfg, niche, project, log=print, stop_flag=lambda: False, progress
     for bi, b in enumerate(seg_blocks):
         s = b["seg"]
         span = (b["end"] - b["start"]) / SR
+        if s.get("radio"):                            # переговоры — свой кадр на весь блок, подбирать нечего
+            b["specs"] = [{"visual": "radio", "query": "", "t0": 0.0, "t1": span, "n": 1, "text": s["text"]}]
+            continue
+        sh_list = s.get("shots") or []
+        focus_q = {sh_list[int(k)][1]: v for k, v in (s.get("focus") or {}).items()
+                   if str(k).isdigit() and int(k) < len(sh_list)}
         specs = list(s.get("shots") or [(s["visual"], s["query"])])
         sents = b["sents"] or [(0.0, span, s["text"])]
         if cfg.get("visual_check") == "claude_code":
@@ -529,7 +585,16 @@ def step_build(cfg, niche, project, log=print, stop_flag=lambda: False, progress
             n = min(n, max(1, int(length / min_shot)))
             if cfg.get("visual_check") == "claude_code":
                 n = 3 if length >= 8.0 else 2 if length >= 4.6 else 1   # фраза ≈ кадр; от 4 с — два, от 7 с — три
+            if b.get("prolog"):                       # пролог: короткие кадры, быстрый монтаж
+                n = max(1, min(4, round(length / PROLOG_SHOT)))
             spec = {"visual": vis, "query": query, "t0": t0, "t1": t1, "n": n, "text": txt}
+            if vis in ("archive", "photo") and query in focus_q:
+                spec["focus"] = focus_q[query]          # фото с приближениями: один кадр на всю фразу
+                spec["n"] = 2                           # запасной вариант на случай брака
+            if vis == "board":
+                spec["board"] = query
+                b["specs"].append(spec)                 # доска рисуется сама — подбирать нечего
+                continue
             if vis == "person":
                 parts = [x.strip() for x in query.split("|")]
                 spec["query"] = parts[0]
@@ -658,7 +723,15 @@ def step_build(cfg, niche, project, log=print, stop_flag=lambda: False, progress
         return True
 
     zoom_flip = False
+    board_state = {"pins": [], "photos": {}}
+    rw = {"de": "Funkverkehr", "ru": "Радиообмен", "en": "Radio traffic", "fr": "Trafic radio", "es": "Tráfico de radio"}
+    radio_header = rw.get(code, rw["en"]) + (" · " + (script.get("board") or {}).get("sub", "").split("·")[0].strip()
+                                             if (script.get("board") or {}).get("sub") else "")
     for b in blocks:
+        if b["type"] == "curtain":                    # занавес после пролога: затемнение
+            shots.append({"kind": "black", "src": "", "s": b["start"], "e": b["end"], "mood": "normal",
+                          "role": "curtain"})
+            continue
         if b["type"] == "title":
             first = next((first_video(x["items"]) for x in seg_blocks if x["items"]), None)
             title_png = shots_dir / f"title2_{_key(script.get('title', ''), str(accent))}.png"
@@ -687,7 +760,7 @@ def step_build(cfg, niche, project, log=print, stop_flag=lambda: False, progress
         span = (b["end"] - b["start"]) / SR
         # надпись абзаца: не чаще раза в label_gap секунд
         if (cfg.get("show_labels", True) and s.get("label") and seg_start - last_label >= label_gap
-                and seg_start >= TITLE_SEC + 1):
+                and seg_start >= title_sec + 1):
             lp = shots_dir / f"label2_{_key(s['label'], str(accent))}.png"
             extras.make_label(s["label"], lp, accent)
             add_overlay(lp, seg_start + 0.3, min(LABEL_SEC, span - 0.4), "label")
@@ -700,9 +773,21 @@ def step_build(cfg, niche, project, log=print, stop_flag=lambda: False, progress
         for spec in specs_:                        # карта маршрута — заранее, у неё свой кадр
             if spec["visual"] == "map" and not spec.get("items"):
                 try:
-                    spec["items"] = [_map_item(spec, b, shots_dir, max(0.5, spec["t1"] - spec["t0"]), spec["t0"])]
+                    spec["items"] = [_map_item(spec, b, shots_dir, max(0.5, spec["t1"] - spec["t0"]), spec["t0"], log)]
                 except Exception as e:
                     log(f"  Карта не получилась ({e}) — будет обычный кадр.")
+        for spec in specs_:                        # переговоры и доска расследования — заранее, свои кадры
+            if spec["visual"] == "radio" and not spec.get("items"):
+                try:
+                    spec["items"] = [_radio_item(spec, b, shots_dir, max(0.5, spec["t1"] - spec["t0"]), radio_header)]
+                except Exception as e:
+                    log(f"  Кадр переговоров не получился ({str(e)[:120]}) — будет затемнение с субтитрами.")
+            if spec["visual"] == "board" and not spec.get("items"):
+                try:
+                    spec["items"] = [_board_item(spec, b, shots_dir, max(0.5, spec["t1"] - spec["t0"]), spec["t0"],
+                                                 board_state, script, finder, log)]
+                except Exception as e:
+                    log(f"  Доска расследования не получилась ({str(e)[:120]}) — будет обычный кадр.")
         for spec in specs_:                        # листы с текстом — заранее, у них свои кадры
             if spec["visual"] == "document" and not spec.get("items"):
                 try:
@@ -778,13 +863,15 @@ def step_build(cfg, niche, project, log=print, stop_flag=lambda: False, progress
                         items.append(extra)
                 k = len(items)
                 n = k if length / k <= long_lim else max(k, math.ceil(length / long_lim - 1e-6))
+                if spec.get("focus") and items[0]["kind"] == "image":   # фото с приближениями — один кадр на фразу
+                    items, k, n = items[:1], 1, 1
             pauses = [(t - t0, ln) for t, ln in b["pauses"] if t0 < t < t1]
             bounds = [x - t0 for x in b["sent_bounds"] if t0 < x < t1]
             cuts = timing.cut_points(length, n, pauses, bounds, min_shot=min_shot)
             edges = [0.0] + cuts + [length]
             fixed = [0.0]
             for a_, b_ in zip(edges, edges[1:]):
-                parts = max(1, math.ceil((b_ - a_) / long_lim - 1e-6))
+                parts = 1 if (spec.get("focus") and n == 1) else max(1, math.ceil((b_ - a_) / long_lim - 1e-6))
                 fixed += [a_ + (b_ - a_) * (q + 1) / parts for q in range(parts)]
             edges = fixed
             for j in range(len(edges) - 1):
@@ -803,6 +890,9 @@ def step_build(cfg, niche, project, log=print, stop_flag=lambda: False, progress
                     "who": _who(spec, roles) if (it or {}).get("person") else "",
                     "type_start": (it or {}).get("type_start"), "type_end": (it or {}).get("type_end"),
                     "map_times": (it or {}).get("map_times"),
+                    "focus": spec.get("focus") if (it and it["kind"] == "image" and n == 1) else None,
+                    "src_url": (it or {}).get("url", ""),
+                    "prolog": bool(b.get("prolog")),
                     "_qa": {"blk": b, "spec": spec, "a": t0 + edges[j], "b": t0 + edges[j + 1],
                             "url": (it or {}).get("url", "")},
                 })
@@ -824,7 +914,7 @@ def step_build(cfg, niche, project, log=print, stop_flag=lambda: False, progress
         def stretchable(x, extra, cap=6.0):
             # карточки людей, листы с текстом и фото людей не растягиваем; и никакой кадр — дольше 8 с
             return (x.get("_qa") and not x.get("_bad") and not x.get("person")
-                    and not str(x["_qa"].get("url", "")).startswith(("card:", "doc:", "map:"))
+                    and not str(x["_qa"].get("url", "")).startswith(("card:", "doc:", "map:", "radio:", "board:"))
                     and (x["e"] - x["s"] + extra) / SR <= cap)
         kept, dropped = [], 0
         for i, sh in enumerate(shots):
@@ -965,7 +1055,7 @@ def step_build(cfg, niche, project, log=print, stop_flag=lambda: False, progress
                     x["stack_solo"] = solo
             group.clear()
         for sh in shots:
-            ok = (sh["kind"] == "image" and sh.get("src") and not sh.get("role")
+            ok = (sh["kind"] == "image" and sh.get("src") and not sh.get("role") and not sh.get("focus")
                   and not Path(str(sh["src"])).name.startswith(("person_", "doc_", "map_")))
             if ok and group and len(group) < 4:
                 group.append(sh)
@@ -980,7 +1070,7 @@ def step_build(cfg, niche, project, log=print, stop_flag=lambda: False, progress
     first_s = {}
     for sh in shots:
         nm = Path(str(sh.get("src", ""))).name
-        if nm.startswith(("map_", "doc_")) and sh["kind"] == "video":
+        if nm.startswith(("map_", "doc_", "radio_", "board_")) and sh["kind"] == "video":
             first_s.setdefault(nm, sh["s"])
             sh["clip_start"] = round((sh["s"] - first_s[nm]) / SR, 3)
             if sh["clip_start"] > 0:
@@ -991,6 +1081,7 @@ def step_build(cfg, niche, project, log=print, stop_flag=lambda: False, progress
                     sh["type_end"] = sh["type_end"] - cs
                     sh["no_type"] = sh["type_end"] <= 0.1
     shots = _contiguous(shots, log)
+    _prepare_focus(cfg, project, shots, media_dir, log)
     # ---------- 5. переходы (только плавный наплыв), кадры, хвосты под переходы ----------
     for i, sh in enumerate(shots):
         f0 = round(sh["s"] / SR * render.FPS)
@@ -1001,7 +1092,11 @@ def step_build(cfg, niche, project, log=print, stop_flag=lambda: False, progress
             sh["trans"], sh["tail"] = "fade", 0
             continue
         nxt = shots[i + 1]
-        if sh.get("role") == "title":
+        if sh.get("role") == "curtain" or nxt.get("role") == "curtain":
+            sec = 0.7                                  # в занавес и из него — через темноту
+        elif sh.get("prolog") and nxt.get("prolog"):
+            sec = 0.22                                 # пролог: быстрые современные склейки
+        elif sh.get("role") == "title":
             sec = TR_TITLE
         elif sh.get("role") == "card" or nxt.get("role") == "card":
             sec = TR_CARD
@@ -1016,21 +1111,26 @@ def step_build(cfg, niche, project, log=print, stop_flag=lambda: False, progress
         if nxt.get("stack") is not None and not nxt.get("stack_solo"):
             fr = 0                                    # фото со вспышкой появляется сразу — вспышка звучит ровно на нём
         sh["trans"], sh["tail"] = "fade", fr
+        if sh.get("prolog") and nxt.get("prolog") and fr:
+            sh["trans"] = ("hblur", "flash", "hblur", "fade")[i % 4]      # «смазанный» рывок и вспышка
     for i, sh in enumerate(shots):
         g = _grade(niche, sh["mood"], bool(cfg.get("old_look", True)))
+        if Path(str(sh.get("src") or "")).name.startswith(("map_", "radio_", "board_")):
+            g = LIGHT_LOOK                             # у карты, доски и переговоров свои цвета — только зерно
         if sh.get("darken"):
             g = (g + "," if g != "null" else "") + DARKEN
         sh["grade"] = g
         sh["out"] = str(shots_dir / (f"{i:04d}_" + _key(sh["kind"], sh["src"], str(sh["frames"]), str(sh["tail"]),
                                                           sh["grade"], str(sh.get("zoom_in")), str(sh.get("offset_n", 0)),
                                                           str(sh.get("stack")), str(sh.get("stack_solo")),
+                                                          str(sh.get("focus_boxes") or ""),
                                                           *([f"cs{sh['clip_start']}"] if sh.get("clip_start") else []),
                                                           "v4") + ".mp4"))   # готовые кадры прошлых сборок подхватываются
 
     try:                                   # карта монтажа: время → кадр (для правок по таймкодам и проверки)
         _save_json(project / "монтаж_кадры.json", [
             {"t": round(sh["s"] / SR, 2), "end": round(sh["e"] / SR, 2), "kind": sh["kind"],
-             "file": Path(str(sh.get("src") or "")).name, "url": (sh.get("_qa") or {}).get("url", ""),
+             "file": Path(str(sh.get("src") or "")).name, "url": sh.get("src_url") or (sh.get("_qa") or {}).get("url", ""),
              "who": sh.get("who", ""), "person": bool(sh.get("person"))} for sh in shots])
     except Exception:
         pass
@@ -1527,6 +1627,9 @@ def _assign_specs(script_specs, units):
     mp = next((q for v, q in script_specs if v == "map"), None)
     if mp and units:                               # карта маршрута — на весь абзац одним кадром
         return [("map", mp)], [(units[0][0], units[-1][1])], [" ".join(u[2] for u in units)]
+    bd = next((q for v, q in script_specs if v == "board"), None)
+    if bd and units:                               # доска расследования — тоже на весь абзац
+        return [("board", bd)], [(units[0][0], units[-1][1])], [" ".join(u[2] for u in units)]
     n = len(units)
     vis = [["stock", ""] for _ in range(n)]
     persons = {}
@@ -1753,8 +1856,8 @@ def _quality_check(cfg, project, shots, finder, topic, log, progress):
         q = sh.get("_qa")
         if not q or sh["kind"] not in ("video", "image") or not sh.get("src"):
             continue
-        if str(q.get("url", "")).startswith(("doc:", "card:", "map:")):
-            continue                                   # листы с текстом и карточки людей — сделаны программой
+        if str(q.get("url", "")).startswith(("doc:", "card:", "map:", "radio:", "board:")):
+            continue                                   # листы, карты, доска, переговоры — сделаны программой
         if q.get("url") in trusted:
             skipped += 1
             continue
@@ -1786,7 +1889,124 @@ def _quality_check(cfg, project, shots, finder, topic, log, progress):
                            f"{len(entries)} — монтаж непроверенных кадров не начинаю. Повторите сборку позже.")
 
 
-def _map_item(spec, b, shots_dir, length, t0):
+def _pron_check(project, seg_blocks, say, log):
+    """Слышит ли распознавание речи то, что написано в сценарии. Слова, которые диктор, похоже, произнёс
+    неправильно (или распознавание их не узнало), — в «произношение.txt» с таймкодом и тем, что услышано.
+    Имена и иностранные слова распознавание часто не знает — такие строки нужно проверить на слух."""
+    import difflib
+    rows, checked = [], 0
+    for b in seg_blocks:
+        s = b["seg"]
+        rec = b.get("words")
+        if s.get("radio") or not rec:
+            continue
+        checked += 1
+        said = tts.spoken(s["text"], say)
+        orig = s["text"].split()
+        spk = said.split()
+        exp = [align.norm(w) for w in spk]
+        got = [align.norm(w) for _, _, w in rec]
+        sm = difflib.SequenceMatcher(a=exp, b=got, autojunk=False)
+        for tag, i1, i2, j1, j2 in sm.get_opcodes():
+            if tag == "equal":
+                continue
+            words = [w for w in spk[i1:i2] if len(align.norm(w)) >= 4 and not align.norm(w).isdigit()]
+            if not words:
+                continue
+            heard = " ".join(w for _, _, w in rec[j1:j2]) or "—"
+            t = (b["start"] / SR) + (rec[min(j1, len(rec) - 1)][0] if rec else 0)
+            near = " ".join(spk[max(0, i1 - 3):i2 + 3])
+            rows.append((t, " ".join(words), heard, near))
+    rows = [r for r in rows if r[1].lower() != r[2].lower()]
+    f = Path(project) / "произношение.txt"
+    lines = [f"Проверено абзацев: {checked}. Подозрительных мест: {len(rows)}.",
+             "Формат: время | в сценарии | услышано распознаванием | контекст", ""]
+    for t, w, h, near in rows:
+        lines.append(f"{int(t // 60)}:{int(t % 60):02d} | {w} | {h} | …{near}…")
+    f.write_text("\n".join(lines), encoding="utf-8")
+    if checked:
+        log(f"  Проверка произношения: {len(rows)} подозрительных мест (список — «произношение.txt»).")
+
+
+def _prepare_focus(cfg, project, shots, media_dir, log):
+    """Фото с приближениями: Claude находит на фото цели из строки [фокус] (люди, предметы), программа берёт
+    оригинал в высоком разрешении. Не нашлось — обычный плавный наезд."""
+    todo = [sh for sh in shots if sh.get("focus") and sh.get("kind") == "image" and sh.get("src")]
+    if not todo:
+        return
+    from . import claude_code
+    import requests
+    cache_f = Path(project) / "фокус.json"
+    cache = _load_json(cache_f, {})
+    work = Path(project) / "_фокус"
+    work.mkdir(exist_ok=True)
+    for sh in todo:
+        url = str(sh.get("src_url") or (sh.get("_qa") or {}).get("url") or "")
+        src = sh["src"]
+        if "/thumb/" in url and "upload.wikimedia.org" in url:      # оригинал Commons вместо уменьшенной копии
+            orig = url.replace("/thumb/", "/").rsplit("/", 1)[0]
+            dst = Path(media_dir) / f"orig_{_key(orig)}{Path(orig).suffix or '.jpg'}"
+            if not dst.exists():
+                try:
+                    r = requests.get(orig, timeout=60, headers={"User-Agent": "DocuStudio (documentary)"}, stream=True)
+                    if r.ok and int(r.headers.get("content-length") or 0) < 40_000_000:
+                        dst.write_bytes(r.content)
+                except Exception:
+                    pass
+            if dst.exists() and dst.stat().st_size > 20000:
+                src = str(dst)
+        ck = _key(src, json.dumps(sh["focus"], ensure_ascii=False), "f1")
+        boxes = cache.get(ck)
+        if boxes is None and cfg.get("visual_check") == "claude_code" and claude_code.find_exe():
+            try:
+                boxes = _ask_focus(cfg, work, src, sh["focus"], ck)
+            except Exception as e:
+                log(f"  Приближение: Claude не нашёл цели ({str(e)[:80]}).")
+                boxes = []
+            cache[ck] = boxes
+            _save_json(cache_f, cache)
+        boxes = [b for b in (boxes or []) if b]
+        if boxes:
+            sh["focus_boxes"] = boxes
+            sh["focus_src"] = src
+    n = sum(1 for sh in todo if sh.get("focus_boxes"))
+    log(f"  Фото с приближениями: {n} из {len(todo)}.")
+
+
+def _ask_focus(cfg, work, src, targets, ck):
+    from PIL import Image, ImageDraw
+    from . import claude_code
+    im = Image.open(src).convert("RGB")
+    im.thumbnail((1600, 1600))
+    d = ImageDraw.Draw(im)
+    f = extras._font(18, extras.SEMI_FONTS)
+    for k in range(1, 10):                       # сетка 10% — Claude точнее называет координаты
+        x, y = im.width * k / 10, im.height * k / 10
+        d.line([(x, 0), (x, im.height)], fill=(255, 230, 0), width=1)
+        d.line([(0, y), (im.width, y)], fill=(255, 230, 0), width=1)
+        d.text((x + 3, 3), f"{k * 10}", font=f, fill=(255, 230, 0))
+        d.text((3, y + 3), f"{k * 10}", font=f, fill=(255, 230, 0))
+    name = f"focus_{ck}.jpg"
+    im.save(Path(work) / name, quality=88)
+    tl = "\n".join(f"{i + 1}) {t}" for i, t in enumerate(targets))
+    prompt = (f"Открой файл {name} (фото с сеткой: жёлтые линии через каждые 10% ширины и высоты, подписаны). "
+              f"Найди на фото по порядку:\n{tl}\n"
+              "Для каждой цели дай рамку в процентах от ширины и высоты фото: [x0, y0, x1, y1] (левый верх и правый низ). "
+              "Рамка — плотно вокруг цели (для человека — голова и плечи). Если цели на фото нет — null. "
+              "Ответ — только JSON-массив без пояснений, например: [[12,30,25,58], null, [60,20,80,70]]")
+    raw = claude_code.run_cached(cfg, prompt, work, name, timeout=300)
+    m = re.search(r"\[\s*(?:\[|null).*\]", raw or "", re.S)
+    arr = json.loads(m.group(0)) if m else []
+    out = []
+    for b in arr[:len(targets)]:
+        if isinstance(b, list) and len(b) == 4 and all(isinstance(v, (int, float)) for v in b):
+            x0, y0, x1, y1 = [max(0.0, min(100.0, float(v))) / 100 for v in b]
+            if x1 - x0 > 0.01 and y1 - y0 > 0.01:
+                out.append([x0, y0, x1, y1])
+    return out
+
+
+def _map_item(spec, b, shots_dir, length, t0, log=print):
     """Карта маршрута: точка — в момент, когда диктор называет место (по распознанным словам)."""
     parts = [x.strip() for x in spec["map"].split("|") if x.strip()]
     title, pts = "", []
@@ -1820,11 +2040,89 @@ def _map_item(spec, b, shots_dir, length, t0):
     for i in range(1, len(times)):                     # по порядку и не теснее 1,2 с
         times[i] = max(times[i], times[i - 1] + 1.2)
     clip_len = length + 1.5
-    out = shots_dir / f"map_{_key(spec['map'], f'{clip_len:.2f}', str([round(t, 2) for t in times]))}.mp4"
+    out = shots_dir / f"map_{_key(spec['map'], f'{clip_len:.2f}', str([round(t, 2) for t in times]), 'geo1')}.mp4"
     if not out.exists():
-        extras.make_map_clip(title, pts, times, clip_len, out, seed=spec["map"])
+        from . import fx
+        made = None
+        try:                                       # географическая карта: рельеф, море, суша
+            made = fx.make_geo_map_clip(title, pts, times, clip_len, out, seed=spec["map"], log=log)
+        except Exception as e:
+            log(f"  Карта с рельефом не получилась ({str(e)[:100]}) — старая бумажная карта.")
+            Path(out).unlink(missing_ok=True)
+        if not made:
+            extras.make_map_clip(title, pts, times, clip_len, out, seed=spec["map"])
     return {"path": str(out), "kind": "video", "url": "map:" + title[:40], "duration": clip_len + 0.5,
             "map_times": times}
+
+
+def _radio_item(spec, b, shots_dir, length, header):
+    """Кадр переговоров: осциллограф по настоящему звуку, кто говорит, фраза и перевод."""
+    from . import fx
+    s = b["seg"]
+    lines = s.get("radio_timed") or []
+    clip_len = length + 0.6
+    out = shots_dir / f"radio_{_key(json.dumps(lines, ensure_ascii=False), f'{clip_len:.2f}', header, 'r1')}.mp4"
+    if not out.exists():
+        fx.make_radio_clip(lines, s["audio"], clip_len, out, header=header, seed=s.get("text", ""))
+    return {"path": str(out), "kind": "video", "url": "radio:" + out.stem, "duration": clip_len + 0.5}
+
+
+def _board_people(q):
+    out = []
+    for part in q.split(";"):
+        nm, _, role = part.partition("=")
+        if nm.strip():
+            out.append((nm.strip(), role.strip()))
+    return out
+
+
+def _board_item(spec, b, shots_dir, length, t0, state, script, finder, log):
+    """Доска расследования: люди из строки [доска] добавляются к уже висящим; камера подъезжает к новым
+    в момент, когда диктор называет имя."""
+    from . import fx
+    people = _board_people(spec["board"])
+    new = []
+    for nm, role in people:
+        if nm not in [p["name"] for p in state["pins"]]:
+            photo = state["photos"].get(nm)
+            if photo is None:
+                # только проверенное фото из сценария (#! ФОТО): поиск по имени может найти однофамильца —
+                # чужое лицо на доске хуже честного силуэта со знаком вопроса
+                last = align.norm(nm.split()[-1])
+                url = next((u for k, u in (script.get("photos") or {}).items()
+                            if k == nm or align.norm(k.split()[-1]) == last), "")
+                photo = ""
+                if url:
+                    try:
+                        pth = finder._download({"kind": "image", "url": url, "thumb": url, "source": "manual",
+                                                "page": url, "title": nm, "author": "", "license": ""})
+                        photo = str(pth) if pth else ""
+                    except Exception as e:
+                        log(f"  Фото для доски ({nm}) не скачалось: {str(e)[:80]}")
+                state["photos"][nm] = photo
+            state["pins"].append({"name": nm, "role": role, "photo": photo or None})
+            new.append(nm)
+    rec = b.get("words") or []
+    times = []
+    for nm in new:
+        last = nm.split()[-1]
+        st = align.word_time(rec, align.norm(last)[:max(4, len(align.norm(last)) - 2)], t0 - 0.2, t0 + length) if rec else None
+        times.append(None if st is None else st - t0)
+    if times and all(t is not None for t in times):
+        for i in range(1, len(times)):
+            times[i] = max(times[i], times[i - 1] + 1.4)
+    else:
+        times = None
+    bd = script.get("board") or {}
+    title, sub = bd.get("title") or script.get("title", "")[:28], bd.get("sub", "")
+    clip_len = length + 0.8
+    pins = [dict(p) for p in state["pins"]]
+    key = _key(json.dumps(pins, ensure_ascii=False), str(new), f"{clip_len:.2f}", str(times), title, sub, "b1")
+    out = shots_dir / f"board_{key}.mp4"
+    if not out.exists():
+        fx.make_board_clip(title, sub, pins, new, clip_len, out, seed=title, times=times,
+                           focus_names=[nm for nm, _ in people])
+    return {"path": str(out), "kind": "video", "url": "board:" + out.stem, "duration": clip_len + 0.5}
 
 
 def _document_item(spec, b, shots_dir, length, t0):
