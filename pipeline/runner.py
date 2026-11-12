@@ -808,6 +808,7 @@ def step_build(cfg, niche, project, log=print, stop_flag=lambda: False, progress
             items = list(spec.get("items") or [])
             t0, t1 = spec["t0"], spec["t1"]
             length = t1 - t0
+            ms = PROLOG_SHOT if b.get("prolog") else min_shot      # в прологе кадры короче
             if spec.get("auto_person") and any(it.get("person") for it in items) and cfg.get("show_labels", True) \
                     and length >= 1.8 and seg_start + t0 + 0.1 >= busy_until[0]:
                 nm = spec["auto_person"][1]               # фото названного во фразе человека — подпись с именем
@@ -855,7 +856,7 @@ def step_build(cfg, niche, project, log=print, stop_flag=lambda: False, progress
             long_lim = max_shot * 2.2                   # один ролик может идти дольше, лишь бы не повторяться
             n = spec["n"]
             if items:
-                k = min(len(items), max(1, int(length / min_shot)))   # лишние кадры не берём — без мельтешения
+                k = min(len(items), max(1, int(length / ms)))         # лишние кадры не берём — без мельтешения
                 items = items[:k]
                 while length / len(items) > lim and reserve:          # мало кадров — добираем одобренные из этой сцены
                     extra = reserve.pop(0)
@@ -867,7 +868,7 @@ def step_build(cfg, niche, project, log=print, stop_flag=lambda: False, progress
                     items, k, n = items[:1], 1, 1
             pauses = [(t - t0, ln) for t, ln in b["pauses"] if t0 < t < t1]
             bounds = [x - t0 for x in b["sent_bounds"] if t0 < x < t1]
-            cuts = timing.cut_points(length, n, pauses, bounds, min_shot=min_shot)
+            cuts = timing.cut_points(length, n, pauses, bounds, min_shot=ms)
             edges = [0.0] + cuts + [length]
             fixed = [0.0]
             for a_, b_ in zip(edges, edges[1:]):
