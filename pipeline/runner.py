@@ -1464,7 +1464,8 @@ def _choose_with_claude_code(cfg, project, finder, lines, rev_path, ch_path, top
                 ks = [k for k in ks if 1 <= k <= len(by_no[no]["cands"])]
                 choices[no] = list(dict.fromkeys(choices.get(no, []) + ks))
     for no, ln_ in by_no.items():                 # фото по прямой ссылке из сценария — берём всегда
-        if ln_["cands"] and ln_["cands"][0].get("source") == "manual" and 1 not in choices.get(no, []):
+        if ln_["cands"] and ln_["cands"][0].get("source") in ("manual", "указано в сценарии") \
+                and 1 not in choices.get(no, []):
             choices[no] = [1] + [k for k in choices.get(no, []) if k != 1]
     short = sum(1 for no in by_no if not choices.get(no))
     if short:
@@ -1652,7 +1653,7 @@ def _assign_specs(script_specs, units):
             hit = [i for i, (_, _, t) in enumerate(units)
                    if any(st and any(align.norm(w).startswith(st[0]) for w in t.split()) for st in names)]
             k = min(len(units) - 2, max(hit + [0]))
-            while k < len(units) - 2 and units[k][1] - units[0][0] < 6.0:
+            while k < len(units) - 1 and units[k][1] - units[0][0] < 6.5:
                 k += 1                                 # нить, фото и пауза на лице — не меньше ~6 с
         head = [("board", bd)], [(units[0][0], units[k][1])], [" ".join(u[2] for u in units[:k + 1])]
         if k >= len(units) - 1:
@@ -1904,8 +1905,9 @@ def _quality_check(cfg, project, shots, finder, topic, log, progress):
             continue
         if str(q.get("url", "")).startswith(("doc:", "card:", "map:", "radio:", "board:")):
             continue                                   # листы, карты, доска, переговоры — сделаны программой
-        if q.get("url") in trusted:
-            skipped += 1
+        if q.get("url") in trusted or sh.get("person") or \
+                str((q.get("spec") or {}).get("query", "")).startswith("http"):
+            skipped += 1                               # портреты и фото по прямой ссылке из сценария — не трогаем
             continue
         rec = q["blk"].get("words")
         if rec:

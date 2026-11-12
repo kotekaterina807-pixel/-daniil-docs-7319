@@ -52,9 +52,10 @@ def collect(finder, spec, taken):
         # только подлинные фото темы или нейтральная атмосфера
         fq = spec.get("fill_query") or ""
         if re.search(r"portrait|woman|man\b|men\b|girl|boy|face|person|people|student|veteran|professor|"
-                     r"scientist|prosecutor|officer|soldier|teacher|doctor|captain", fq, re.I):
-            fq = ""
-        query, visual = fq or "old archive documents desk candle", "stock"
+                     r"scientist|prosecutor|officer|soldier|teacher|doctor|captain|pilot|aviator|airman|sailor|"
+                     r"marine|crew|navy|army|cadet|instructor", fq, re.I):
+            fq = ""                                # чужое лицо рядом с именем героя зритель примет за героя
+        query, visual = fq or "dark storm clouds over the sea", "stock"
     else:
         query, visual = spec["query"], spec["visual"]
     pool, seen_pool = [], set()
@@ -70,7 +71,7 @@ def collect(finder, spec, taken):
         when = spec["auto_person"][2] if len(spec["auto_person"]) > 2 else spec.get("when", "")
         allp = [c for c in finder._person_photos(en, ru, when) if c.get("thumb")]
         fresh = [c for c in allp if c["url"] not in taken]
-        for c in (fresh or allp[:1]):
+        for c in fresh:                            # его фото уже было — не повторяем (раньше один портрет стоял 8 раз подряд)
             if c["url"] not in seen_pool:
                 seen_pool.add(c["url"])
                 pool.append(dict(c, person=en))
