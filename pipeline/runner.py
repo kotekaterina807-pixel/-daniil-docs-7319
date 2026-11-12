@@ -276,9 +276,9 @@ def _sfx_events(shots):
         is_photo = sh.get("kind") == "image" and not name.startswith(("doc_", "map_", "person_"))
         if is_photo and sh.get("stack") is not None and not sh.get("stack_solo") and t0 - last_photo > 3.5 \
                 and not sh.get("prolog"):
-            fl = pick("slide")                            # фото ложится в стопку — мягкий шелест (не чаще раза в 3,5 с)
+            fl = pick("drop")                             # фото ложится в стопку — мягкий тёплый «тук» в момент касания
             if fl:
-                ev.append({"file": fl, "at": t0 - 0.15, "dur": 0.75, "vol": 0.16, "fade": 0.2})
+                ev.append({"file": fl, "at": t0 + 0.3, "dur": 0.8, "vol": 0.12, "fade": 0.3})
                 last_photo = t0
         if sh.get("person") and not name.startswith("person_") and t0 - last_hit > 20:
             h = pick("hit")                               # настоящий портрет героя — низкий удар (не чаще раза в 20 с)
@@ -291,17 +291,18 @@ def _sfx_events(shots):
             while j + 1 < len(shots) and Path(str(shots[j + 1].get("src", ""))).name == name:
                 j += 1
             m_end = shots[j]["e"] / SR - 0.3              # конец карты на экране
-            pn, pi = pick("pen"), pick("pin")
+            pn, pi = pick("trace"), pick("mark")
             mts = sh["map_times"]
+            from .fx import dash_secs
             for k, mt in enumerate(mts):
                 at = t0 + mt
                 if at >= m_end:
                     break
-                sd = min(2.8, max(1.4, 0.8 * (mts[k] - mts[k - 1]))) if k else 0.0   # сколько прокладывается пунктир
+                sd = dash_secs(mts[k] - mts[k - 1]) if k else 0.0   # ровно пока ложится пунктир
                 if k and pn and at - sd >= t0:
-                    ev.append({"file": pn, "at": at - sd, "dur": sd, "vol": 0.09, "fade": 0.15})
-                if pi:
-                    ev.append({"file": pi, "at": at, "dur": 0.35, "vol": 0.18, "fade": 0.05})
+                    ev.append({"file": pn, "at": at - sd, "dur": sd, "vol": 0.07, "fade": 0.3})
+                if pi:                                    # точка появилась — мягкий короткий тон
+                    ev.append({"file": pi, "at": at, "dur": 0.9, "vol": 0.1, "fade": 0.3})
         if sh.get("role") == "curtain":                   # занавес после пролога — глухой удар в темноту
             h = pick("hit")
             if h:
@@ -1647,8 +1648,21 @@ def _speech_units(sents, pauses, span, rec=None):
 def _assign_specs(script_specs, units):
     """Строки кадров сценария → фразы. [человек] — к фразе, где звучит его имя; остальные — по порядку."""
     mp = next((q for v, q in script_specs if v == "map"), None)
-    if mp and units:                               # карта маршрута — на весь абзац одним кадром
-        return [("map", mp)], [(units[0][0], units[-1][1])], [" ".join(u[2] for u in units)]
+    if mp and units:                               # карта маршрута — до последнего названного места, не дольше
+        rest = [(v, q) for v, q in script_specs if v != "map"]
+        k = len(units) - 1
+        if rest and len(units) > 1:
+            places = [re.sub(r"\s+-?\d+(?:[.,]\d+)?\s+-?\d+(?:[.,]\d+)?$", "", x.strip())
+                      for x in mp.split("|")[1:]]
+            st_ = [_stems(p_)[:1] for p_ in places if p_]
+            hit = [i for i, (_, _, t) in enumerate(units)
+                   if any(s_ and any(align.norm(w).startswith(s_[0]) for w in t.split()) for s_ in st_)]
+            k = min(len(units) - 2, max(hit + [0]))
+        head = [("map", mp)], [(units[0][0], units[k][1])], [" ".join(u[2] for u in units[:k + 1])]
+        if k >= len(units) - 1:
+            return head
+        s2, r2, t2 = _assign_specs(rest, units[k + 1:])
+        return head[0] + s2, head[1] + r2, head[2] + t2
     bd = next((q for v, q in script_specs if v == "board"), None)
     if bd and units:                               # доска расследования — до последнего названного на ней имени
         rest = [(v, q) for v, q in script_specs if v != "board"]
@@ -2093,8 +2107,8 @@ def _map_item(spec, b, shots_dir, length, t0, log=print):
             bnd = times[nxt] if nxt is not None else max(a + 1.5, length - 1.2)
             span = (nxt if nxt is not None else len(times)) - (prev if prev is not None else -1)
             times[i] = a + (bnd - a) * (i - (prev if prev is not None else -1)) / max(1, span)
-    for i in range(1, len(times)):                     # по порядку и не теснее 1,2 с
-        times[i] = max(times[i], times[i - 1] + 1.2)
+    for i in range(1, len(times)):                     # по порядку; пунктир успевает дойти до места
+        times[i] = max(times[i], times[i - 1] + 2.0)
     clip_len = length + 1.5
     out = shots_dir / f"map_{_key(spec['map'], f'{clip_len:.2f}', str([round(t, 2) for t in times]), 'geo1')}.mp4"
     if not out.exists():

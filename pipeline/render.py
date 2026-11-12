@@ -664,19 +664,41 @@ def assemble(shots, out, workdir, log=print, group_size=20, on_progress=lambda d
 # Музыка: каждый трек сначала выравнивается по громкости (тихий и громкий трек звучат одинаково),
 # в ней чуть приглушается диапазон голоса (2–3 кГц), чтобы слова звучали чище, и она мягко уходит
 # вниз, пока говорит диктор, и плавно возвращается в паузах. Итог: музыка на ~15–18 дБ тише голоса.
-DUCK = "sidechaincompress=threshold=0.015:ratio=12:attack=15:release=900:makeup=1"
+DUCK = "sidechaincompress=threshold=0.012:ratio=14:attack=12:release=1000:makeup=1"
 # Музыка тише и сильнее прижимается под голос; звуки (фото, листы, карта) тише, чтобы не перебивать диктора.
 VOICE_NORM = "anull"      # выравнивание голоса (loudnorm) убрано: на ПК пользователя после него пропал звук
 SFX_GAIN = 0.4
 
 
-def _music_chain(music_volume):
-    k = max(0.0, float(music_volume)) / 0.12 * 0.075        # ползунок 0.12 (по умолчанию) = нормальный уровень
-    return ("aformat=sample_rates=48000:channel_layouts=stereo,loudnorm=I=-24:TP=-4:LRA=11,"
-            f"equalizer=f=2500:t=q:w=1.2:g=-4,volume={k:.3f}")
+def _voice_lufs(narration):
+    """Громкость голоса диктора (LUFS) — музыка ставится относительно неё, а не «вслепую»."""
+    try:
+        p = subprocess.run([ffmpeg_exe(), "-hide_banner", "-nostats", "-i", str(narration), "-af", "ebur128",
+                            "-f", "null", "-"], capture_output=True, text=True, encoding="utf-8", errors="replace",
+                           timeout=600, creationflags=_NO_WINDOW)
+        import re as _re
+        m = _re.findall(r"I:\s*(-?[\d.]+)\s*LUFS", p.stderr)
+        v = float(m[-1]) if m else None
+        return v if v is not None and -60 < v < 0 else None
+    except Exception:
+        return None
 
 
-def _sfx_track(sfx, total_sec, out):
+MUSIC_BELOW_VOICE = 21.0       # дБ: музыка — фоном, слышна, но голос главный (под голосом прижимается ещё сильнее)
+
+
+def _music_chain(music_volume, voice_i=None):
+    """Музыка на MUSIC_BELOW_VOICE дБ тише голоса; ползунок 0.12 — это уровень по умолчанию,
+    0.24 — на 6 дБ громче, 0.06 — на 6 дБ тише."""
+    import math as _m
+    rel = 20 * _m.log10(max(0.01, float(music_volume)) / 0.12)
+    target = (voice_i if voice_i is not None else -20.0) - MUSIC_BELOW_VOICE + rel
+    target = max(-60.0, min(-20.0, target))
+    return ("aformat=sample_rates=48000:channel_layouts=stereo,"
+            f"loudnorm=I={target:.1f}:TP=-6:LRA=11,equalizer=f=2500:t=q:w=1.2:g=-4")
+
+
+def _sfx_track(sfx, total_sec, out, gain=1.0):
     """Звуковые эффекты (их может быть сотни на 30 минут) раскладываются в одну дорожку заранее:
     один вход для FFmpeg вместо сотен."""
     sr = 48000
@@ -703,7 +725,7 @@ def _sfx_track(sfx, total_sec, out):
         if a >= n:
             continue
         clip = clip[: n - a]
-        buf[a:a + len(clip)] += clip * float(e["vol"]) * SFX_GAIN
+        buf[a:a + len(clip)] += clip * float(e["vol"]) * SFX_GAIN * gain
     if not np.any(buf):
         return None
     import wave
@@ -749,16 +771,18 @@ def _final_mix_sfx(cmd, music, out, total_sec, music_volume, sfx, fade_out_start
     cmd = list(cmd)
     idx = 2
     parts = [f"[1:a]aformat=sample_rates=48000:channel_layouts=stereo,{VOICE_NORM},asplit=2[n1][n2]"]
+    voice_i = _voice_lufs(cmd[cmd.index("-i", cmd.index("-i") + 1) + 1])
+    sfx_gain = 10 ** (((voice_i if voice_i is not None else -20.0) + 20.0) / 20)   # звуки — относительно голоса
     mix = ["[n1]"]
     if music:
         cmd += ["-stream_loop", "-1", "-i", str(music)]
-        parts.append(f"[{idx}:a]{_music_chain(music_volume)}[m]")
+        parts.append(f"[{idx}:a]{_music_chain(music_volume, voice_i)}[m]")
         parts.append(f"[m][n2]{DUCK}[duck]")
         mix.append("[duck]")
         idx += 1
     else:
         parts.append("[n2]anullsink")
-    track = _sfx_track(sfx, total_sec, Path(out).with_suffix(".sfx.wav"))   # все звуки — одной дорожкой
+    track = _sfx_track(sfx, total_sec, Path(out).with_suffix(".sfx.wav"), sfx_gain)   # все звуки — одной дорожкой
     if track:
         cmd += ["-i", str(track)]
         parts.append(f"[{idx}:a]aformat=sample_rates=48000:channel_layouts=stereo[sx]")
@@ -780,7 +804,7 @@ def final_mix(video, narration, music, out, total_sec, music_volume=0.12, sfx=No
     if music:
         cmd += ["-stream_loop", "-1", "-i", str(music)]
         filt = (f"[1:a]aformat=sample_rates=48000:channel_layouts=stereo,{VOICE_NORM},asplit=2[n1][n2];"
-                f"[2:a]{_music_chain(music_volume)}[m];"
+                f"[2:a]{_music_chain(music_volume, _voice_lufs(narration))}[m];"
                 f"[m][n2]{DUCK}[duck];"
                 f"[n1][duck]amix=inputs=2:duration=first:normalize=0,"
                 f"loudnorm=I=-16:TP=-1.5:LRA=11,afade=t=in:d=1.5,afade=t=out:st={fade_out_start:.2f}:d=3[a]")

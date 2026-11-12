@@ -133,6 +133,41 @@ def slide(path, seed=29):
     _save(path, band * env + touch)
 
 
+def drop(path, seed=31):
+    """Фото ложится на стол: тёплый глухой «тук» с коротким мягким хвостом, без шороха и щелчков."""
+    rng = np.random.default_rng(seed)
+    n = int(0.8 * SR)
+    t = np.arange(n) / SR
+    f = 105 - 35 * np.clip(t / 0.12, 0, 1)                             # тон чуть опускается — «мягко»
+    body = np.sin(2 * np.pi * np.cumsum(f) / SR) * np.exp(-t / 0.09)
+    tick = _onepole(rng.standard_normal(n), 0.85) * np.exp(-t / 0.006) * 0.25   # еле заметное касание
+    room = _onepole(rng.standard_normal(n), 0.97) * np.exp(-t / 0.18) * 0.12
+    att = np.clip(t / 0.004, 0, 1)
+    _save(path, (body + tick + room) * att)
+
+
+def mark(path, seed=37):
+    """Точка на карте: мягкий деревянный тон (как маримба), без резкой атаки."""
+    n = int(0.9 * SR)
+    t = np.arange(n) / SR
+    f0 = 587.3                                                          # ре второй октавы — нейтрально, не тревожно
+    x = (np.sin(2 * np.pi * f0 * t) * np.exp(-t / 0.28) + 0.35 * np.sin(2 * np.pi * f0 * 2 * t) * np.exp(-t / 0.12)
+         + 0.12 * np.sin(2 * np.pi * f0 * 4.01 * t) * np.exp(-t / 0.05))
+    _save(path, x * np.clip(t / 0.006, 0, 1))
+
+
+def trace(path, seconds=4.0, seed=41):
+    """Путь ложится на карту: ровное мягкое «дыхание» кисти по бумаге — без штрихов и скрипа."""
+    rng = np.random.default_rng(seed)
+    n = int(seconds * SR)
+    t = np.arange(n) / SR
+    noise = rng.standard_normal(n)
+    band = _onepole(noise, 0.75) - _onepole(noise, 0.985)               # тёплая полоса, без шипения
+    swell = 0.75 + 0.25 * np.sin(2 * np.pi * 0.6 * t)
+    env = np.clip(t / 0.35, 0, 1) * np.clip((seconds - t) / 0.4, 0, 1) * swell
+    _save(path, band * env)
+
+
 def rustle(path, seed=9):
     """Лист бумаги кладут на стол — короткий сухой шорох."""
     rng = np.random.default_rng(seed)
@@ -189,7 +224,7 @@ def ensure(sfx_dir):
                 if nm not in names:                            # несколько вариантов — не звучит одинаково
                     flash(sfx_dir / nm, seed=sd)
         for kind, fn in (("paper", paper_drop), ("rustle", rustle), ("pen", pen), ("pin", pin), ("hit", hit),
-                         ("slide", slide)):
+                         ("slide", slide), ("drop", drop), ("mark", mark), ("trace", trace)):
             if not any(n.startswith(kind) for n in names):
                 fn(sfx_dir / f"{kind}_auto.wav")
         (sfx_dir / "whoosh_auto.wav").unlink(missing_ok=True)        # старый «вжух» не понравился — заменён

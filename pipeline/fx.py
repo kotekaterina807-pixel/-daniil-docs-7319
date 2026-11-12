@@ -214,6 +214,11 @@ def terrain_base(points, w, h, pad=0.42, min_span=(2.4, 3.6), log=None):
     return img, xy
 
 
+def dash_secs(dt):
+    """Сколько секунд пунктир «ложится» от точки к точке: неторопливо, но успевает до следующего места."""
+    return min(4.0, max(1.8, 0.85 * dt))
+
+
 def make_geo_map_clip(title, points, times, length, out_mp4, seed="", log=None):
     """Географическая карта: точки появляются, когда диктор называет место; пунктир плавно
     «прокладывается» к следующей точке (2–3 с, мягкий старт и финиш), камера чуть приближается.
@@ -263,7 +268,7 @@ def make_geo_map_clip(title, points, times, length, out_mp4, seed="", log=None):
 
     P = [xy(p[1], p[2]) for p in points]
     times = list(times) + [length - 1.0] * (len(points) - len(times))
-    seg = [0.0] + [min(2.8, max(1.4, 0.8 * (times[i] - times[i - 1]))) for i in range(1, len(points))]
+    seg = [0.0] + [dash_secs(times[i] - times[i - 1]) for i in range(1, len(points))]
     fl = _font(38, SERIF_BOLD)
     n = max(1, int(round(length * FPS)))
     # подписи мест не налезают друг на друга и на точки: для каждой — свободная сторона
