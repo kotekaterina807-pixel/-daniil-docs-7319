@@ -1662,6 +1662,10 @@ def _assign_specs(script_specs, units):
             hit = [i for i, (_, _, t) in enumerate(units)
                    if any(s_ and any(align.norm(w).startswith(s_[0]) for w in t.split()) for s_ in st_)]
             k = min(len(units) - 2, max(hit + [0]))
+            npts = len([x for x in mp.split("|")[1:] if x.strip()])
+            need = 0.4 + 2.3 * max(0, npts - 1) + 1.2      # путь успевает полностью лечь, и на конце — пауза
+            while k < len(units) - 1 and units[k][1] - units[0][0] < need:
+                k += 1
         head = [("map", mp)], [(units[0][0], units[k][1])], [" ".join(u[2] for u in units[:k + 1])]
         if k >= len(units) - 1:
             return head
@@ -2111,8 +2115,13 @@ def _map_item(spec, b, shots_dir, length, t0, log=print):
             bnd = times[nxt] if nxt is not None else max(a + 1.5, length - 1.2)
             span = (nxt if nxt is not None else len(times)) - (prev if prev is not None else -1)
             times[i] = a + (bnd - a) * (i - (prev if prev is not None else -1)) / max(1, span)
+    gap = min(2.3, max(1.0, (length - 1.2 - times[0]) / max(1, len(times) - 1)))
     for i in range(1, len(times)):                     # по порядку; пунктир успевает дойти до места
-        times[i] = max(times[i], times[i - 1] + 2.0)
+        times[i] = max(times[i], times[i - 1] + gap)
+    if times[-1] > length - 1.0 and times[-1] > times[0]:   # весь путь должен лечь до смены кадра
+        a_ = times[0]
+        sc_ = max(0.2, (length - 1.0 - a_)) / (times[-1] - a_)
+        times = [a_ + (t_ - a_) * sc_ for t_ in times]
     clip_len = length + 1.5
     out = shots_dir / f"map_{_key(spec['map'], f'{clip_len:.2f}', str([round(t, 2) for t in times]), 'geo1')}.mp4"
     if not out.exists():

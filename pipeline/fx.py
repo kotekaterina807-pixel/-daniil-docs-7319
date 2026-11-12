@@ -216,7 +216,7 @@ def terrain_base(points, w, h, pad=0.42, min_span=(2.4, 3.6), log=None):
 
 def dash_secs(dt):
     """Сколько секунд пунктир «ложится» от точки к точке: неторопливо, но успевает до следующего места."""
-    return min(4.0, max(1.8, 0.85 * dt))
+    return min(4.0, max(1.2, 0.85 * dt))
 
 
 def make_geo_map_clip(title, points, times, length, out_mp4, seed="", log=None):
