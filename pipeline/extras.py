@@ -1,4 +1,5 @@
 """Субтитры, описание с таймкодами, обложка, карточки глав."""
+import math
 import os
 import re
 import textwrap
@@ -520,6 +521,47 @@ def make_document_clip(text, head, reveal, length, out_mp4, seed=""):
     return out_mp4
 
 
+def place_labels(d, names, P, font, w, h, line_h=48):
+    """Где писать названия мест: рядом с точкой (сверху, снизу, сбоку), не на пунктире, не на других
+    подписях и точках. Повторное место (возвращение) — без второй подписи (None)."""
+    taken = [(x - 18, y - 18, x + 18, y + 18) for x, y in P]
+    path_pts = []
+    for i in range(1, len(P)):
+        (xa, ya), (xb, yb) = P[i - 1], P[i]
+        L_ = max(1.0, math.hypot(xb - xa, yb - ya))
+        for q in range(int(L_ // 8) + 1):
+            path_pts.append((xa + (xb - xa) * q * 8 / L_, ya + (yb - ya) * q * 8 / L_))
+
+    def hits(r_):
+        return sum(1 for px, py in path_pts if r_[0] - 10 <= px <= r_[2] + 10 and r_[1] - 10 <= py <= r_[3] + 10)
+
+    out = []
+    for k_, (name, (x, y)) in enumerate(zip(names, P)):
+        if name in names[:k_]:
+            out.append(None)
+            continue
+        tw = d.textlength(name, font=font)
+        up, dn = line_h + 32, 28
+        cands = [(x - tw / 2, y - up), (x - tw / 2, y + dn), (x + 30, y - line_h / 2), (x - 30 - tw, y - line_h / 2),
+                 (x + 30, y - up + 10), (x - 30 - tw, y - up + 10), (x + 30, y + dn - 10), (x - 30 - tw, y + dn - 10),
+                 (x - tw / 2, y - up - 40), (x - tw / 2, y + dn + 40), (x + 40, y - up - 30), (x - 40 - tw, y + dn + 30)]
+        best, best_score = None, None
+        for cx_, cy_ in cands:
+            r_ = (cx_ - 6, cy_ - 4, cx_ + tw + 6, cy_ + line_h)
+            if r_[0] < w * 0.04 or r_[2] > w * 0.96 or r_[1] < h * 0.04 or r_[3] > h * 0.96:
+                continue
+            over = sum(1 for a in taken if not (r_[2] < a[0] or r_[0] > a[2] or r_[3] < a[1] or r_[1] > a[3]))
+            score = over * 1000 + hits(r_)
+            if best_score is None or score < best_score:
+                best, best_score = (cx_, cy_), score
+            if score == 0:
+                break
+        best = best or cands[0]
+        taken.append((best[0] - 6, best[1] - 4, best[0] + tw + 6, best[1] + line_h))
+        out.append(best)
+    return out
+
+
 def make_map_clip(title, points, times, length, out_mp4, seed=""):
     """Старая карта: точки появляются, когда диктор называет место, а пунктир маршрута
     «прокладывается» к каждой новой точке ровно к моменту, когда звучит её название.
@@ -588,6 +630,8 @@ def make_map_clip(title, points, times, length, out_mp4, seed=""):
             d.line([(x0 + ux * s, y0 + uy * s), (x0 + ux * e, y0 + uy * e)], fill=red, width=6)
             s += dash + gap
 
+    lab = place_labels(ImageDraw.Draw(base), [p[0] for p in points], P, fl, base.width, base.height,
+                       line_h=int(fl.size * 1.25) if hasattr(fl, "size") else 40)
     lst = tmp / "list.txt"
     prev_state = None
     frames = []
@@ -616,7 +660,8 @@ def make_map_clip(title, points, times, length, out_mp4, seed=""):
                 x, y = P[i]
                 d.ellipse([x - 13, y - 13, x + 13, y + 13], outline=red, width=4)
                 d.ellipse([x - 6, y - 6, x + 6, y + 6], fill=red)
-                d.text((x + 24, y - 24), name, font=fl, fill=ink)
+                if lab[i] is not None:
+                    d.text(lab[i], name, font=fl, fill=ink)
         p_ = tmp / f"{len(frames):05d}.jpg"
         im.save(p_, quality=92)
         frames.append([p_, 1])

@@ -271,26 +271,9 @@ def make_geo_map_clip(title, points, times, length, out_mp4, seed="", log=None):
     seg = [0.0] + [dash_secs(times[i] - times[i - 1]) for i in range(1, len(points))]
     fl = _font(38, SERIF_BOLD)
     n = max(1, int(round(length * FPS)))
-    # подписи мест не налезают друг на друга и на точки: для каждой — свободная сторона
-    taken = [(x - 18, y - 18, x + 18, y + 18) for x, y in P]
-    lab = []
-    for k_, ((name, _, _), (x, y)) in enumerate(zip(points, P)):
-        if any(points[j][0] == name for j in range(k_)):  # возвращение в то же место — вторая подпись не нужна
-            lab.append(None)
-            continue
-        tw = d0.textlength(name, font=fl)
-        cands = [(x + 26, y - 26), (x - 26 - tw, y - 26), (x - tw / 2, y - 76), (x - tw / 2, y + 26),
-                 (x + 26, y + 8), (x - 26 - tw, y + 8), (x + 26, y - 62), (x - 26 - tw, y - 62)]
-        best = cands[0]
-        for cx_, cy_ in cands:
-            r_ = (cx_ - 6, cy_ - 4, cx_ + tw + 6, cy_ + 48)
-            if r_[0] < BW * 0.04 or r_[2] > BW * 0.96 or r_[1] < BH * 0.04 or r_[3] > BH * 0.96:
-                continue
-            if all(r_[2] < a[0] or r_[0] > a[2] or r_[3] < a[1] or r_[1] > a[3] for a in taken):
-                best = (cx_, cy_)
-                break
-        taken.append((best[0] - 6, best[1] - 4, best[0] + tw + 6, best[1] + 48))
-        lab.append(best)
+    # подписи мест рядом с точкой, но не на пунктире, не на других подписях и точках
+    from .extras import place_labels
+    lab = place_labels(d0, [p[0] for p in points], P, fl, BW, BH, line_h=48)
     focus = np.array(P, np.float32).mean(axis=0)
 
     def dashed(d, a, b, frac):
@@ -463,6 +446,130 @@ def make_radio_clip(lines, audio_wav, length, out_mp4, header="FUNKVERKEHR", see
                         d.text((160, de_y), row, font=f_de,
                                fill=tuple(int(v * al + 14 * (1 - al)) for v in grey))
                         de_y += 56
+            wr.add(im)
+    return out_mp4
+
+
+def _bg_frames(bg_video, start, length):
+    """Кадры фонового ролика (RGB, W×H) по порядку; ролик короче — идёт по кругу."""
+    while True:
+        cmd = [ffmpeg_exe(), "-hide_banner", "-loglevel", "error", "-ss", f"{max(0.0, start):.2f}", "-i", str(bg_video),
+               "-t", f"{length + 1:.2f}", "-an", "-vf",
+               f"scale={W}:{H}:force_original_aspect_ratio=increase,crop={W}:{H},fps={FPS},setsar=1",
+               "-f", "rawvideo", "-pix_fmt", "rgb24", "-"]
+        p = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, creationflags=_NW)
+        got = 0
+        while True:
+            b = p.stdout.read(W * H * 3)
+            if len(b) < W * H * 3:
+                break
+            got += 1
+            yield Image.frombytes("RGB", (W, H), b)
+        p.stdout.close()
+        p.wait()
+        if got == 0:
+            if start > 0:
+                start = 0.0
+                continue
+            return
+        start = 0.0
+
+
+def make_radio_overlay_clip(lines, audio_wav, length, out_mp4, bg_video, bg_start=0.0, label="FUNKSPRUCH"):
+    """Радио в прологе: хроника идёт дальше, сбоку — «голосовое сообщение»: кто говорит (или «неизвестный»),
+    полоски звука, которые закрашиваются по мере прослушивания, фраза в оригинале и перевод."""
+    x, sr = _wav_mono(audio_wav)
+    n = max(1, int(round(length * FPS)))
+    NB = 46
+    bars = []                                            # полоски громкости для каждой фразы
+    for ln in lines:
+        a_, b_ = int(ln["a"] * sr), int(ln["b"] * sr)
+        seg = x[a_:max(a_ + 1, b_)]
+        ch = np.array_split(seg, NB) if len(seg) >= NB else [seg] * NB
+        rms = np.array([float(np.sqrt(np.mean(c ** 2))) if len(c) else 0.0 for c in ch])
+        rms = rms / (rms.max() + 1e-6)
+        bars.append(0.18 + 0.82 * rms)
+    f_lab = _font(24, TYPE_BOLD)
+    f_who = _font(34, TYPE_BOLD)
+    f_en = _font(36, TYPE_FONTS)
+    f_de = _font(31, SERIF_IT)
+    f_t = _font(24, TYPE_FONTS)
+    amber, white, grey, red = (232, 178, 84), (240, 238, 230), (190, 190, 182), (214, 46, 40)
+    PX, PW = 80, 900
+    frames = _bg_frames(bg_video, bg_start, length) if bg_video else None
+    last_bg = Image.new("RGB", (W, H), (16, 16, 16))
+    with _Writer(out_mp4) as wr:
+        for f in range(n):
+            t = f / FPS
+            if frames is not None:
+                try:
+                    last_bg = next(frames)
+                except StopIteration:
+                    frames = None
+            im = Image.blend(last_bg, Image.new("RGB", (W, H), (0, 0, 0)), 0.22)
+            ci = None
+            for i, ln in enumerate(lines):
+                if ln["a"] - 0.3 <= t:
+                    ci = i
+            if ci is None:
+                wr.add(im)
+                continue
+            ln = lines[ci]
+            appear = min(1.0, max(0.0, (t - (lines[0]["a"] - 0.3)) / 0.35))
+            d0 = ImageDraw.Draw(im)
+            en, de = ln.get("en", ""), ln.get("de", "")
+            en_rows = _wrap(d0, "„" + en + "“", f_en, PW - 80)[:3] if en else []
+            de_rows = _wrap(d0, de, f_de, PW - 80)[:3] if de else []
+            ph = 40 + 34 + 52 + 74 + len(en_rows) * 46 + (14 if de_rows else 0) + len(de_rows) * 40 + 30
+            y0 = H - 70 - ph + int((1 - appear) * 40)
+            ov = Image.new("RGBA", (W, H), (0, 0, 0, 0))
+            d = ImageDraw.Draw(ov)
+            d.rounded_rectangle([PX, y0, PX + PW, y0 + ph], radius=26, fill=(10, 10, 10, int(205 * appear)),
+                                outline=(90, 84, 70, int(220 * appear)), width=2)
+            a8 = int(255 * appear)
+            cy = y0 + 30
+            if (f // 15) % 2 == 0:
+                d.ellipse([PX + 40, cy + 6, PX + 56, cy + 22], fill=red + (a8,))
+            d.text((PX + 70, cy), label.upper(), font=f_lab, fill=grey + (a8,))
+            el = max(0.0, min(ln["b"], t) - ln["a"])
+            tt = f"{int(el) // 60}:{int(el) % 60:02d} / {int(ln['b'] - ln['a'] + 0.99) // 60}:{int(ln['b'] - ln['a'] + 0.99) % 60:02d}"
+            d.text((PX + PW - 40 - d.textlength(tt, font=f_t), cy), tt, font=f_t, fill=grey + (a8,))
+            cy += 44
+            d.text((PX + 40, cy), ln.get("who", "").upper(), font=f_who, fill=amber + (a8,))
+            cy += 58
+            # кнопка и полоски «голосового»
+            bx, bmid = PX + 40, cy + 30
+            d.ellipse([bx, bmid - 28, bx + 56, bmid + 28], fill=amber + (a8,))
+            d.polygon([(bx + 22, bmid - 14), (bx + 22, bmid + 14), (bx + 42, bmid)], fill=(16, 16, 16, a8))
+            prog = min(1.0, max(0.0, (t - ln["a"]) / max(0.3, ln["b"] - ln["a"])))
+            gx0, gx1 = bx + 80, PX + PW - 40
+            step = (gx1 - gx0) / NB
+            for k in range(NB):
+                hh = 6 + 46 * float(bars[ci][k])
+                if prog * NB > k and ln["a"] <= t <= ln["b"]:   # сейчас звучит — полоска «живая»
+                    c = int(t * sr)
+                    w_ = x[max(0, c - 800): c + 800]
+                    live = float(np.sqrt(np.mean(w_ ** 2))) * 6 if len(w_) else 0
+                    hh = hh * (0.8 + 0.4 * min(1.0, live)) if k >= prog * NB - 3 else hh
+                col = white if prog * NB > k else (110, 108, 100)
+                xx = gx0 + k * step
+                d.rounded_rectangle([xx, bmid - hh / 2, xx + step * 0.55, bmid + hh / 2], radius=3, fill=col + (a8,))
+            cy += 74
+            if en_rows:                                   # оригинал печатается по мере звучания
+                span = max(0.6, (ln["b"] - ln["a"]) * 0.92)
+                full = "„" + en + "“"
+                k_ = int(len(full) * min(1.0, max(0.0, (t - ln["a"]) / span)))
+                shown = full[:k_]
+                for row in en_rows:
+                    part = shown[:len(row)]
+                    shown = shown[len(row):].lstrip()
+                    d.text((PX + 40, cy), part, font=f_en, fill=white + (a8,))
+                    cy += 46
+                cy += 14
+            for row in de_rows:
+                d.text((PX + 40, cy), row, font=f_de, fill=grey + (a8,))
+                cy += 40
+            im = Image.alpha_composite(im.convert("RGBA"), ov).convert("RGB")
             wr.add(im)
     return out_mp4
 

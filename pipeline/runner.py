@@ -788,7 +788,18 @@ def step_build(cfg, niche, project, log=print, stop_flag=lambda: False, progress
         for spec in specs_:                        # переговоры и доска расследования — заранее, свои кадры
             if spec["visual"] == "radio" and not spec.get("items"):
                 try:
-                    spec["items"] = [_radio_item(spec, b, shots_dir, max(0.5, spec["t1"] - spec["t0"]), radio_header)]
+                    bg_ = None
+                    if b.get("prolog"):                # в хуке переговоры — «голосовое» поверх хроники, она идёт дальше
+                        src_ = next((x for x in reversed(shots) if x.get("kind") == "video" and x.get("src")
+                                     and not Path(str(x["src"])).name.startswith(("map_", "radio_", "board_", "doc_"))),
+                                    None)
+                        if src_:
+                            shown_ = (src_["e"] - src_["s"]) / SR
+                            need_ = spec["t1"] - spec["t0"] + 1.0
+                            cd_ = float(src_.get("clip_dur") or 0)
+                            bg_ = (src_["src"], shown_ if cd_ >= shown_ + need_ else max(0.0, cd_ - need_))
+                    spec["items"] = [_radio_item(spec, b, shots_dir, max(0.5, spec["t1"] - spec["t0"]), radio_header,
+                                                 bg_)]
                 except Exception as e:
                     log(f"  Кадр переговоров не получился ({str(e)[:120]}) — будет затемнение с субтитрами.")
             if spec["visual"] == "board" and not spec.get("items"):
@@ -2138,12 +2149,19 @@ def _map_item(spec, b, shots_dir, length, t0, log=print):
             "map_times": times}
 
 
-def _radio_item(spec, b, shots_dir, length, header):
-    """Кадр переговоров: осциллограф по настоящему звуку, кто говорит, фраза и перевод."""
+def _radio_item(spec, b, shots_dir, length, header, bg=None):
+    """Кадр переговоров: осциллограф по настоящему звуку, кто говорит, фраза и перевод.
+    bg=(ролик, начало) — в хуке: хроника на фоне и «голосовое сообщение» сбоку."""
     from . import fx
     s = b["seg"]
     lines = s.get("radio_timed") or []
     clip_len = length + 0.6
+    if bg:
+        out = shots_dir / f"radio_{_key(json.dumps(lines, ensure_ascii=False), f'{clip_len:.2f}', str(bg), 'vm1')}.mp4"
+        if not out.exists():
+            fx.make_radio_overlay_clip(lines, s["audio"], clip_len, out, bg[0], bg[1],
+                                       label=header.split("·")[0].strip() if header else "FUNKSPRUCH")
+        return {"path": str(out), "kind": "video", "url": "radio:" + out.stem, "duration": clip_len + 0.5}
     out = shots_dir / f"radio_{_key(json.dumps(lines, ensure_ascii=False), f'{clip_len:.2f}', header, 'r1')}.mp4"
     if not out.exists():
         fx.make_radio_clip(lines, s["audio"], clip_len, out, header=header, seed=s.get("text", ""))
