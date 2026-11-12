@@ -2073,7 +2073,10 @@ def _map_item(spec, b, shots_dir, length, t0, log=print):
         raise ValueError("на карте меньше двух мест с координатами")
     rec = b.get("words") or []
     times, last = [], 0.3
-    for name, _, _ in pts:
+    for k_, (name, _, _) in enumerate(pts):
+        if k_ == 0:                                # начало маршрута — сразу, а не когда его назовут
+            times.append(0.4)                      # (иначе «...и обратно в Fort Lauderdale» в конце абзаца
+            continue                               #  сдвигало весь путь на последние секунды)
         st = align.word_time(rec, name.split()[0][:max(4, len(name.split()[0]) - 2)], t0 + last - 0.2, t0 + length) if rec else None
         if st is None:
             times.append(None)
