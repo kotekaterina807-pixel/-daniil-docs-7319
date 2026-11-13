@@ -893,13 +893,31 @@ def step_build(cfg, niche, project, log=print, stop_flag=lambda: False, progress
             if not items:
                 if spec.get("_merged"):                 # время этой строки уже отдано соседней
                     continue
-                items = [last_item[0]] if last_item[0] else []
+                while reserve and not items:            # своего кадра нет — неиспользованный одобренный из этой сцены
+                    extra = reserve.pop(0)
+                    if not use_count.get(extra["path"]):
+                        items = [extra]
+                if not items and shots and shots[-1].get("kind") == "image" and shots[-1].get("src") \
+                        and shots[-1]["e"] >= b["start"] + int(t0 * SR) - SR // 2:
+                    # и его нет — предыдущее фото просто остаётся на экране дольше (одно плавное движение),
+                    # а не режется на склейки одного и того же снимка
+                    shots[-1]["e"] = b["start"] + int(t1 * SR)
+                    continue
+                if not items:
+                    items = [last_item[0]] if last_item[0] else []
             # отрезки: в паузах речи, не длиннее max_shot (если кадр один — можно до 2×max_shot)
             # без повторов: отрезков столько, сколько разных кадров; один кадр повторяется
             # (другим участком) только если иначе он шёл бы дольше 1,5×max_shot
             lim = max_shot * 1.5
             long_lim = max_shot * 2.2                   # один ролик может идти дольше, лишь бы не повторяться
             n = spec["n"]
+            if items and b.get("prolog"):              # хук — из видео: одобренные ролики вперёд фото
+                if not any(x.get("kind") == "video" for x in items):
+                    vid = next((x for x in reserve if x.get("kind") == "video" and not use_count.get(x["path"])), None)
+                    if vid:
+                        reserve.remove(vid)
+                        items = [vid] + items
+                items = sorted(items, key=lambda x: x.get("kind") != "video")
             if items:
                 k = min(len(items), max(1, int(length / ms)))         # лишние кадры не берём — без мельтешения
                 items = items[:k]
@@ -909,6 +927,8 @@ def step_build(cfg, niche, project, log=print, stop_flag=lambda: False, progress
                         items.append(extra)
                 k = len(items)
                 n = k if length / k <= long_lim else max(k, math.ceil(length / long_lim - 1e-6))
+                if all(x.get("kind") == "image" for x in items):
+                    n = k                               # одно фото не режется на склейки самого себя
                 if spec.get("focus") and items[0]["kind"] == "image":   # фото с приближениями — один кадр на фразу
                     items, k, n = items[:1], 1, 1
             pauses = [(t - t0, ln) for t, ln in b["pauses"] if t0 < t < t1]
@@ -916,8 +936,9 @@ def step_build(cfg, niche, project, log=print, stop_flag=lambda: False, progress
             cuts = timing.cut_points(length, n, pauses, bounds, min_shot=ms)
             edges = [0.0] + cuts + [length]
             fixed = [0.0]
+            stills = bool(items) and all(x.get("kind") == "image" for x in items)
             for a_, b_ in zip(edges, edges[1:]):
-                parts = 1 if (spec.get("focus") and n == 1) else max(1, math.ceil((b_ - a_) / long_lim - 1e-6))
+                parts = 1 if ((spec.get("focus") and n == 1) or stills) else max(1, math.ceil((b_ - a_) / long_lim - 1e-6))
                 fixed += [a_ + (b_ - a_) * (q + 1) / parts for q in range(parts)]
             edges = fixed
             for j in range(len(edges) - 1):
@@ -966,7 +987,7 @@ def step_build(cfg, niche, project, log=print, stop_flag=lambda: False, progress
         for i, sh in enumerate(shots):
             if sh.get("_bad"):
                 extra = sh["e"] - sh["s"]
-                cap = 9.0 if sh.get("_ban") else 6.0     # убранный по правке кадр — убрать обязательно
+                cap = 14.0 if sh.get("_ban") else 9.0    # убранный по правке кадр — убрать обязательно
                 nxt = shots[i + 1] if i + 1 < len(shots) else None
                 if kept and stretchable(kept[-1], extra, cap):
                     kept[-1]["e"] = sh["e"]
@@ -976,8 +997,14 @@ def step_build(cfg, niche, project, log=print, stop_flag=lambda: False, progress
                     nxt["s"] = sh["s"]
                     dropped += 1
                     continue
+                if sh.get("_ban") and kept and kept[-1].get("_qa") and not kept[-1].get("_bad") \
+                        and not str(kept[-1]["_qa"].get("url", "")).startswith(("card:", "radio:", "board:")):
+                    kept[-1]["e"] = sh["e"]              # убранный по правке — предыдущий кадр просто дольше,
+                    dropped += 1                         # без повтора того же фото новой склейкой
+                    continue
                 if sh.get("_ban"):                       # соседи не тянутся — повторяем соседний кадр другим участком
-                    src_ = next((x for x in reversed(kept) if _plain(x) and not x.get("_bad")), None)
+                    src_ = next((x for x in reversed(kept) if _plain(x) and not x.get("_bad")
+                                 and x.get("kind") == "video"), None)
                     if src_:
                         sh.update({k: src_[k] for k in ("src", "kind", "clip_dur") if k in src_})
                         sh["offset_n"] = int(src_.get("offset_n", 0)) + 1
@@ -1084,6 +1111,18 @@ def step_build(cfg, niche, project, log=print, stop_flag=lambda: False, progress
         log(f"  Фото людей в монтаже: {n_ps}, подписей «имя | кто он»: {len(last_label) and sum(1 for o in overlays if o.get('person'))}.")
     for o in overlays:
         o.pop("person", None)
+    merged_ = []                                         # одно и то же фото подряд — один кадр, без склейки «в себя»
+    for sh in shots:
+        pv = merged_[-1] if merged_ else None
+        if pv and sh.get("kind") == "image" and pv.get("kind") == "image" and sh.get("src") \
+                and sh.get("src") == pv.get("src") and abs(sh["s"] - pv["e"]) <= SR // 10 \
+                and not sh.get("role") and not pv.get("role"):
+            pv["e"] = sh["e"]
+            continue
+        merged_.append(sh)
+    if len(merged_) < len(shots):
+        log(f"  Одинаковые фото подряд объединены: {len(shots) - len(merged_)} склеек убрано.")
+        shots[:] = merged_
     for sh in shots:
         blk_ = (sh.get("_qa") or {}).get("blk") or {}
         if (blk_.get("seg") or {}).get("sfx"):         # [звук] абзаца — запомнить до того, как служебное уйдёт
