@@ -73,10 +73,16 @@ def _put(repo, token, path, data, msg):
             continue
         if r.status_code in (200, 201):
             return
-        if r.status_code in (409, 422) and attempt < 5:
+        if r.status_code in (409, 422) and attempt < 5:                # файл изменился — берём свежий sha
             time.sleep(2)
+            try:
+                g = requests.get(url, headers=_h(token), timeout=30)
+                if g.status_code == 200:
+                    body["sha"] = g.json().get("sha")
+            except requests.RequestException:
+                pass
             continue
-        if r.status_code in (403, 429, 502, 503) and attempt < 5:      # GitHub притормаживает частые загрузки
+        if r.status_code in (403, 429, 500, 502, 503, 504) and attempt < 5:   # GitHub притормаживает или сбоит
             wait = int(r.headers.get("Retry-After") or 0) or 30 * (attempt + 1)
             time.sleep(min(wait, 180))
             continue

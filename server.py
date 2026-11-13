@@ -883,6 +883,7 @@ def _auto_update_loop():
             if cfg.get("auto_update", True) and repo and not STATE.get("restart"):
                 latest, _ = latest_version(repo)
                 if latest and is_newer(latest, config.VERSION):
+                    STATE["update_pending"] = latest        # новые задания из чата — только после обновления
                     time.sleep(5)
                     while JOB.running or STATE.get("bg", 0) > 0:   # сборка, отчёт или отправка в Telegram
                         time.sleep(15)
@@ -893,6 +894,7 @@ def _auto_update_loop():
                         apply_update(raw, JOB.add_log)
                         schedule_restart()
                         return
+                    STATE["update_pending"] = None          # скачать не вышло — задания не блокируем
         except Exception:
             pass
         time.sleep(60)
@@ -920,7 +922,8 @@ def _remote_loop():
                                       "log": [str(x) for x in list(JOB.log)[-60:]]})
                 except Exception:
                     pass
-            if not JOB.running and not STATE.get("restart"):
+            if not JOB.running and not STATE.get("restart") and not STATE.get("update_pending") \
+                    and STATE.get("bg", 0) <= 0:
                 q = [x for x in remote.pending(cfg) if not x[0].lower().startswith("review")]
                 if q:
                     name, sha = q[0]
