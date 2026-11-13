@@ -149,6 +149,9 @@ def run_job(kind, fn):
         JOB.reset(kind)
         JOB.running = True
         JOB.t0 = time.time()
+        from pipeline import stopctl
+        stopctl.install()
+        stopctl.reset()
 
     def wrapper():
         try:
@@ -173,6 +176,9 @@ def run_job(kind, fn):
             JOB.running = False
             JOB.t_end = time.time()
             JOB.done_id += 1
+            from pipeline import stopctl
+            if stopctl.requested():                     # хвосты остановленной сборки догаснут — потом снова можно
+                threading.Timer(20, stopctl.reset).start()   # запускать процессы (обновление, отчёт, новая сборка)
     threading.Thread(target=wrapper, daemon=True).start()
     return True
 
@@ -539,8 +545,11 @@ class Handler(BaseHTTPRequestHandler):
             (d / "выбор_кадров.json").write_text(json.dumps({str(k): v for k, v in ch.items()}), encoding="utf-8")
             return self._send(200, {"ok": True, "lines": len(ch), "missing": missing})
         if p == "/api/stop":
+            from pipeline import stopctl
             JOB.stop = True
-            JOB.add_log("Остановка после текущего шага... Сделанное сохранится — повторная сборка продолжит.")
+            n = stopctl.stop() if JOB.running else 0
+            JOB.add_log("Останавливаю сборку сейчас" + (f" (прервано процессов: {n})" if n else "")
+                        + "... Сделанное сохранится — повторная сборка продолжит.")
             return self._send(200, {"ok": True})
         if p == "/api/selfcheck":
             def job():

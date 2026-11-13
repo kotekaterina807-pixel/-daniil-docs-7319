@@ -241,7 +241,7 @@ $("#buildBtn").onclick = async () => {
     S.logNext = S.logNext; showJob(true);
   } catch (e) { toast(e.message, "err"); }
 };
-$("#stopBtn").onclick = () => api("/api/stop", {}).then(() => toast("Остановлю после текущего шага")).catch(() => {});
+$("#stopBtn").onclick = () => api("/api/stop", {}).then(() => toast("Останавливаю сборку…")).catch(() => {});
 $("#logToggle").onclick = () => {
   const box = $("#logBox"); box.hidden = !box.hidden;
   $("#logToggle").textContent = box.hidden ? "Показать" : "Скрыть";

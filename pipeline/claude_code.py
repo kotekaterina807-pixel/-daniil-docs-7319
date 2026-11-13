@@ -95,7 +95,8 @@ def run(cfg, prompt, workdir, timeout=900):
             if LOG:
                 LOG(f"  Лимит подписки Claude на этот период исчерпан — жду сброса и продолжу сам "
                     f"(следующая проверка через {int(wait // 60) or 1} мин, попытка {k + 1}).")
-            _t.sleep(wait)
+            from . import stopctl
+            stopctl.sleep(wait)                     # «Стоп» прерывает ожидание лимита сразу
 
 
 def run_cached(cfg, prompt, workdir, sheet, timeout=900, check=None):
@@ -148,6 +149,8 @@ def _run_once(cfg, prompt, workdir, timeout=900):
         raise ClaudeCodeError("Claude Code не ответил за отведённое время.")
     except OSError as e:
         raise ClaudeCodeError(f"Не удалось запустить Claude Code: {e}")
+    from . import stopctl
+    stopctl.check()                                 # процесс прервали кнопкой «Стоп» — это не ответ
     out = (p.stdout or "").strip()
     err = (p.stderr or "").strip()
     low = (out + " " + err).lower()
