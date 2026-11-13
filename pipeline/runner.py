@@ -283,11 +283,10 @@ def _sfx_events(shots):
         t0, t1 = sh["s"] / SR, sh["e"] / SR
         name = Path(str(sh.get("src", ""))).name
         is_photo = sh.get("kind") == "image" and not name.startswith(("doc_", "map_", "person_"))
-        if is_photo and sh.get("stack") is not None and not sh.get("stack_solo") and t0 - last_photo > 3.5 \
-                and not sh.get("prolog"):
+        if is_photo and sh.get("stack") is not None and not sh.get("stack_solo") and t0 - last_photo > 3.5:
             fl = pick("drop")                             # фото ложится в стопку — мягкий тёплый «тук» в момент касания
             if fl:
-                ev.append({"file": fl, "at": t0 + 0.3, "dur": 0.8, "vol": 0.12, "fade": 0.3})
+                ev.append({"file": fl, "at": t0 + 0.3, "dur": 0.8, "vol": 0.2, "fade": 0.3})
                 last_photo = t0
         if sh.get("person") and not name.startswith("person_") and t0 - last_hit > 20:
             h = pick("hit")                               # настоящий портрет героя — низкий удар (не чаще раза в 20 с)
@@ -1109,6 +1108,41 @@ def step_build(cfg, niche, project, log=print, stop_flag=lambda: False, progress
             last_label[who] = a
         n_ps = sum(1 for sh in shots if sh.get("person"))
         log(f"  Фото людей в монтаже: {n_ps}, подписей «имя | кто он»: {len(last_label) and sum(1 for o in overlays if o.get('person'))}.")
+    # подписи важных мест (#! МЕСТО): когда место впервые звучит, внизу «Место | что это» — как у людей, но реже
+    places = script.get("places") or []
+    if places and cfg.get("show_labels", True):
+        done_pl, last_pl, n_pl = set(), -1e9, 0
+        gap_pl = float(cfg.get("place_label_gap_sec", 60))
+        for b_ in seg_blocks:
+            rec_ = b_.get("words") or []
+            if not rec_ or b_.get("prolog"):
+                continue
+            bs_, be_ = b_["start"] / SR, b_["end"] / SR
+            for pl in places:
+                if pl["name"] in done_pl:
+                    continue
+                st_ = None
+                for w0 in [w for w in pl["name"].split() if len(w) > 3][::-1] or pl["name"].split()[:1]:
+                    st_ = align.word_time(rec_, w0[:max(4, len(w0) - 2)], 0.0, be_ - bs_)
+                    if st_ is not None:                   # сначала последнее слово: «USS Solomons» → «Solomons»
+                        break
+                if st_ is None:
+                    continue
+                t_ = bs_ + st_
+                if t_ - last_pl < gap_pl:
+                    continue
+                sh_ = next((x for x in shots if x["s"] / SR <= t_ + 0.5 < x["e"] / SR), None)
+                nm_ = Path(str((sh_ or {}).get("src", ""))).name
+                if sh_ is None or sh_.get("person") or nm_.startswith(("map_", "radio_", "board_", "person_", "doc_")):
+                    continue                              # на карте место и так подписано; на лицах — подпись человека
+                txt_ = pl["name"] + (" | " + pl["role"] if pl.get("role") else "")
+                lp_ = shots_dir / f"label2_{_key(txt_, str(accent))}.png"
+                extras.make_label(txt_, lp_, accent)
+                if add_overlay(lp_, t_ + 0.2, LABEL_SEC - 1, "label"):
+                    done_pl.add(pl["name"])
+                    last_pl = t_
+                    n_pl += 1
+        log(f"  Подписи мест: {n_pl} из {len(places)}.")
     for o in overlays:
         o.pop("person", None)
     merged_ = []                                         # одно и то же фото подряд — один кадр, без склейки «в себя»

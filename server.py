@@ -944,6 +944,7 @@ def _remote_loop():
                             remote.status(cfg, name, f"ошибка: проект «{cmd.get('project')}» не найден")
                             continue
                         _add_fixes(d, cmd.get("times") or [], cmd.get("archive") or [])
+                        _patch_script(d, cmd)
                         if cmd.get("reselect"):
                             _reselect(d)
 
@@ -1036,6 +1037,29 @@ def _add_fixes(d, times, archive):
     if archive:
         fx["archive"] = list(dict.fromkeys((fx.get("archive") or []) + list(archive)))
     runner._save_json(f, fx)
+
+
+def _patch_script(d, cmd):
+    """Правка сценария готового проекта из чата: замены строк (replace: [[было, стало], ...]) и новые
+    строки «#! ...» (meta_add). Озвучка не меняется, если текст диктора не трогали."""
+    f = d / "script.txt"
+    if not f.exists() or not (cmd.get("replace") or cmd.get("meta_add")):
+        return 0
+    txt = f.read_text(encoding="utf-8-sig")
+    n = 0
+    for pair in cmd.get("replace") or []:
+        if len(pair) == 2 and pair[0] in txt:
+            txt = txt.replace(pair[0], pair[1], 1)
+            n += 1
+    add = [x for x in (cmd.get("meta_add") or []) if x.strip() and x.strip() not in txt]
+    if add:
+        lines = txt.split("\n")
+        last = max([i for i, ln in enumerate(lines) if ln.startswith("#!")] or [-1])
+        lines[last + 1:last + 1] = add
+        txt = "\n".join(lines)
+        n += len(add)
+    f.write_text(txt, encoding="utf-8")
+    return n
 
 
 def _reselect(d):

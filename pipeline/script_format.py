@@ -35,6 +35,7 @@ HEADER = """# СЦЕНАРИЙ. Можно править в Блокноте и
 #                  (доска держится только до его имени). Фото — из #! ФОТО: Имя = ссылка
 #   == ПРОЛОГ ==           — холодное начало до первой главы: без названия главы, быстрый монтаж,
 #                  в конце — затемнение («занавес»), потом глава 1
+#   #! МЕСТО: Место = кто/что это — подпись внизу, когда место впервые звучит (не чаще раза в 1,5 мин)
 #   #! ПРОИЗНОШЕНИЕ: слово = как читать — подсказка диктору (на экране и в субтитрах остаётся слово)
 #   #! СТИЛЬ: luft_see / expedition / krimi — стиль внутри ниши (цвет, карта, музыка)
 #   #! ДОСКА: Название дела | подпись — карточка в центре доски расследования
@@ -186,7 +187,7 @@ def apply_text(script: dict, text: str) -> dict:
             script["thumbnail_text"] = line.split(":", 1)[1].strip()
             continue
         meta = re.match(r"^#!\s*(ЯЗЫК|ТЕГИ|ОПИСАНИЕ|ФАКТ|ТЕМА|АРХИВ|ЭПОХА|ФОТО|ВАРИАНТ НАЗВАНИЯ|ПРОИЗНОШЕНИЕ|СТИЛЬ|"
-                        r"ДОСКА|ЗАСТАВКА):\s?(.*)$", line)
+                        r"ДОСКА|ЗАСТАВКА|МЕСТО):\s?(.*)$", line)
         if meta:
             key, val = meta.group(1), meta.group(2).strip()
             if key == "ЯЗЫК" and val:
@@ -204,6 +205,9 @@ def apply_text(script: dict, text: str) -> dict:
             elif key == "ФОТО" and val and "=" in val:  # «Имя Фамилия = ссылка на фото» — подлинное фото человека
                 nm, url = val.split("=", 1)
                 script.setdefault("photos", {})[nm.strip()] = url.strip()
+            elif key == "МЕСТО" and val:              # «Fort Lauderdale = Marinefliegerstützpunkt · Florida» — подпись
+                nm, _, role = val.partition("=")      # внизу, когда место впервые называют (как у людей, но реже)
+                script.setdefault("places", []).append({"name": nm.strip(), "role": role.strip()})
             elif key == "АРХИВ" and val:              # разделы Wikimedia Commons с подлинными фото темы
                 script["archive"] = [t.strip() for t in val.split(";") if t.strip()]
             elif key == "ВАРИАНТ НАЗВАНИЯ" and val:
