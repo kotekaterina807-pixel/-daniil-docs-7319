@@ -61,19 +61,45 @@ def _radioize(src, out, seed):
     d = _dur(src) + 0.5
     flt = (f"[0:a]aformat=sample_rates={SR}:channel_layouts=mono,adelay=180|180,apad=pad_dur=0.32,{RADIO}[v];"
            f"[1:a]highpass=f=600,lowpass=f=3600,"
-           f"volume='if(lt(t,0.14),5.5,if(gt(t,{d - 0.2:.2f}),5.5,1))':eval=frame[n];"
+           f"volume='if(lt(t,0.14),2.0,if(gt(t,{d - 0.2:.2f}),2.0,1))':eval=frame[n];"
            f"[v][n]amix=inputs=2:duration=first:normalize=0,alimiter=limit=0.92[a]")
     cmd = [ffmpeg_exe(), "-y", "-hide_banner", "-loglevel", "error", "-i", str(src),
-           "-f", "lavfi", "-t", f"{d:.2f}", "-i", f"anoisesrc=color=pink:amplitude=0.035:sample_rate={SR}:seed={seed}",
+           "-f", "lavfi", "-t", f"{d:.2f}", "-i", f"anoisesrc=color=pink:amplitude=0.012:sample_rate={SR}:seed={seed}",
            "-filter_complex", flt, "-map", "[a]", "-ac", "1", "-ar", str(SR), str(out)]
     p = subprocess.run(cmd, capture_output=True, text=True, errors="replace", creationflags=_NW)
     if p.returncode != 0:
         raise tts.TTSError(f"радиоэффект: {p.stderr[-300:]}")
 
 
+def _quieten(wav, timed=None):
+    """Шум эфира в уже готовой записи — тише: в паузах между фразами и на щелчках в начале/конце фразы
+    звук приглушается на ~20 дБ (по разметке фраз), под голосом шум и так не слышен. Длина та же."""
+    mark = Path(str(wav) + ".quiet")
+    if mark.exists() or not timed:
+        return
+    import numpy as np
+    with wave.open(str(wav), "rb") as w:
+        prm = w.getparams()
+        x = np.frombuffer(w.readframes(w.getnframes()), dtype=np.int16).astype(np.float32)
+    sr = prm.framerate
+    g = np.full(len(x), 0.1, np.float32)
+    for ln in timed:
+        a_, b_ = int(max(0.0, ln["a"] - 0.02) * sr), int((ln["b"] + 0.12) * sr)
+        g[a_:b_] = 1.0
+    k = max(1, int(0.03 * sr))                       # плавные края, без щелчков
+    g = np.convolve(g, np.ones(k, np.float32) / k, mode="same")
+    y = np.clip(x * g[:len(x)], -32768, 32767).astype(np.int16)
+    tmp = Path(str(wav) + ".q.wav")
+    with wave.open(str(tmp), "wb") as w:
+        w.setparams(prm)
+        w.writeframes(y.tobytes())
+    tmp.replace(wav)
+    mark.write_text("1", encoding="utf-8")
+
+
 def _silence(out, sec, seed):
     cmd = [ffmpeg_exe(), "-y", "-hide_banner", "-loglevel", "error", "-f", "lavfi", "-t", f"{sec:.2f}",
-           "-i", f"anoisesrc=color=pink:amplitude=0.02:sample_rate={SR}:seed={seed}",
+           "-i", f"anoisesrc=color=pink:amplitude=0.007:sample_rate={SR}:seed={seed}",
            "-af", "highpass=f=600,lowpass=f=3600", "-ac", "1", "-ar", str(SR), str(out)]
     subprocess.run(cmd, capture_output=True, creationflags=_NW, check=True)
 
@@ -83,7 +109,9 @@ def make(cfg, niche, lines, out_wav, log=print):
     out_wav = Path(out_wav)
     side = out_wav.with_suffix(".json")
     if out_wav.exists() and side.exists():
-        return json.loads(side.read_text(encoding="utf-8"))
+        timed = json.loads(side.read_text(encoding="utf-8"))
+        _quieten(out_wav, timed)                # старые записи: шум эфира тише (длительность не меняется)
+        return timed
     vm = voice_map(lines)
     parts, timed, pos = [], [], 0.0
     tmp = out_wav.parent
@@ -119,4 +147,5 @@ def make(cfg, niche, lines, out_wav, log=print):
     for p in parts:
         Path(p).unlink(missing_ok=True)
     side.write_text(json.dumps(timed, ensure_ascii=False, indent=1), encoding="utf-8")
+    _quieten(out_wav, timed)
     return timed
