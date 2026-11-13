@@ -263,7 +263,7 @@ SOUND_KINDS = {"мотор": "engine", "самолёт": "engine", "самоле
                "эфир": "static", "помехи": "static", "радио": "static", "static": "static",
                "сирена": "alarm", "тревога": "alarm", "зуммер": "alarm", "alarm": "alarm",
                "гром": "thunder", "thunder": "thunder"}
-BED_VOL = {"engine": 0.16, "wind": 0.14, "static": 0.09, "alarm": 0.12, "thunder": 0.22}
+BED_VOL = {"engine": 0.16, "wind": 0.14, "static": 0.04, "alarm": 0.12, "thunder": 0.22}
 
 
 def _sfx_events(shots):
