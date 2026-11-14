@@ -21,7 +21,7 @@ from PIL import Image, ImageChops, ImageDraw, ImageFilter, ImageOps
 from .config import ROOT, ffmpeg_exe
 from .extras import SEMI_FONTS, SERIF_BOLD, THIN_FONTS, TYPE_BOLD, TYPE_FONTS, _font, _wax_seal
 
-W, H, FPS = 1920, 1080, 30
+W, H, FPS = 1920, 1080, 60
 _NW = 0x08000000 if os.name == "nt" else 0
 SERIF = [r"C:\Windows\Fonts\georgia.ttf", r"C:\Windows\Fonts\times.ttf",
          "/usr/share/fonts/truetype/dejavu/DejaVuSerif.ttf"]

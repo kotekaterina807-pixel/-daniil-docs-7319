@@ -494,7 +494,7 @@ def make_document_clip(text, head, reveal, length, out_mp4, seed=""):
     k = 0
     while k < len(events):
         # все буквы, у которых время совпадает (в пределах кадра 1/30 с), рисуем в один кадр
-        group = [e for e in events[k:] if e[0] - events[k][0] < 1 / 30]
+        group = [e for e in events[k:] if e[0] - events[k][0] < 1 / 60]
         for _, i, c in group:
             x, y = pos[i]
             w = words[i]
@@ -511,10 +511,10 @@ def make_document_clip(text, head, reveal, length, out_mp4, seed=""):
         fh_.write(f"file '{frames[-1][0].as_posix()}'\n")
     # плавное медленное приближение без дрожи: сначала увеличиваем кадр в 2 раза (тогда сдвиги
     # zoompan меньше пикселя и не «прыгают»), приближение очень мягкое — до 3% за весь кадр
-    zf = max(1, int(length * 30))
+    zf = max(1, int(length * 60))
     subprocess.run([ffmpeg_exe(), "-y", "-hide_banner", "-loglevel", "error", "-f", "concat", "-safe", "0",
-                    "-i", str(lst), "-vf", f"fps=30,scale=3840:2160:flags=lanczos,"
-                    f"zoompan=z='1+0.03*on/{zf}':x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':d=1:s=1920x1080:fps=30,"
+                    "-i", str(lst), "-vf", f"fps=60,scale=3840:2160:flags=lanczos,"
+                    f"zoompan=z='1+0.03*on/{zf}':x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':d=1:s=1920x1080:fps=60,"
                     "format=yuv420p", "-c:v", "libx264", "-preset", "veryfast",
                     "-crf", "18", str(out_mp4)], check=True, timeout=900,
                    creationflags=0x08000000 if os.name == "nt" else 0)
@@ -614,7 +614,7 @@ def make_map_clip(title, points, times, length, out_mp4, seed=""):
     times = list(times) + [length - 1.0] * (len(points) - len(times))
     seg_d = 1.1                                           # пунктир доходит до точки за 1,1 с
     tmp = Path(tempfile.mkdtemp())
-    fps = 30
+    fps = 60
     n = max(1, int(length * fps))
 
     def dashed(d, a, b, frac):
@@ -671,8 +671,8 @@ def make_map_clip(title, points, times, length, out_mp4, seed=""):
         fh_.write(f"file '{frames[-1][0].as_posix()}'\n")
     zf = max(1, n)
     subprocess.run([ffmpeg_exe(), "-y", "-hide_banner", "-loglevel", "error", "-f", "concat", "-safe", "0",
-                    "-i", str(lst), "-vf", f"fps=30,scale=3840:2160:flags=lanczos,"
-                    f"zoompan=z='1+0.025*on/{zf}':x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':d=1:s=1920x1080:fps=30,"
+                    "-i", str(lst), "-vf", f"fps=60,scale=3840:2160:flags=lanczos,"
+                    f"zoompan=z='1+0.025*on/{zf}':x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':d=1:s=1920x1080:fps=60,"
                     "format=yuv420p", "-c:v", "libx264", "-preset", "veryfast", "-crf", "18", str(out_mp4)],
                    check=True, timeout=1200, creationflags=0x08000000 if os.name == "nt" else 0)
     return out_mp4

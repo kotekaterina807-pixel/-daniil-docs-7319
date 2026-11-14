@@ -10,9 +10,9 @@ from PIL import Image, ImageEnhance, ImageFilter, ImageOps
 
 from .config import ffmpeg_exe
 
-FPS = 30
+FPS = 60            # 60 кадров/с: плавные движения камеры, переходы и надписи (YouTube показывает до 60)
 W, H = 1920, 1080
-ZOOM = 0.06            # насколько мягко камера приближается/отдаляется за кадр (6%)
+ZOOM = 0.08            # запас кадра под наезд/отъезд и боковой проезд камеры (8%)
 _COMMON = ["-pix_fmt", "yuv420p", "-r", str(FPS), "-video_track_timescale", "15360", "-an"]
 X264 = ["-c:v", "libx264", "-preset", "veryfast", "-crf", "18", *_COMMON]
 # Видеокарта NVIDIA: аппаратное кодирование, в разы быстрее процессора, качество сопоставимое
@@ -90,17 +90,21 @@ def prepare_base(path, blur_dark=False):
     return base
 
 
-def _kb_frames(base, n, zoom_in=True, amp=ZOOM):
+def _kb_frames(base, n, zoom_in=True, amp=ZOOM, pan=0):
     """Плавный зум без дрожания: каждый кадр считается с субпиксельной точностью,
-    скорость мягко нарастает и затухает. Камера не уезжает в сторону."""
+    скорость мягко нарастает и затухает. pan = -1/1 — камера ещё и медленно проезжает вбок."""
     bw, bh = base.size
     last = max(n - 1, 1)
+    full = 1 + ZOOM
     for k in range(n):
         p = k / last
         e = 0.5 * p + 0.5 * (p * p * (3 - 2 * p))      # мягкий старт и финиш
-        z = 1 + amp * (e if zoom_in else 1 - e)
+        z = 1 + amp * 0.6 + amp * 0.4 * (e if zoom_in else 1 - e) if pan else 1 + amp * (e if zoom_in else 1 - e)
+        z = min(z, full)
         cw, ch = bw / z, bh / z
         x0, y0 = (bw - cw) / 2, (bh - ch) / 2
+        if pan:                                           # проезд в пределах запаса кадра, без выхода за край
+            x0 += pan * (e - 0.5) * (bw - cw) * 0.9
         # box с дробными координатами — субпиксельная точность, поэтому нет дрожания
         yield base.resize((W, H), Image.BICUBIC, box=(x0, y0, x0 + cw, y0 + ch)).tobytes()
 
@@ -141,7 +145,8 @@ def render_image_shot(src, total, out, grade, zoom_in=True, label=None):
     extra, lf = _overlay_label(label, total / FPS, 1)
     chain = f"[0:v]{grade or 'null'},format=yuv420p[v0];{lf}"
     amp = ZOOM * min(1.0, max(0.4, total / FPS / 5.0))   # короткий кадр — движение медленнее и мягче
-    _pipe(_kb_frames(base, total, zoom_in, amp), total, out, chain, extra)
+    pan = (-1, 0, 1)[sum(map(ord, str(src))) % 3] if total / FPS >= 3.0 else 0   # каждое третье фото — без проезда
+    _pipe(_kb_frames(base, total, zoom_in, amp, pan), total, out, chain, extra)
 
 
 def render_focus_shot(src, total, out, grade, boxes):
@@ -520,7 +525,8 @@ class _Overlay:
 
     def state(self, i):
         """(прозрачность 0..1, сдвиг x, сдвиг y) для кадра i от начала надписи."""
-        n = self.frames
+        sc = FPS / 30.0                                   # тайминги анимаций заданы для 30 кадров/с
+        i, n = i / sc, self.frames / sc
         if self.anim == "label":                          # выезд слева за 90 кадров, мягкое затухание
             p = min(1.0, i / 90.0)
             ease = 1 - (1 - p) ** 3
