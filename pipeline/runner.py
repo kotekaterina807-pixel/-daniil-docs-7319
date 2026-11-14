@@ -322,8 +322,7 @@ def _sfx_events(shots):
                 if not f_:
                     continue
                 if kind in ("engine", "wind", "static"):
-                    ev.append({"file": f_, "at": b0, "dur": b1 - b0 + 0.6, "vol": BED_VOL[kind],
-                               "fade": 0.9, "fade_in": 0.6})
+                    continue                              # сплошной фон (ветер, эфир, мотор) глушит диктора — не кладём
                 else:
                     ev.append({"file": f_, "at": b0 + (0.4 if kind == "alarm" else 0.2), "dur": 3.2 if kind == "alarm" else 5.5,
                                "vol": BED_VOL[kind], "fade": 0.5})
@@ -1361,6 +1360,7 @@ def _choose_in_chat(cfg, project, finder, seg_blocks, jobs, vis_cache, log, chec
         board_names = [nm for blk in seg_blocks for sp_ in blk.get("specs", [])
                        if sp_.get("visual") == "board" for nm, _ in _board_people(sp_.get("board") or sp_.get("query", ""))]
         named = {}
+        last_arch = {}                        # номер последней фразы с архивным фото
         pp_key = lambda pp: (_stems(pp[0])[-1:] or [""])[0]
         for no, (bi, si) in enumerate(jobs, 1):
             check_stop()
@@ -1382,8 +1382,12 @@ def _choose_in_chat(cfg, project, finder, seg_blocks, jobs, vis_cache, log, chec
                 lines.append({"no": no, "sig": sig[no - 1], "text": spec["text"], "query": "лист с текстом", "n": 1,
                               "show": "лист", "person": "", "cands": [], "doc": True, "doc_head": sp0["doc_head"]})
                 continue
-            if pl.get("source") == "архив" and spec["visual"] == "stock":
-                spec["visual"] = "archive"            # старые фото, гравюры, картины той эпохи
+            if pl.get("source") == "архив" and spec["visual"] == "stock" and not seg_blocks[bi].get("prolog"):
+                # фото — только в сильные моменты: не чаще одной фразы из трёх, остальное — видео.
+                # Хук (пролог) — только видео.
+                if no - last_arch.get("no", -99) >= 3:
+                    spec["visual"] = "archive"        # старые фото, гравюры, картины той эпохи
+                    last_arch["no"] = no
             if spec["visual"] == "person" and pl.get("people"):
                 yr = next((pp[2] for pp in pl["people"] if len(pp) > 2 and _is_hero(pp, [[spec["query"], spec.get("shown", "")]])), "")
                 if yr:

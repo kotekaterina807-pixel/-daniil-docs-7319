@@ -64,7 +64,7 @@ def _radioize(src, out, seed):
            f"volume='if(lt(t,0.14),2.0,if(gt(t,{d - 0.2:.2f}),2.0,1))':eval=frame[n];"
            f"[v][n]amix=inputs=2:duration=first:normalize=0,alimiter=limit=0.92[a]")
     cmd = [ffmpeg_exe(), "-y", "-hide_banner", "-loglevel", "error", "-i", str(src),
-           "-f", "lavfi", "-t", f"{d:.2f}", "-i", f"anoisesrc=color=pink:amplitude=0.012:sample_rate={SR}:seed={seed}",
+           "-f", "lavfi", "-t", f"{d:.2f}", "-i", f"anoisesrc=color=pink:amplitude=0.0008:sample_rate={SR}:seed={seed}",
            "-filter_complex", flt, "-map", "[a]", "-ac", "1", "-ar", str(SR), str(out)]
     p = subprocess.run(cmd, capture_output=True, text=True, errors="replace", creationflags=_NW)
     if p.returncode != 0:
@@ -99,7 +99,7 @@ def _quieten(wav, timed=None):
 
 def _silence(out, sec, seed):
     cmd = [ffmpeg_exe(), "-y", "-hide_banner", "-loglevel", "error", "-f", "lavfi", "-t", f"{sec:.2f}",
-           "-i", f"anoisesrc=color=pink:amplitude=0.007:sample_rate={SR}:seed={seed}",
+           "-i", f"anoisesrc=color=pink:amplitude=0.0005:sample_rate={SR}:seed={seed}",
            "-af", "highpass=f=600,lowpass=f=3600", "-ac", "1", "-ar", str(SR), str(out)]
     subprocess.run(cmd, capture_output=True, creationflags=_NW, check=True)
 
