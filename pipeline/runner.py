@@ -1413,6 +1413,7 @@ def _choose_in_chat(cfg, project, finder, seg_blocks, jobs, vis_cache, log, chec
                         spec["auto_role"] = seg_blocks[bi]["specs"][si]["auto_role"] = role
             if spec["visual"] != "person" and spec["n"] < 2 and spec.get("t1", 0) - spec.get("t0", 0) >= 4.6:
                 spec["n"] = 2                     # минимум два разных кадра на обычную фразу
+            spec["prolog"] = bool(seg_blocks[bi].get("prolog"))   # хук: без архивных фото темы впереди видео
             q = spec["query"] if spec["visual"] != "person" else \
                 f"фото человека: {spec['query']}, затем — {spec.get('fill_query', '')}"
             lines.append({"no": no, "sig": sig[no - 1], "text": spec["text"], "query": q, "n": spec["n"],

@@ -59,7 +59,8 @@ def collect(finder, spec, taken):
     else:
         query, visual = spec["query"], spec["visual"]
     pool, seen_pool = [], set()
-    if topic and visual in ("archive", "photo", "stock"):
+    if topic and visual in ("archive", "photo", "stock") and not (spec.get("prolog") and visual == "stock"):
+        # в хуке (пролог) стоковые строки — только видео: архивные фото темы не ставим первыми
         # подлинные фото темы (архив Commons) — первыми, по очереди разные для разных строк
         k0 = getattr(finder, "_topic_rr", 0)
         finder._topic_rr = k0 + 2

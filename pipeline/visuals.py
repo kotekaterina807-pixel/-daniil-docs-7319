@@ -946,10 +946,28 @@ class VisualFinder:
         # фото, указанное в сценарии (#! ФОТО: Имя = ссылка) — подлинное, его и берём первым
         manual = getattr(self, "manual_photos", None) or {}
         if manual:
-            fold = lambda x: re.sub(r"[^a-zа-яё]", "", x.lower().replace("j", "y").replace("w", "v"))
-            keys = {fold(n.split()[-1]) for n in names if n.split()}
+            tr = str.maketrans({"а": "a", "б": "b", "в": "v", "г": "g", "д": "d", "е": "e", "ё": "e", "ж": "zh",
+                                "з": "z", "и": "i", "й": "y", "к": "k", "л": "l", "м": "m", "н": "n", "о": "o",
+                                "п": "p", "р": "r", "с": "s", "т": "t", "у": "u", "ф": "f", "х": "h", "ц": "c",
+                                "ч": "ch", "ш": "sh", "щ": "sh", "ы": "y", "э": "e", "ю": "yu", "я": "ya"})
+            # «Мэллори» и «Mallory» — один человек: сравниваем латиницей по согласным
+            fold = lambda x: re.sub(r"[^a-z]|[aeiouy]", "", x.lower().translate(tr).replace("dzh", "g")
+                                    .replace("j", "y").replace("w", "v"))
+            keys, firsts = set(), set()
+            for n in names:
+                pts = [x for x in re.split(r"[\s,]+", n) if x]
+                if not pts:
+                    continue
+                sur, first = (pts[0], pts[1] if len(pts) > 1 else "") if "," in n else (pts[-1], pts[0] if len(pts) > 1 else "")
+                keys.add(fold(sur))
+                if first and fold(first):
+                    firsts.add(fold(first))
+
+            def first_ok(nm):                         # «Ruth Mallory» не получает портрет «George Mallory»
+                f0 = fold(nm.split()[0]) if len(nm.split()) > 1 else ""
+                return not f0 or not firsts or any(f0.startswith(f) or f.startswith(f0) for f in firsts)
             for nm, url in manual.items():
-                if nm.split() and fold(nm.split()[-1]) in keys and url.startswith("http"):
+                if nm.split() and fold(nm.split()[-1]) in keys and first_ok(nm) and url.startswith("http"):
                     return [{"kind": "image", "url": url, "thumb": url, "source": "указано в сценарии",
                              "page": url, "title": nm, "author": "архив", "license": "указано в сценарии",
                              "tags": nm, "person": True}]
