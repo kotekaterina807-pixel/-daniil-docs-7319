@@ -880,6 +880,19 @@ class VisualFinder:
             cands += [f"https://commons.wikimedia.org/wiki/Special:FilePath/{fn}?width=900",
                       f"https://en.wikipedia.org/wiki/Special:FilePath/{fn}?width=900",
                       f"https://commons.wikimedia.org/wiki/Special:FilePath/{fn}"]
+        if fn:                                          # настоящий адрес файла — через API Викимедии
+            for host in ("commons.wikimedia.org", "en.wikipedia.org"):
+                try:
+                    r = self._get(f"https://{host}/w/api.php",
+                                  {"action": "query", "format": "json", "titles": "File:" + fn.replace("_", " "),
+                                   "prop": "imageinfo", "iiprop": "url", "iiurlwidth": 900})
+                    for pg in ((r.json().get("query") or {}).get("pages") or {}).values():
+                        for ii in pg.get("imageinfo") or []:
+                            for key in ("thumburl", "url"):
+                                if ii.get(key):
+                                    cands.insert(1, ii[key])
+                except Exception:
+                    pass
         for rnd in range(3):
             for u in dict.fromkeys(cands):
                 try:

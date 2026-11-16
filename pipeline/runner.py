@@ -172,6 +172,21 @@ def _contiguous(shots, log=print):
     return out
 
 
+def _dhash(path):
+    """Отпечаток картинки (64 бита): одинаковые изображения из разных источников дают близкие значения."""
+    try:
+        from PIL import Image
+        with Image.open(path) as im:
+            px = list(im.convert("L").resize((9, 8)).getdata())
+        bits = 0
+        for r in range(8):
+            for c in range(8):
+                bits = (bits << 1) | (1 if px[r * 9 + c] > px[r * 9 + c + 1] else 0)
+        return bits
+    except Exception:
+        return None
+
+
 def _plain(x):
     """Обычный кадр (видео/фото), которым можно заполнить время. Листы, карты, карточки и люди — нет."""
     nm = Path(str(x.get("src") or "")).name
@@ -1178,6 +1193,31 @@ def step_build(cfg, niche, project, log=print, stop_flag=lambda: False, progress
         log(f"  Подписи мест: {n_pl} из {len(places)}.")
     for o in overlays:
         o.pop("person", None)
+    # то же изображение (даже из другого источника/файла) снова в течение 90 секунд — зритель видит повтор,
+    # в стопке фото одна и та же картинка лежит дважды. Повтор заменяем видеокадром сцены.
+    seen_h = []
+    n_dup = 0
+    for i, sh in enumerate(shots):
+        nm_ = Path(str(sh.get("src", ""))).name
+        if sh.get("kind") != "image" or not sh.get("src") or sh.get("role") or sh.get("person") \
+                or nm_.startswith(("doc_", "map_", "person_", "card_", "board_")):
+            continue
+        h_ = _dhash(sh["src"])
+        if h_ is None:
+            continue
+        t_ = sh["s"] / SR
+        seen_h = [x for x in seen_h if t_ - x[0] < 90]
+        if any(bin(h_ ^ x[1]).count("1") <= 6 for x in seen_h):
+            donor = next((x for x in reversed(shots[:i]) if _plain(x) and x.get("kind") == "video"), None)
+            if donor:
+                sh.update({k: donor[k] for k in ("src", "kind", "clip_dur") if k in donor})
+                sh["offset_n"] = int(donor.get("offset_n", 0)) + 1
+                sh["stack"] = None
+                n_dup += 1
+                continue
+        seen_h.append((t_, h_))
+    if n_dup:
+        log(f"  Одинаковые картинки рядом по времени заменены видеокадрами: {n_dup}.")
     merged_ = []                                         # одно и то же фото подряд — один кадр, без склейки «в себя»
     for sh in shots:
         pv = merged_[-1] if merged_ else None

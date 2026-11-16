@@ -914,6 +914,10 @@ def _remote_loop():
     программа раз в минуту забирает его и собирает видео (если сейчас ничего не собирается)."""
     from pipeline import remote
     time.sleep(40)
+    try:                                                    # Claude видит, какая версия сейчас запущена
+        remote.status(config.load_config(), "start", f"программа запущена, версия {config.VERSION}")
+    except Exception:
+        pass
     while True:
         try:
             cfg = config.load_config()
