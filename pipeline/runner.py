@@ -2063,7 +2063,7 @@ def _apply_fixes(shots, fixes, fixes_path, finder, media_dir, log):
     def replace_banned():
         nonlocal pool, n_rep, n_cut
         finder.used |= ban_urls
-        pool = [c for c in getattr(finder, "topic_items", []) if c["url"] not in finder.used]
+        pool = sorted((c for c in getattr(finder, "topic_items", []) if c["url"] not in finder.used), key=lambda c: str(c.get("url", "")))
         for sh in shots:
             url = (sh.get("_qa") or {}).get("url", "")
             if not sh.get("src") or sh.get("_ban"):
@@ -2075,7 +2075,7 @@ def _apply_fixes(shots, fixes, fixes_path, finder, media_dir, log):
             q = sh.get("_qa") or {}
             sp = q.get("spec") or {}
             want = words(sp.get("text")) | words(sp.get("query")) | words(" ".join(sp.get("queries") or []))
-            pool.sort(key=lambda c: -len(want & words(f"{c.get('title', '')} {c.get('page', '')}")))
+            pool.sort(key=lambda c: (-len(want & words(f"{c.get('title', '')} {c.get('page', '')}")), str(c.get("url", ""))))
             new = None
             while pool and not new:
                 c = pool.pop(0)
