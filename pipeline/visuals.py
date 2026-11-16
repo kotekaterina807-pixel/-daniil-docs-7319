@@ -856,7 +856,7 @@ class VisualFinder:
                     conv = None
                     with _I.open(tmp) as im:
                         im.load()
-                        if im.width < 300 or im.height < 250:
+                        if (im.width < 300 or im.height < 250) and not (item.get("small_ok") and im.width >= 150 and im.height >= 150):
                             raise ValueError("слишком маленькая картинка")
                         if im.mode not in ("RGB", "L") or (im.format or "").upper() not in ("JPEG", "PNG"):
                             conv = im.convert("RGB")
@@ -876,6 +876,17 @@ class VisualFinder:
         с паузами (сайт отвечает 429 при частых запросах). Возвращает путь или None."""
         cands = [url]
         fn = None
+        if url.lower().startswith("wikipedia:"):        # «wikipedia:Название статьи» — главное фото статьи
+            cands = []
+            try:
+                r = self._get("https://en.wikipedia.org/w/api.php",
+                              {"action": "query", "format": "json", "titles": url[10:].strip(), "redirects": 1,
+                               "prop": "pageimages", "pithumbsize": 900})
+                for pg in ((r.json().get("query") or {}).get("pages") or {}).values():
+                    if (pg.get("thumbnail") or {}).get("source"):
+                        cands.append(pg["thumbnail"]["source"])
+            except Exception:
+                pass
         m = re.search(r"upload\.wikimedia\.org/wikipedia/(?:commons|en)/(?:thumb/)?[0-9a-f]/[0-9a-f]{2}/([^/?]+)", url) \
             or re.search(r"Special:FilePath/([^?#]+)", url)
         if m:
@@ -900,7 +911,7 @@ class VisualFinder:
             for u in dict.fromkeys(cands):
                 try:
                     p = self._download({"kind": "image", "url": u, "thumb": u, "source": "manual", "page": u,
-                                        "title": name, "author": "", "license": ""})
+                                        "title": name, "author": "", "license": "", "small_ok": True})
                 except Exception:
                     p = None
                 if p:
@@ -1010,7 +1021,7 @@ class VisualFinder:
                 f0 = fold(nm.split()[0]) if len(nm.split()) > 1 else ""
                 return not f0 or not firsts or any(f0.startswith(f) or f.startswith(f0) for f in firsts)
             for nm, url in manual.items():
-                if nm.split() and fold(nm.split()[-1]) in keys and first_ok(nm) and url.startswith("http"):
+                if nm.split() and fold(nm.split()[-1]) in keys and first_ok(nm) and (url.startswith("http") or (getattr(self, "manual_paths", None) or {}).get(nm)):
                     loc = (getattr(self, "manual_paths", None) or {}).get(nm)
                     return [{"kind": "image", "url": url, "thumb": url, **({"local": loc} if loc else {}), "source": "указано в сценарии",
                              "page": url, "title": nm, "author": "архив", "license": "указано в сценарии",
