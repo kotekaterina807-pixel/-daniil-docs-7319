@@ -308,7 +308,7 @@ def _sfx_events(shots):
                     break
                 sd = dash_secs(mts[k] - mts[k - 1]) if k else 0.0   # ровно пока ложится пунктир
                 if k and pn and at - sd >= t0:
-                    ev.append({"file": pn, "at": at - sd, "dur": sd, "vol": 0.07, "fade": 0.3})
+                    ev.append({"file": pn, "at": at - sd, "dur": sd, "vol": 0.03, "fade": 0.3})
                 if pi:                                    # точка появилась — мягкий короткий тон
                     ev.append({"file": pi, "at": at, "dur": 0.9, "vol": 0.1, "fade": 0.3})
         bed = sh.get("bed") or {}
@@ -332,7 +332,7 @@ def _sfx_events(shots):
                 ev.append({"file": h, "at": t0, "dur": 2.2, "vol": 0.3, "fade": 0.9})
             continue
         if sh.get("prolog") and sh.get("first_of_seg") and wh and i and t0 > 1.0:
-            ev.append({"file": wh, "at": max(0.0, t0 - 0.35), "dur": 0.9, "vol": 0.09, "fade": 0.3})
+            ev.append({"file": wh, "at": max(0.0, t0 - 0.35), "dur": 0.9, "vol": 0.035, "fade": 0.3})
         if name.startswith("doc_") and tw and not sh.get("no_type"):
             a = sh.get("type_start") if sh.get("type_start") is not None else 0.3
             b = sh.get("type_end") if sh.get("type_end") is not None else (t1 - t0 - 0.6)
@@ -549,6 +549,19 @@ def step_build(cfg, niche, project, log=print, stop_flag=lambda: False, progress
         script["archive"] = list(dict.fromkeys((script.get("archive") or []) + fixes["archive"]))
     finder.topic_items = []
     finder.manual_photos = script.get("photos") or {}
+    finder.manual_paths = {}
+    miss = []
+    for _nm, _url in (finder.manual_photos or {}).items():      # портреты из #! ФОТО — качаем и проверяем СРАЗУ, а не на доске
+        _p = finder.portrait_for(_nm, _url, log)
+        if _p:
+            finder.manual_paths[_nm] = str(_p)
+        else:
+            miss.append(_nm)
+    if finder.manual_photos:
+        log(f"  Портреты из сценария: {len(finder.manual_paths)}/{len(finder.manual_photos)}.")
+    if miss:
+        raise RuntimeError("не скачались портреты из #! ФОТО: " + ", ".join(miss) +
+                           ". Доска была бы без лиц — сборка остановлена до долгой работы. Проверьте ссылки или интернет.")
     finder.person_hint = re.sub(r"(?i)\b(incident|vorfall|случай|инцидент)\b", "",
                                 next((a for a in script.get("archive") or [] if not a.lower().startswith("http")), "")).strip()
     if script.get("archive"):
@@ -1013,6 +1026,27 @@ def step_build(cfg, niche, project, log=print, stop_flag=lambda: False, progress
         shots = kept
         if dropped:
             log(f"  Убрано плохих кадров без замены: {dropped} — их время заняли соседние кадры.")
+    # один и тот же человек в двух кадрах подряд (разные фото) — зритель видит повтор: второй кадр заменяем
+    # видеокадром той же сцены; если видео нет — предыдущий кадр просто идёт дольше
+    n_rep = 0
+    for i in range(1, len(shots)):
+        a_, b_ = shots[i - 1], shots[i]
+        if a_.get("person") and b_.get("person") and (a_.get("who") or "") and a_.get("who") == b_.get("who") \
+                and not str(b_.get("src", "")).find("person_") >= 0 and b_.get("role") not in ("card", "title"):
+            donor = next((x for x in reversed(shots[:i]) if _plain(x) and x.get("kind") == "video"
+                          and not x.get("person")), None)
+            if donor:
+                b_.update({k: donor[k] for k in ("src", "kind", "clip_dur") if k in donor})
+                b_["offset_n"] = int(donor.get("offset_n", 0)) + 1
+                b_["person"] = False
+                b_.pop("who", None)
+            else:
+                a_["e"] = b_["e"]
+                b_["e"] = b_["s"]
+            n_rep += 1
+    shots = [x for x in shots if x["e"] > x["s"]]
+    if n_rep:
+        log(f"  Повторы одного человека подряд заменены: {n_rep}.")
     # фото/карточка человека — 3–5 секунд: успеть увидеть лицо и прочитать имя, но не висеть 15 секунд
     for i, sh in enumerate(shots):
         if not sh.get("person") or (sh["e"] - sh["s"]) / SR <= 5.0:
@@ -2309,8 +2343,9 @@ def _board_item(spec, b, shots_dir, length, t0, state, script, finder, log):
                 photo = ""
                 if url:
                     try:
-                        pth = finder._download({"kind": "image", "url": url, "thumb": url, "source": "manual",
-                                                "page": url, "title": nm, "author": "", "license": ""})
+                        pth = (getattr(finder, "manual_paths", None) or {}).get(nm) or \
+                            next((v for k, v in (getattr(finder, "manual_paths", None) or {}).items()
+                                  if align.norm(k.split()[-1]) == last), None) or finder.portrait_for(nm, url, log)
                         photo = str(pth) if pth else ""
                     except Exception as e:
                         log(f"  Фото для доски ({nm}) не скачалось: {str(e)[:80]}")

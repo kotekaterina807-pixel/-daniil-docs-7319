@@ -868,6 +868,33 @@ class VisualFinder:
         tmp.unlink(missing_ok=True)
         return None
 
+    def portrait_for(self, name, url, log=None):
+        """Портрет из сценария (#! ФОТО): пробуем ссылку, затем зеркала того же файла Викимедии,
+        с паузами (сайт отвечает 429 при частых запросах). Возвращает путь или None."""
+        cands = [url]
+        fn = None
+        m = re.search(r"upload\.wikimedia\.org/wikipedia/(?:commons|en)/(?:thumb/)?[0-9a-f]/[0-9a-f]{2}/([^/?]+)", url) \
+            or re.search(r"Special:FilePath/([^?#]+)", url)
+        if m:
+            fn = m.group(1)
+            cands += [f"https://commons.wikimedia.org/wiki/Special:FilePath/{fn}?width=900",
+                      f"https://en.wikipedia.org/wiki/Special:FilePath/{fn}?width=900",
+                      f"https://commons.wikimedia.org/wiki/Special:FilePath/{fn}"]
+        for rnd in range(3):
+            for u in dict.fromkeys(cands):
+                try:
+                    p = self._download({"kind": "image", "url": u, "thumb": u, "source": "manual", "page": u,
+                                        "title": name, "author": "", "license": ""})
+                except Exception:
+                    p = None
+                if p:
+                    return p
+            if rnd < 2:
+                time.sleep(8 * (rnd + 1))
+        if log:
+            log(f"  Портрет «{name}» не скачался: {url[:90]}")
+        return None
+
     def _candidates(self, visual, queries):
         """Сначала ВИДЕО по всем вариантам запроса, фото — только если видео не хватило.
         archive — реальное фото места/документа: Wikimedia, затем видео, затем фото Pixabay."""
@@ -968,7 +995,8 @@ class VisualFinder:
                 return not f0 or not firsts or any(f0.startswith(f) or f.startswith(f0) for f in firsts)
             for nm, url in manual.items():
                 if nm.split() and fold(nm.split()[-1]) in keys and first_ok(nm) and url.startswith("http"):
-                    return [{"kind": "image", "url": url, "thumb": url, "source": "указано в сценарии",
+                    loc = (getattr(self, "manual_paths", None) or {}).get(nm)
+                    return [{"kind": "image", "url": url, "thumb": url, **({"local": loc} if loc else {}), "source": "указано в сценарии",
                              "page": url, "title": nm, "author": "архив", "license": "указано в сценарии",
                              "tags": nm, "person": True}]
         surnames = {n.split()[-1].lower().strip(",") for n in names}
