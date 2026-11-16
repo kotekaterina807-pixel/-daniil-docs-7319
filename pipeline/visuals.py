@@ -406,6 +406,8 @@ class VisualFinder:
                 if raw:
                     self._web_ok = True
                     return self._web_filter(raw, min_w)
+                if getattr(self, "_ddg_dead", False):
+                    return out                   # DuckDuckGo уже не отдал страницу поиска — не тратим секунды на каждый запрос
                 s = requests.Session()
                 s.headers.update(BROWSER_UA)
                 s.headers["Accept"] = "text/html,application/json;q=0.9,*/*;q=0.8"
@@ -413,6 +415,7 @@ class VisualFinder:
                 m = re.search(r"vqd=[\"']?([\d-]+)", page.text)
                 if not m:
                     self._diag(query, f"DuckDuckGo: не отдал страницу поиска ({page.status_code})")
+                    self._ddg_dead = True
                     self._web_dead()
                     return out
                 s.headers["Referer"] = "https://duckduckgo.com/"

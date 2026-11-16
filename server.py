@@ -982,10 +982,12 @@ def _remote_loop():
                         JOB.add_log(f"Сборка по команде из чата с Claude: {name}")
                         try:
                             project = runner.project_from_text(path, npath, JOB.add_log)
-                            over = {}
-                            if re.search(r"(?im)^#!\s*РЕЖИМ:\s*быстр", text):   # быстрая сборка: без повторного круга
-                                over = {"qa_retry": False, "claude_review": False}  # проверки и без ожидания раскадровки
-                            if re.search(r"(?im)^#!\s*ПРОВЕРКА:\s*(да|yes|on)", text):  # Claude смотрит раскадровку до монтажа
+                            # экономный режим по умолчанию: без итоговой проверки кадров, без второго круга и без
+                            # ожидания раскадровки (всё это тратит лимит Claude). Вернуть: «#! РЕЖИМ: полный»
+                            over = {"qa_retry": False, "claude_review": False, "qa_check": False}
+                            if re.search(r"(?im)^#!\s*РЕЖИМ:\s*(полн|full)", text):
+                                over = {}
+                            if re.search(r"(?im)^#!\s*ПРОВЕРКА:\s*(да|yes|on)", text) and not over:  # Claude смотрит раскадровку до монтажа
                                 over["claude_review"] = True
                             res = _build(project, npath, src="по команде из чата", over=over)
                         except Exception as e:
