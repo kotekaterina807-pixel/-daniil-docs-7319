@@ -172,6 +172,18 @@ def _contiguous(shots, log=print):
     return out
 
 
+def _is_blank(path):
+    """Пустая оборотка архивной карточки или чистый картон: почти нет деталей в центре кадра."""
+    try:
+        from PIL import Image, ImageStat
+        with Image.open(path) as im:
+            g = im.convert("L").resize((96, 96))
+        c = g.crop((16, 16, 80, 80))
+        return ImageStat.Stat(c).stddev[0] < 16
+    except Exception:
+        return False
+
+
 def _dhash(path):
     """Отпечаток картинки (64 бита): одинаковые изображения из разных источников дают близкие значения."""
     try:
@@ -2054,7 +2066,11 @@ def _apply_fixes(shots, fixes, fixes_path, finder, media_dir, log):
         pool = [c for c in getattr(finder, "topic_items", []) if c["url"] not in finder.used]
         for sh in shots:
             url = (sh.get("_qa") or {}).get("url", "")
-            if not sh.get("src") or sh.get("_ban") or not (url in ban_urls or Path(str(sh["src"])).name in ban_files):
+            if not sh.get("src") or sh.get("_ban"):
+                continue
+            _blank = sh.get("kind") == "image" and not str(url).startswith(("card:", "map:", "radio:", "board:", "doc:")) \
+                and Path(str(sh["src"])).exists() and _is_blank(sh["src"])
+            if not (_blank or url in ban_urls or Path(str(sh["src"])).name in ban_files):
                 continue
             q = sh.get("_qa") or {}
             sp = q.get("spec") or {}
@@ -2065,7 +2081,7 @@ def _apply_fixes(shots, fixes, fixes_path, finder, media_dir, log):
                 c = pool.pop(0)
                 if finder._claim(c):
                     pth = finder._download(c)
-                    if pth:
+                    if pth and not _is_blank(pth):
                         new = (c, pth)
             if new:
                 c, pth = new
