@@ -848,9 +848,13 @@ class VisualFinder:
                     if r.status_code in (401, 403, 410):
                         r = _DIRECT.get(item["url"], headers=UA, stream=True, timeout=60)
                     r.raise_for_status()
+                    t0 = time.time()
+                    limit = 240 if item["kind"] == "video" else 60      # общий предел на файл: медленная раздача не должна вешать сборку
                     with open(tmp, "wb") as f:
                         for chunk in r.iter_content(1 << 16):
                             f.write(chunk)
+                            if time.time() - t0 > limit:
+                                raise TimeoutError("слишком долгая загрузка")
                 if item["kind"] == "image":            # сайт мог отдать страницу вместо картинки
                     from PIL import Image as _I
                     conv = None
