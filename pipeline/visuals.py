@@ -932,14 +932,13 @@ class VisualFinder:
         if visual == "archive":
             # музеи (Met, Чикаго) отдают много картин «примерно на тему» — они в конце;
             # точный поиск картинок по названию (как в браузере) — сразу после Wikimedia
-            order = [self._wikimedia, self._web_images, self._loc, self._ia_video, self._openverse,
-                     self._stock, self._pixabay_photos, self._aic, self._met]
+            order = [self._wikimedia, self._web_images, self._ia_video,
+                     self._stock, self._pixabay_photos]
         elif visual == "newsreel":
             # [хроника] — подлинная киносъёмка той эпохи (Internet Archive, общественное достояние), потом сток
             order = [self._ia_video, self._stock, self._wikimedia]
         elif visual == "photo":
-            order = [self._web_images, self._wikimedia, self._pixabay_photos, self._openverse, self._stock,
-                     self._aic, self._met]
+            order = [self._web_images, self._wikimedia, self._pixabay_photos, self._stock]
         else:
             order = [self._stock, self._ia_video, self._web_images, self._pixabay_photos, self._wikimedia]
         for src in order:
@@ -1087,12 +1086,6 @@ class VisualFinder:
         for n in names:
             for q in (n, f"{n} portrait", f"{n} photograph"):
                 add(self._wikimedia(q), need_name=True)
-        latin = [n for n in names if not re.search("[а-яё]", n, re.I)]
-        for n in latin:                                  # дальше — Библиотека Конгресса и Openverse
-            if len(out) >= 6:
-                break
-            add(self._loc(n), need_name=True)
-            add(self._openverse(n, min_w=400), need_name=True)
         hint = (getattr(self, "person_hint", "") or "").strip()
         if hint and len(out) < 3:                        # имя + тема ролика: «Zinaida Kolmogorova Dyatlov Pass»
             for n in names[:2]:

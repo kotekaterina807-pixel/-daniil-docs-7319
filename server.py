@@ -981,6 +981,12 @@ def _remote_loop():
                     def job(path=path, npath=npath, name=name, text=text):
                         JOB.add_log(f"Сборка по команде из чата с Claude: {name}")
                         try:
+                            try:
+                                from pipeline import preflight
+                                for ln_ in preflight.check(text):
+                                    JOB.add_log(ln_)
+                            except Exception:
+                                pass
                             project = runner.project_from_text(path, npath, JOB.add_log)
                             # экономный режим по умолчанию: без итоговой проверки кадров, без второго круга и без
                             # ожидания раскадровки (всё это тратит лимит Claude). Вернуть: «#! РЕЖИМ: полный»

@@ -28,6 +28,7 @@ TR_INNER = 0.30      # между кадрами внутри абзаца
 TR_PARA = 0.45       # между абзацами
 TR_CARD = 0.45       # в название главы и из него
 TR_TITLE = 0.80      # из заставки в первый кадр
+PHOTO_CAP = 0.40                                  # не больше 40% кадров ролика — фото
 DARKEN = "eq=brightness=-0.16:saturation=0.8,gblur=sigma=4"   # фон под названием ролика и главы
 
 # Лёгкая поправка цвета по настроению
@@ -686,6 +687,28 @@ def step_build(cfg, niche, project, log=print, stop_flag=lambda: False, progress
             b["specs"].append(spec)
             jobs.append((bi, len(b["specs"]) - 1))
 
+    # жёсткий предел фото: не больше PHOTO_CAP кадров от всего ролика. Лишние [archive]/[photo] (кроме прямых
+    # ссылок, людей, [фокус]) становятся видео по тому же запросу; снимаются равномерно, а не подряд
+    try:
+        allsp = [sp for b in seg_blocks for sp in b["specs"]]
+        total_n = sum(max(1, sp.get("n", 1)) for sp in allsp) or 1
+        photo_n = sum(max(1, sp.get("n", 1)) for sp in allsp if sp["visual"] in ("archive", "photo", "person"))
+        cap = float(cfg.get("photo_cap", PHOTO_CAP))
+        extra = photo_n - int(total_n * cap)
+        if extra > 0:
+            cand = [sp for sp in allsp if sp["visual"] in ("archive", "photo") and not sp.get("focus")
+                    and not str(sp["query"]).lower().startswith("http")]
+            step = max(1.0, len(cand) / max(1, min(len(cand), extra)))
+            done, pos = 0, 0.0
+            while done < extra and int(pos) < len(cand):
+                sp = cand[int(pos)]
+                done += max(1, sp.get("n", 1))
+                sp["visual"] = "stock"
+                pos += step
+            log(f"  Фото было бы {photo_n} из {total_n} кадров ({photo_n * 100 // total_n}%), предел {int(cap * 100)}%: "
+                f"часть фото заменена видео ({done} кадров).")
+    except Exception as e:
+        log(f"  Предел фото не применён: {e}")
     finder.person_alt = {sp["query"]: sp.get("shown", "") for b in seg_blocks for sp in b["specs"]
                          if sp["visual"] == "person"}
     mode = cfg.get("visual_check", "claude")
@@ -1399,6 +1422,13 @@ def step_build(cfg, niche, project, log=print, stop_flag=lambda: False, progress
     return final
 
 
+def _photo_share(seg_blocks):
+    """Доля кадров, которые сейчас запланированы как фото (архив, фото, человек)."""
+    allsp = [sp for b in seg_blocks for sp in b.get("specs", [])]
+    tot = sum(max(1, sp.get("n", 1)) for sp in allsp) or 1
+    return sum(max(1, sp.get("n", 1)) for sp in allsp if sp.get("visual") in ("archive", "photo", "person")) / tot
+
+
 def _choose_in_chat(cfg, project, finder, seg_blocks, jobs, vis_cache, log, check_stop, progress,
                     auto=False, topic="", photos=None):
     """Кадры выбирает Claude в чате по листам с превью (см. pipeline/review.py)."""
@@ -1471,7 +1501,7 @@ def _choose_in_chat(cfg, project, finder, seg_blocks, jobs, vis_cache, log, chec
             if pl.get("source") == "архив" and spec["visual"] == "stock" and not seg_blocks[bi].get("prolog"):
                 # фото — только в сильные моменты: не чаще одной фразы из трёх, остальное — видео.
                 # Хук (пролог) — только видео.
-                if no - last_arch.get("no", -99) >= 3:
+                if no - last_arch.get("no", -99) >= 3 and _photo_share(seg_blocks) < float(cfg.get("photo_cap", PHOTO_CAP)) - 0.03:
                     spec["visual"] = "archive"        # старые фото, гравюры, картины той эпохи
                     last_arch["no"] = no
             if spec["visual"] == "person" and pl.get("people"):

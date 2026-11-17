@@ -88,13 +88,10 @@ def _wikimedia():
 
 def _archives():
     """Openverse и Библиотека Конгресса — дополнительные свободные архивы фото (без ключей)."""
-    name = "Архивы: Openverse, Библиотека Конгресса, Met, Чикаго, Internet Archive"
+    name = "Архивы: Internet Archive"
     res = []
-    for label, url, params in (("Openverse", "https://api.openverse.org/v1/images/", {"q": "lighthouse", "page_size": 1}),
-                               ("Библиотека Конгресса", "https://www.loc.gov/photos/", {"q": "lighthouse", "fo": "json", "c": 1, "at": "results"}),
-                               ("Met", "https://collectionapi.metmuseum.org/public/collection/v1/search", {"q": "ship", "hasImages": "true"}),
-                               ("Чикаго", "https://api.artic.edu/api/v1/artworks/search", {"q": "ship", "limit": 1}),
-                               ("Internet Archive", "https://archive.org/advancedsearch.php", {"q": "ship", "rows": 1, "output": "json"})):
+    for label, url, params in (
+                               ("Internet Archive", "https://archive.org/advancedsearch.php", {"q": "ship", "rows": 1, "output": "json"}),):
         try:
             from .visuals import _direct_retry
             first = requests.get(url, params=params, headers=UA, timeout=20)
@@ -106,7 +103,7 @@ def _archives():
             res.append((label, False, type(e).__name__))
     good = [l for l, o, m in res if o]
     bad = [l for l, o, m in res if not o]
-    ok = len(good) >= 3
+    ok = len(good) >= 1
     msg = "работают: " + (", ".join(good) or "нет")
     if bad:
         msg += "; закрыты для вашего подключения: " + ", ".join(bad) + (

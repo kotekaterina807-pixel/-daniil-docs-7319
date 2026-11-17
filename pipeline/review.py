@@ -111,6 +111,13 @@ def collect(finder, spec, taken):
                     break
     if visual != "photo" and not planned:
         pool.sort(key=lambda c: (0 if c["kind"] == "video" else 1, -_overlap(query, c.get("tags", ""))))
+    if visual == "stock" and not spec.get("auto_person"):
+        # видеострока: фото — только запасным вариантом (если видео меньше четырёх); так доля фото в ролике не растёт
+        vids = [c for c in pool if c["kind"] == "video"]
+        if len(vids) >= 4:
+            pool = vids
+        else:
+            pool = vids + [c for c in pool if c["kind"] != "video"]
     seen = {c["url"] for c in out}
     for c in pool:
         if len(out) >= CANDS:
