@@ -955,7 +955,9 @@ def _remote_loop():
                         def fjob(d=d, name=name, cmd=cmd):
                             JOB.add_log(f"Правка по команде из чата с Claude: {d.name}")
                             try:
-                                over = {}
+                                over = {"qa_retry": False, "claude_review": False, "qa_check": False}
+                                if cmd.get("full"):
+                                    over = {}
                                 if cmd.get("qa") is False:        # только убрать отмеченные кадры, без новой проверки
                                     over["qa_check"] = False
                                 if cmd.get("review") is False:
@@ -1128,6 +1130,8 @@ _WHAT = {"build": ("▶️ Начинаю делать видео", "✅ Вид�
 def _build(project, npath, mode="build", times=(), src="", over=None):
     """Сборка проекта. Если нужен выбор кадров в чате — возвращает это как результат, а не ошибку."""
     from pipeline import review
+    if over is None:        # экономный режим по умолчанию и для кнопки «Собрать видео»: одна проверка кадров, без второго круга
+        over = {"qa_retry": False, "claude_review": False, "qa_check": False}
     JOB.project = project.name
     t0 = time.time()
     start, done = _WHAT.get(mode, _WHAT["build"])
