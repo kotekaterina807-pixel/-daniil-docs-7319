@@ -952,6 +952,7 @@ def _remote_loop():
     программа раз в минуту забирает его и собирает видео (если сейчас ничего не собирается)."""
     from pipeline import remote
     time.sleep(40)
+    _resend_reports()
     try:                                                    # Claude видит, какая версия сейчас запущена
         remote.status(config.load_config(), "start", f"программа запущена, версия {config.VERSION}")
     except Exception:
@@ -1214,17 +1215,39 @@ def _build(project, npath, mode="build", times=(), src="", over=None):
 
 
 def _report_bg(project, lines):
+    """Отчёт для Claude. Сначала метка в папке проекта: если программу перезапустят (автообновление,
+    закрыли окно) раньше, чем отчёт уйдёт, — он отправится после запуска."""
     from pipeline import report
     STATE["bg"] = STATE.get("bg", 0) + 1
     try:
+        stages = {}
+        if JOB.tracker is not None and JOB.project == Path(project).name:
+            from pipeline import progress as _pg
+            stages = {k: _pg.human(v) for k, v in JOB.tracker.durations.items() if v >= 5}
+        if lines is not None:
+            report.mark_pending(project, [str(x.get("msg", x)) if isinstance(x, dict) else str(x) for x in lines],
+                                {"stages": stages})
         cfg = dict(config.load_config(), _version=config.VERSION)
-        folder = report.send(cfg, project, [str(x.get("msg", x)) if isinstance(x, dict) else str(x) for x in lines],
-                             JOB.add_log)
+        folder = report.send(cfg, project, None, JOB.add_log)
         JOB.add_log(f"Отчёт для Claude отправлен в GitHub: {folder}")
     except Exception as e:
-        JOB.add_log(f"Отчёт для Claude не отправился: {e}")
+        JOB.add_log(f"Отчёт для Claude не отправился: {e} — повторю после перезапуска программы.")
     finally:
         STATE["bg"] = STATE.get("bg", 1) - 1
+
+
+def _resend_reports():
+    """Отчёты, которые не успели уйти до перезапуска, — отправить сейчас."""
+    from pipeline import report
+    try:
+        cfg = config.load_config()
+        if not (cfg.get("report_send", True) and cfg.get("report_repo") and cfg.get("report_token")):
+            return
+        for proj in report.pending_projects(config.OUTPUT_DIR):
+            JOB.add_log(f"Досылаю отчёт, не отправленный до перезапуска: {proj.name}")
+            _report_bg(proj, None)
+    except Exception:
+        pass
 
 
 def _niche_path(niche_id):

@@ -74,6 +74,7 @@ def open_login(cfg):
 
 
 LOG = None          # куда писать «жду сброса лимита» (ставит сборка)
+CALLS = {"n": 0, "chars": 0}   # сколько запросов к Claude Code за сборку (для статистики и оценки расхода)
 
 
 def run(cfg, prompt, workdir, timeout=900):
@@ -152,6 +153,8 @@ def run_text_cached(cfg, prompt, workdir, timeout=900, check=None):
 
 def _run_once(cfg, prompt, workdir, timeout=900):
     """Один запрос к Claude Code. Текст задания идёт через stdin (без проблем с кавычками в Windows)."""
+    CALLS["n"] += 1
+    CALLS["chars"] += len(prompt)
     exe = find_exe()
     if not exe:
         raise ClaudeCodeError("Claude Code не установлен. Установите его (PowerShell: "

@@ -399,6 +399,11 @@ def step_build(cfg, niche, project, log=print, stop_flag=lambda: False, progress
     project = Path(project)
     from .config import VERSION
     log(f"Версия программы: {VERSION}")
+    try:
+        from . import claude_code as _ccs
+        _ccs.CALLS.update(n=0, chars=0)
+    except Exception:
+        pass
     script = _load_json(project / "script.json", None)
     if not script:
         raise RuntimeError("В папке проекта нет script.json — сначала создайте сценарий.")
@@ -1418,6 +1423,24 @@ def step_build(cfg, niche, project, log=print, stop_flag=lambda: False, progress
         extras.make_thumbnail(script.get("thumbnail_text") or script.get("title", ""), img,
                               project / f"thumbnail_{n + 1}.jpg", accent)
     video_only.unlink(missing_ok=True)
+    try:                                   # статистика готового видео — уходит в отчёт для Claude
+        from . import claude_code as _ccs
+        vis = [sh for sh in shots if sh.get("kind") in ("video", "image")]
+        n_v = sum(1 for sh in vis if sh["kind"] == "video")
+        _save_json(project / "статистика.json", {
+            "title": script.get("title", ""), "version": VERSION, "language": code,
+            "duration_min": round(total_sec / 60, 1), "words": sum(len(s_["text"].split()) for s_ in segs),
+            "shots": len(shots), "avg_shot_sec": round(total_sec / max(1, len(shots)), 1),
+            "video_shots": n_v, "photo_shots": len(vis) - n_v,
+            "photo_share_pct": round(100 * (len(vis) - n_v) / max(1, len(vis))),
+            "people_photos": sum(1 for sh in shots if sh.get("person")),
+            "labels": len([o for o in overlays if o.get("anim") == "label"]),
+            "loudness_mean_db": mean, "loudness_peak_db": peak, "sfx": len(sfx or []),
+            "claude_calls": _ccs.CALLS["n"],
+            "chapters": [{"title": t_, "at": f"{int(a_ // 60)}:{int(a_ % 60):02d}"} for t_, a_ in chapter_starts],
+        })
+    except Exception as e:
+        log(f"  Статистика видео не записана: {e}")
     progress(1.0, "Готово")
     log(f"ГОТОВО: {final}")
     return final

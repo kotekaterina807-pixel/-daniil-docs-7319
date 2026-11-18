@@ -102,10 +102,11 @@ def video_grids(video, out_dir, every=2.0, per=20):
     for gi in range(0, len(frames), per):
         chunk = frames[gi:gi + per]
         W, H = 384, 216
-        img = Image.new("RGB", (5 * (W + 6) + 6, ((len(chunk) + 4) // 5) * (H + 6) + 6), (12, 12, 16))
+        cols = 6 if per >= 30 else 5
+        img = Image.new("RGB", (cols * (W + 6) + 6, ((len(chunk) + cols - 1) // cols) * (H + 6) + 6), (12, 12, 16))
         d = ImageDraw.Draw(img)
         for k, f in enumerate(chunk):
-            x, y = 6 + (k % 5) * (W + 6), 6 + (k // 5) * (H + 6)
+            x, y = 6 + (k % cols) * (W + 6), 6 + (k // cols) * (H + 6)
             img.paste(Image.open(f).convert("RGB").resize((W, H)), (x, y))
             t = (gi + k) * every
             d.rectangle([x, y, x + 76, y + 28], fill=(0, 0, 0))
@@ -125,14 +126,45 @@ def _mask(text):
     return re.sub(r"//[^/@\s:]+:[^/@\s]+@", "//•••:•••@", text)
 
 
-def send(cfg, project, log_lines, log=print):
-    """Отправляет отчёт о проекте. Возвращает папку в репозитории."""
+PENDING = "_отчёт_не_отправлен.json"     # метка в папке проекта: отчёт ещё не ушёл (переживает перезапуск)
+
+
+def mark_pending(project, log_lines, extra=None):
+    """Запомнить отчёт к отправке: журнал сохраняется в папку проекта, метка — до успешной отправки."""
+    project = Path(project)
+    (project / "журнал_сборки.txt").write_text(_mask("\n".join(log_lines or [])), encoding="utf-8")
+    m = project / PENDING
+    old = {}
+    try:
+        old = json.loads(m.read_text(encoding="utf-8"))
+    except Exception:
+        pass
+    data = {"folder": old.get("folder") or f"reports/{time.strftime('%Y-%m-%d_%H%M')}_"
+                                           f"{project.name[16:60] or project.name[:40]}",
+            "time": time.strftime("%Y-%m-%d %H:%M:%S"), **(extra or {})}
+    m.write_text(json.dumps(data, ensure_ascii=False, indent=1), encoding="utf-8")
+    return data
+
+
+def pending_projects(output_dir):
+    return [m.parent for m in Path(output_dir).glob(f"*/{PENDING}")]
+
+
+def send(cfg, project, log_lines=None, log=print):
+    """Отправляет отчёт о проекте. Возвращает папку в репозитории. Метка «не отправлен» снимается в конце."""
     repo = check(cfg)
     token = cfg["report_token"].strip()
     project = Path(project)
     video = next((p for p in sorted(project.glob("*.mp4"), key=lambda p: p.stat().st_mtime, reverse=True)
                   if p.name != "video_only.mp4" and not p.name.endswith(("_telegram.mp4", ".part.mp4"))), None)
-    folder = f"reports/{time.strftime('%Y-%m-%d_%H%M')}_{project.name[16:60] or project.name[:40]}"
+    mark = {}
+    try:
+        mark = json.loads((project / PENDING).read_text(encoding="utf-8"))
+    except Exception:
+        pass
+    if log_lines is None and (project / "журнал_сборки.txt").exists():
+        log_lines = (project / "журнал_сборки.txt").read_text(encoding="utf-8").splitlines()
+    folder = mark.get("folder") or f"reports/{time.strftime('%Y-%m-%d_%H%M')}_{project.name[16:60] or project.name[:40]}"
     tmp = Path(tempfile.mkdtemp())
     # сначала самое важное (журнал, данные, кадры готового видео), картинки подбора — в конце
     files = []
@@ -142,6 +174,8 @@ def send(cfg, project, log_lines, log=print):
     if err.exists():
         (tmp / "ошибки.txt").write_text(_mask(err.read_text(encoding="utf-8", errors="replace")[-6000:]), encoding="utf-8")
         files.append(tmp / "ошибки.txt")
+    if (project / "статистика.json").exists():          # статистика готового видео — первой
+        files.insert(0, project / "статистика.json")
     for name in ("монтаж_кадры.json", "проверка.json", "выбор_кадров.json", "план_кадров.json", "script.json",
                  "subtitles.srt", "правки.json", "произношение.txt", "фокус.json"):
         if (project / name).exists():
@@ -149,17 +183,23 @@ def send(cfg, project, log_lines, log=print):
     if video:
         log("  Отчёт: кадры готового видео каждые 2 секунды...")
         try:
-            files += video_grids(video, tmp)
+            files += video_grids(video, tmp, every=3.0, per=30)
         except Exception as e:
             log(f"  Отчёт: кадры видео не получились ({e}).")
     files += sorted(project.glob("проверка_*.jpg"))
     files += sorted(project.glob("раскадровка_*.jpg"))[:40]
     info = {"project": project.name, "video": video.name if video else None,
-            "sent": time.strftime("%Y-%m-%d %H:%M:%S"), "version": cfg.get("_version", "")}
+            "sent": time.strftime("%Y-%m-%d %H:%M:%S"), "version": cfg.get("_version", ""),
+            "stages": mark.get("stages") or {}, "files": [f.name for f in files]}
+    try:
+        info["stats"] = json.loads((project / "статистика.json").read_text(encoding="utf-8"))
+    except Exception:
+        pass
     log(f"  Отчёт для Claude: отправляю {len(files)} файлов в GitHub...")
     for k, f in enumerate(files):
         _put(repo, token, f"{folder}/{f.name}", f.read_bytes(), f"Отчёт: {project.name}")
         time.sleep(1.0)                                   # не чаще ~60 файлов в минуту — иначе GitHub режет
     _put(repo, token, f"{folder}/info.json", json.dumps(info, ensure_ascii=False, indent=1).encode(), "info")
     _put(repo, token, "latest.txt", folder.encode(), "latest")
+    (project / PENDING).unlink(missing_ok=True)
     return folder
