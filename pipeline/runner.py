@@ -295,79 +295,56 @@ BED_VOL = {"engine": 0.16, "wind": 0.14, "static": 0.04, "alarm": 0.12, "thunder
 
 
 def _sfx_events(shots):
-    """Звуки строго по своим местам:
-    - вспышка — только когда на экране появляется фото (не на видео и не на листе);
-    - скрип пера и «тук» меток — только пока на экране карта, ни до, ни после;
-    - машинка — только пока печатаются слова на листе;
-    - низкий удар — при появлении портрета героя; «свуш» — перед новой главой."""
+    """Звук спокойный, без резких акцентов: ударов, «вспышек» и щелчков нет.
+    - мягкий «свуш» перед новой главой, после пролога и на переходе к новому абзацу (не чаще раза в 20 с);
+    - тихая машинка — только пока печатаются слова на листе; тихий скрип пера — пока на карте ложится пунктир."""
     pick = lambda kind: (lambda f: str(f) if f else None)(_sfx_file(kind))   # каждый раз — случайный вариант
-    tw, wh = pick("typewriter"), pick("whoosh")
+    tw = pick("typewriter")
     ev = []
-    last_hit = -99.0
-    last_photo = -99.0
     done_maps = set()
-    done_beds = set()
+    last_wh = -99.0
+
+    def whoosh(at, vol, dur=1.4):
+        f = pick("whoosh")
+        if f:
+            ev.append({"file": f, "at": max(0.0, at), "dur": dur, "vol": vol, "fade_in": 0.35, "fade": 0.6})
+
     for i, sh in enumerate(shots):
         t0, t1 = sh["s"] / SR, sh["e"] / SR
         name = Path(str(sh.get("src", ""))).name
-        is_photo = sh.get("kind") == "image" and not name.startswith(("doc_", "map_", "person_"))
-        if is_photo and sh.get("stack") is not None and not sh.get("stack_solo") and t0 - last_photo > 3.5:
-            fl = pick("drop")                             # фото ложится в стопку — мягкий тёплый «тук» в момент касания
-            if fl:
-                ev.append({"file": fl, "at": t0 + 0.3, "dur": 0.8, "vol": 0.2, "fade": 0.3})
-                last_photo = t0
-        if sh.get("person") and not name.startswith("person_") and t0 - last_hit > 20:
-            h = pick("hit")                               # настоящий портрет героя — низкий удар (не чаще раза в 20 с)
-            if h:
-                ev.append({"file": h, "at": t0, "dur": 2.0, "vol": 0.14, "fade": 0.6})
-                last_hit = t0
         if name.startswith("map_") and sh.get("map_times") and name not in done_maps:
-            done_maps.add(name)                           # карта бывает разрезана на куски — звуки один раз
+            done_maps.add(name)                           # карта бывает разрезана на куски — звук один раз
             j = i
             while j + 1 < len(shots) and Path(str(shots[j + 1].get("src", ""))).name == name:
                 j += 1
-            m_end = shots[j]["e"] / SR - 0.3              # конец карты на экране
-            pn, pi = pick("trace"), pick("mark")
+            m_end = shots[j]["e"] / SR - 0.3
+            pn = pick("trace")
             mts = sh["map_times"]
             from .fx import dash_secs
             for k, mt in enumerate(mts):
                 at = t0 + mt
                 if at >= m_end:
                     break
-                sd = dash_secs(mts[k] - mts[k - 1]) if k else 0.0   # ровно пока ложится пунктир
+                sd = dash_secs(mts[k] - mts[k - 1]) if k else 0.0
                 if k and pn and at - sd >= t0:
-                    ev.append({"file": pn, "at": at - sd, "dur": sd, "vol": 0.03, "fade": 0.3})
-                if pi:                                    # точка появилась — мягкий короткий тон
-                    ev.append({"file": pi, "at": at, "dur": 0.9, "vol": 0.1, "fade": 0.3})
-        bed = sh.get("bed") or {}
-        snd = bed.get("sfx") or []
-        if snd and bed.get("id") not in done_beds:
-            done_beds.add(bed.get("id"))                  # [звук] абзаца: фон на весь абзац или разовый звук
-            b0, b1 = bed["s"] / SR, bed["e"] / SR
-            for nm_ in snd:
-                kind = SOUND_KINDS.get(nm_.split()[0])
-                f_ = pick(kind) if kind else None
-                if not f_:
-                    continue
-                if kind in ("engine", "wind", "static"):
-                    continue                              # сплошной фон (ветер, эфир, мотор) глушит диктора — не кладём
-                else:
-                    ev.append({"file": f_, "at": b0 + (0.4 if kind == "alarm" else 0.2), "dur": 3.2 if kind == "alarm" else 5.5,
-                               "vol": BED_VOL[kind], "fade": 0.5})
-        if sh.get("role") == "curtain":                   # занавес после пролога — глухой удар в темноту
-            h = pick("hit")
-            if h:
-                ev.append({"file": h, "at": t0, "dur": 2.2, "vol": 0.3, "fade": 0.9})
+                    ev.append({"file": pn, "at": at - sd, "dur": sd, "vol": 0.02, "fade_in": 0.2, "fade": 0.3})
+        if sh.get("role") == "curtain":                   # занавес после пролога — мягкий «свуш» в темноту
+            whoosh(t0 - 0.2, 0.10, 1.8)
+            last_wh = t0
             continue
-        if sh.get("prolog") and sh.get("first_of_seg") and wh and i and t0 > 1.0:
-            ev.append({"file": wh, "at": max(0.0, t0 - 0.35), "dur": 0.9, "vol": 0.035, "fade": 0.3})
+        if sh.get("role") == "card":                      # одна мягкая «волна» на главу
+            whoosh(t0 - 0.6, 0.12, 1.8)
+            last_wh = t0
+            continue
         if name.startswith("doc_") and tw and not sh.get("no_type"):
             a = sh.get("type_start") if sh.get("type_start") is not None else 0.3
             b = sh.get("type_end") if sh.get("type_end") is not None else (t1 - t0 - 0.6)
-            dur = max(0.3, min(b, t1 - t0) - a)           # ровно пока печатаются слова, ни секундой дольше
-            ev.append({"file": tw, "at": t0 + a, "dur": dur, "vol": 0.08, "fade": 0.08})
-        elif wh and sh.get("role") == "card" and not any(e["file"] == wh and abs(e["at"] - t0) < 6 for e in ev):
-            ev.append({"file": wh, "at": max(0.0, t0 - 0.55), "dur": 1.6, "vol": 0.18})   # один «свуш» на главу
+            dur = max(0.3, min(b, t1 - t0) - a)           # ровно пока печатаются слова
+            ev.append({"file": tw, "at": t0 + a, "dur": dur, "vol": 0.05, "fade_in": 0.1, "fade": 0.15})
+            continue
+        if i and sh.get("first_of_seg") and t0 > 1.0 and t0 - last_wh >= (8 if sh.get("prolog") else 20):
+            whoosh(t0 - 0.4, 0.03 if sh.get("prolog") else 0.025, 1.0)   # переход кадров — едва слышно
+            last_wh = t0
     return ev[:800]
 
 
@@ -1394,8 +1371,9 @@ def step_build(cfg, niche, project, log=print, stop_flag=lambda: False, progress
     final = project / f"{_slug(script.get('title', 'video'))}.mp4"
     sfx = _sfx_events(shots)
     if sfx:
-        log(f"  Звуки: {len(sfx)} (вспышки фото, машинка и шорох листов, перо на карте, удар на лицах, переходы к главам).")
+        log(f"  Звуки: {len(sfx)} (мягкие переходы к главам и абзацам, тихая машинка на листах, перо на карте).")
     render.final_mix(video_only, narration, music, final, total_sec, float(cfg.get("music_volume", 0.12)), sfx=sfx)
+    progress(0, "Сведение звука 1/3")
     # проверка звука в готовом файле: если тишина — сводим проще (без эффектов, затем без музыки)
     mean, peak = render.audio_level(final)
     log(f"  Звук в итоге: средняя громкость {mean} дБ, пик {peak} дБ." if mean is not None else "  Звук в итоге: проверить не удалось.")
@@ -1406,6 +1384,18 @@ def step_build(cfg, niche, project, log=print, stop_flag=lambda: False, progress
         render.final_mix(video_only, narration, kw["music"], final, total_sec, float(cfg.get("music_volume", 0.12)), sfx=kw["sfx"])
         mean, peak = render.audio_level(final)
         log(f"  Звук после пересведения: средняя {mean} дБ, пик {peak} дБ.")
+    progress(0, "Сведение звука 2/3")
+    # уровень: средняя громкость −18…−16 дБ, пик не выше −1 дБ; вне диапазона — подгоняется сам
+    if mean is not None and peak is not None and peak > -45:
+        lo, hi = float(cfg.get("loud_min_db", -18)), float(cfg.get("loud_max_db", -16))
+        if not (lo <= mean <= hi) or peak > -1.0:
+            try:
+                mean, peak = render.fix_level(final, mean, peak, target=(lo + hi) / 2, log=log)
+            except Exception as e:
+                log(f"  Подгонка громкости не удалась ({e}) — оставляю как есть.")
+        else:
+            log("  Громкость в норме (−18…−16 дБ, пик не выше −1 дБ).")
+    progress(0, "Сведение звука 3/3")
 
     # ---------- 6. субтитры, описание, обложки ----------
     progress(0, "Файлы")

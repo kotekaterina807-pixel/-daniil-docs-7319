@@ -674,7 +674,7 @@ def assemble(shots, out, workdir, log=print, group_size=20, on_progress=lambda d
 DUCK = "sidechaincompress=threshold=0.012:ratio=14:attack=12:release=1000:makeup=1"
 # Музыка тише и сильнее прижимается под голос; звуки (фото, листы, карта) тише, чтобы не перебивать диктора.
 VOICE_NORM = "anull"      # выравнивание голоса (loudnorm) убрано: на ПК пользователя после него пропал звук
-SFX_GAIN = 0.4
+SFX_GAIN = 0.35
 
 
 def _voice_lufs(narration):
@@ -768,7 +768,7 @@ def _run_loud(cmd, filt, out, total_sec):
             d = _json.loads(m.group(0))
             lin = (f"loudnorm=I=-16:TP=-1.5:LRA=20:measured_I={d['input_i']}:measured_TP={d['input_tp']}:"
                    f"measured_LRA={d['input_lra']}:measured_thresh={d['input_thresh']}:"
-                   f"offset={d['target_offset']}:linear=true,alimiter=limit=0.89")
+                   f"offset={d['target_offset']}:linear=true,alimiter=limit=0.89:level=0")
     except Exception:
         lin = None
     cmd = list(cmd) + ["-filter_complex", filt.replace(LOUD, lin) if lin else filt, "-map", "0:v", "-map", "[a]",
@@ -795,7 +795,8 @@ def _final_mix_sfx(cmd, music, out, total_sec, music_volume, sfx, fade_out_start
     track = _sfx_track(sfx, total_sec, Path(out).with_suffix(".sfx.wav"), sfx_gain)   # все звуки — одной дорожкой
     if track:
         cmd += ["-i", str(track)]
-        parts.append(f"[{idx}:a]aformat=sample_rates=48000:channel_layouts=stereo[sx]")
+        # звуки — мягкие: без звенящих верхов и гула
+        parts.append(f"[{idx}:a]aformat=sample_rates=48000:channel_layouts=stereo,highpass=f=90,lowpass=f=6500[sx]")
         mix.append("[sx]")
         idx += 1
     parts.append("".join(mix) + f"amix=inputs={len(mix)}:duration=first:normalize=0,"
@@ -837,3 +838,25 @@ def audio_level(path):
     x = _re.search(r"max_volume:\s*(-?[\d.]+|-inf) dB", p.stderr)
     num = lambda g: (-99.0 if g.group(1) == "-inf" else float(g.group(1))) if g else None
     return num(m), num(x)
+
+
+def fix_level(path, mean, peak, target=-17.0, log=print, tries=3):
+    """Подгоняет громкость готового файла: средняя ≈ target дБ, пик не выше −1 дБ (мягкий лимитер).
+    Видео не перекодируется. Возвращает новые (средняя, пик)."""
+    path = Path(path)
+    for k in range(tries):
+        gain = round(target - mean, 2)
+        tmp = path.with_suffix(".lvl.mp4")
+        _run([ffmpeg_exe(), "-y", "-hide_banner", "-loglevel", "error", "-i", str(path), "-map", "0:v", "-map", "0:a",
+              "-c:v", "copy", "-af", f"volume={gain}dB,alimiter=limit=0.891:attack=5:release=60:level=0",
+              "-c:a", "aac", "-b:a", "192k", "-ar", "48000", "-movflags", "+faststart", str(tmp)])
+        m2, p2 = audio_level(tmp)
+        if m2 is None:
+            tmp.unlink(missing_ok=True)
+            break
+        os.replace(tmp, path)
+        log(f"  Громкость подогнана: средняя {mean} → {m2} дБ, пик {peak} → {p2} дБ.")
+        mean, peak = m2, p2
+        if target - 1.0 <= mean <= target + 1.0 and peak <= -0.9:
+            break
+    return mean, peak
