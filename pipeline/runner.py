@@ -1387,6 +1387,12 @@ def _choose_in_chat(cfg, project, finder, seg_blocks, jobs, vis_cache, log, chec
     rev_path, ch_path = project / "review.json", project / "выбор_кадров.json"
     sig = [[bi, si, seg_blocks[bi]["specs"][si]["visual"], seg_blocks[bi]["specs"][si]["query"],
             seg_blocks[bi]["specs"][si]["n"]] for bi, si in jobs]
+    per_ = max(1, int(cfg.get("sheets_per_call", 3)))
+    plan_calls = -(-len(jobs) // 45)
+    check_calls = -(-(-(-len(jobs) // review.ROWS_PER_SHEET)) // per_)
+    log(f"Оценка расхода Claude: ≈{plan_calls + check_calls + max(1, check_calls // 4)} запросов "
+        f"(план кадров {plan_calls} — {cfg.get('claude_code_model') or 'sonnet'}, проверка листов ≈{check_calls} "
+        f"+ дозапросы — {cfg.get('claude_check_model') or 'haiku'}). Уже сделанное не повторяется.")
     lines = review.load_review(rev_path)
     if not lines or [ln.get("sig") for ln in lines] != sig:
         lines = None
@@ -1590,16 +1596,21 @@ def _choose_with_claude_code(cfg, project, finder, lines, rev_path, ch_path, top
 
     def ask(sheet_lines, prefix, label, rnd=1):
         sheets = review.make_sheets(sheet_lines, project, log, prefix=prefix)
-        done = [0]
+        per = max(1, int(cfg.get("sheets_per_call", 3)))     # несколько листов за один запрос — в разы меньше расход
+        batches = [sheets[i:i + per] for i in range(0, len(sheets), per)]
+        model = cfg.get("claude_check_model") or "haiku"
+        log(f"  Запросов к Claude Code: {len(batches)} (листов {len(sheets)}, по {per} за раз, модель {model}).")
         progress(0, f"Проверка кадров 0/{len(sheets)}")
+        done = [0]
 
         empty = [0]
 
-        def one(name):
+        def one(names):
             check_stop()
-            ans = claude_code.run_cached(cfg, claude_code.PROMPT.format(sheet=name, topic=topic or "документальное видео"),
-                                         project, name, check=lambda a: any(claude_code.parse(a)))
-            done[0] += 1
+            listed = ", ".join(names)
+            ans = claude_code.run_cached(cfg, claude_code.PROMPT.format(sheet=listed, topic=topic or "документальное видео"),
+                                         project, names, check=lambda a: any(claude_code.parse(a)), model=model)
+            done[0] += len(names)
             progress(0, f"Проверка кадров {done[0]}/{len(sheets)}")
             p, q = claude_code.parse(ans)
             if not p and not q:
@@ -1609,14 +1620,14 @@ def _choose_with_claude_code(cfg, project, finder, lines, rev_path, ch_path, top
             return p, q
         picks, queries = {}, {}
         try:
-            with ThreadPoolExecutor(max_workers=int(cfg.get("claude_workers", 4))) as ex:
-                for p, q in ex.map(one, sheets):
+            with ThreadPoolExecutor(max_workers=int(cfg.get("claude_workers", 3))) as ex:
+                for p, q in ex.map(one, batches):
                     picks.update(p)
                     queries.update(q)
         except claude_code.ClaudeCodeError as e:
             raise RuntimeError(str(e))
-        if sheets and empty[0] > max(1, len(sheets) // 10):
-            raise RuntimeError(f"Claude не ответил по {empty[0]} листам из {len(sheets)} — кадры не проверены, "
+        if batches and empty[0] > max(1, len(batches) // 10):
+            raise RuntimeError(f"Claude не ответил по {empty[0]} запросам из {len(batches)} — кадры не проверены, "
                                f"монтаж не начинаю. Повторите сборку позже: уже полученные ответы сохранены.")
         return picks, queries
 
@@ -1667,9 +1678,28 @@ def _choose_with_claude_code(cfg, project, finder, lines, rev_path, ch_path, top
         return got
 
     restored_q = restore(1)
+    prev_done = sum(1 for ln in lines if (part.get(str(ln["no"])) or {}).get("key") == lkey(ln))
+    # очевидные строки — без Claude: фото по прямой ссылке из сценария и строки о человеке, у которого
+    # нашлись его фото (Claude всё равно взял бы только их). Так листов меньше.
+    auto_n = 0
+    for ln in lines:
+        if str(ln["no"]) in part and part[str(ln["no"])].get("key") == lkey(ln):
+            continue
+        cs = ln["cands"]
+        if cs and cs[0].get("source") in ("manual", "указано в сценарии"):
+            pick = [1]
+        elif ln.get("person") and any(c.get("person") is True for c in cs):
+            pick = [i + 1 for i, c in enumerate(cs) if c.get("person") is True][:max(1, ln.get("n", 1))]
+        else:
+            continue
+        choices[ln["no"]] = pick
+        remember({ln["no"]: pick}, {}, 1)
+        auto_n += 1
+    if auto_n:
+        log(f"  Без Claude выбрано строк: {auto_n} (портреты героев и фото по ссылкам из сценария).")
     todo1 = [ln for ln in lines if str(ln["no"]) not in part or part[str(ln["no"])].get("key") != lkey(ln)]
-    if len(todo1) < len(lines):
-        log(f"  Выбор кадров продолжается: уже проверено строк {len(lines) - len(todo1)} из {len(lines)} "
+    if prev_done:
+        log(f"  Выбор кадров продолжается: уже проверено строк {prev_done} из {len(lines)} "
             f"(сохранено после прошлой остановки) — повторно не спрашиваю.")
     log(f"Claude Code смотрит кадры ({len(todo1)} строк сценария)...")
     picks, queries = ask(todo1, "кадры_лист", "Claude проверяет кадры", 1) if todo1 else ({}, {})

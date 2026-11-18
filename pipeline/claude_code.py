@@ -77,14 +77,14 @@ LOG = None          # куда писать «жду сброса лимита»
 CALLS = {"n": 0, "chars": 0}   # сколько запросов к Claude Code за сборку (для статистики и оценки расхода)
 
 
-def run(cfg, prompt, workdir, timeout=900):
+def run(cfg, prompt, workdir, timeout=900, model=None):
     """Один запрос к Claude Code. Если лимит подписки на этот период исчерпан (на 30-минутном видео
     запросов много), не роняем сборку: ждём сброса лимита (проверка раз в 15 минут, до 6 часов)."""
     import time as _t
     from . import limits
     for k in range(40):
         try:
-            out = _run_once(cfg, prompt, workdir, timeout)
+            out = _run_once(cfg, prompt, workdir, timeout, model)
             limits.ok(cfg, building=True)
             return out
         except LimitError as e:
@@ -100,16 +100,19 @@ def run(cfg, prompt, workdir, timeout=900):
             stopctl.sleep(wait)                     # «Стоп» прерывает ожидание лимита сразу
 
 
-def run_cached(cfg, prompt, workdir, sheet, timeout=900, check=None):
+def run_cached(cfg, prompt, workdir, sheet, timeout=900, check=None, model=None):
     """То же, что run, но ответ по этому листу запоминается в папке проекта: если сборку остановили
     (выключили компьютер, кончился лимит) — при повторной сборке уже просмотренные листы не спрашиваются снова."""
     import hashlib
     wd = Path(workdir)
-    f = wd / str(sheet)
+    sheets = sheet if isinstance(sheet, (list, tuple)) else [sheet]
     try:
-        key = hashlib.md5(prompt.encode("utf-8") + f.read_bytes()).hexdigest()[:20]
+        h = hashlib.md5(prompt.encode("utf-8") + (model or "").encode())
+        for one in sheets:
+            h.update((wd / str(one)).read_bytes())
+        key = h.hexdigest()[:20]
     except OSError:
-        return run(cfg, prompt, workdir, timeout)
+        return run(cfg, prompt, workdir, timeout, model)
     cache = wd / "_ответы_claude"
     cache.mkdir(exist_ok=True)
     cf = cache / f"{key}.txt"
@@ -122,7 +125,7 @@ def run_cached(cfg, prompt, workdir, sheet, timeout=900, check=None):
         cf.unlink(missing_ok=True)
     ans = ""
     for _ in range(3):                    # пустой или непонятный ответ — спрашиваем ещё раз, не запоминаем
-        ans = run(cfg, prompt, workdir, timeout)
+        ans = run(cfg, prompt, workdir, timeout, model)
         if ans.strip() and (not check or check(ans)):
             try:
                 cf.write_text(ans, encoding="utf-8")
@@ -151,7 +154,7 @@ def run_text_cached(cfg, prompt, workdir, timeout=900, check=None):
     return ans
 
 
-def _run_once(cfg, prompt, workdir, timeout=900):
+def _run_once(cfg, prompt, workdir, timeout=900, model=None):
     """Один запрос к Claude Code. Текст задания идёт через stdin (без проблем с кавычками в Windows)."""
     CALLS["n"] += 1
     CALLS["chars"] += len(prompt)
@@ -160,7 +163,7 @@ def _run_once(cfg, prompt, workdir, timeout=900):
         raise ClaudeCodeError("Claude Code не установлен. Установите его (PowerShell: "
                               "irm https://claude.ai/install.ps1 | iex), затем войдите: claude → /login.")
     cmd = [str(exe), "-p", "--output-format", "text", "--allowedTools", "Read",
-           "--model", cfg.get("claude_code_model") or "sonnet"]
+           "--model", model or cfg.get("claude_code_model") or "sonnet"]
     if str(exe).lower().endswith(".cmd"):
         cmd = ["cmd", "/c"] + cmd
     try:
@@ -194,7 +197,7 @@ def check(cfg, workdir):
 
 
 PROMPT = """Ты подбираешь видеокадры для документального видео на YouTube. Главное — ТОЧНОСТЬ ПО РАССКАЗУ.
-Открой файл {sheet} инструментом Read (это картинка). На нём строки сценария; у каждой строки —
+Открой инструментом Read КАЖДЫЙ из файлов: {sheet} (это картинки). На них строки сценария; у каждой строки —
 номер, текст диктора, «В КАДРЕ» и до 8 пронумерованных превью (видео или фото).
 Тема видео: {topic}
 
@@ -248,7 +251,7 @@ PROMPT = """Ты подбираешь видеокадры для докумен
 Если подходящих нет или их меньше, чем нужно, — предложи новый короткий поисковый запрос НА АНГЛИЙСКОМ
 для видеостока: что конкретно и спокойно должно быть в кадре по смыслу фразы, без людей, если они не нужны.
 
-Ответ — ТОЛЬКО строки такого вида, без пояснений:
+Ответь по ВСЕМ строкам ВСЕХ листов. Ответ — ТОЛЬКО строки такого вида, без пояснений:
 12: 3 1 5
 13: - | query: snowy mountain slope at dusk
 14: 2 | query: vintage propeller airplane cockpit
