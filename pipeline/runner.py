@@ -541,6 +541,9 @@ def step_build(cfg, niche, project, log=print, stop_flag=lambda: False, progress
                 pos += n + pause
     total_sec = pos / SR
     log(f"Длительность видео: {total_sec / 60:.1f} мин.")
+    if total_sec < 25 * 60:
+        log(f"  ВНИМАНИЕ: ролик {total_sec / 60:.1f} мин — короче цели 25–30 минут. Сборка продолжается; "
+            f"в следующий сценарий нужно ≈{int((25 * 60 - total_sec) / 60 * L['wpm'])} слов больше.")
     try:
         _pron_check(project, [b for b in blocks if b["type"] == "seg"], cfg.get("say") or {}, log)
     except Exception as e:

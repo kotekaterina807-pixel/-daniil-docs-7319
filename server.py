@@ -770,6 +770,12 @@ class Handler(BaseHTTPRequestHandler):
         npath = _niche_path(data.get("niche"))
 
         def job():
+            try:
+                from pipeline import preflight
+                for ln_ in preflight.check(text):
+                    JOB.add_log(ln_)
+            except Exception:
+                pass
             project = runner.project_from_text(path, npath, JOB.add_log)
             return _build(project, npath)
         ok = run_job("build", job)
