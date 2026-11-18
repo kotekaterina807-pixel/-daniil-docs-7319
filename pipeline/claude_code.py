@@ -131,6 +131,25 @@ def run_cached(cfg, prompt, workdir, sheet, timeout=900, check=None):
     return ans
 
 
+def run_text_cached(cfg, prompt, workdir, timeout=900, check=None):
+    """Запрос без картинки (план кадров): ответ запоминается по тексту запроса — после остановки не повторяется."""
+    import hashlib
+    cache = Path(workdir) / "_ответы_claude"
+    cache.mkdir(exist_ok=True)
+    cf = cache / f"t_{hashlib.md5(prompt.encode('utf-8')).hexdigest()[:20]}.txt"
+    if cf.exists():
+        old = cf.read_text(encoding="utf-8")
+        if old.strip() and (not check or check(old)):
+            return old
+    ans = run(cfg, prompt, workdir, timeout)
+    if ans.strip() and (not check or check(ans)):
+        try:
+            cf.write_text(ans, encoding="utf-8")
+        except OSError:
+            pass
+    return ans
+
+
 def _run_once(cfg, prompt, workdir, timeout=900):
     """Один запрос к Claude Code. Текст задания идёт через stdin (без проблем с кавычками в Windows)."""
     exe = find_exe()
@@ -319,8 +338,8 @@ def plan(cfg, lines, topic, workdir, log=print, progress=None):
         try:
             from .config import lang as get_lang
             lang = get_lang(cfg.get("language", "ru"))["name"]
-            ans = run(cfg, PLAN_PROMPT.format(topic=topic or "документальное видео", lines=text, lang=lang),
-                      workdir, timeout=600)
+            ans = run_text_cached(cfg, PLAN_PROMPT.format(topic=topic or "документальное видео", lines=text, lang=lang),
+                                  workdir, timeout=600, check=lambda a: bool(re.search(r"(?m)^\s*\d+\s*\|", a or "")))
         except ClaudeCodeError as e:
             log(f"  План кадров не получен ({e}) — ищу по запросам из сценария.")
             return out

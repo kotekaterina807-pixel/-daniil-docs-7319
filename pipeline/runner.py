@@ -1640,7 +1640,7 @@ def _choose_with_claude_code(cfg, project, finder, lines, rev_path, ch_path, top
     by_no = {ln["no"]: ln for ln in lines}
     choices = {}
 
-    def ask(sheet_lines, prefix, label):
+    def ask(sheet_lines, prefix, label, rnd=1):
         sheets = review.make_sheets(sheet_lines, project, log, prefix=prefix)
         done = [0]
         progress(0, f"Проверка кадров 0/{len(sheets)}")
@@ -1656,6 +1656,8 @@ def _choose_with_claude_code(cfg, project, finder, lines, rev_path, ch_path, top
             p, q = claude_code.parse(ans)
             if not p and not q:
                 empty[0] += 1
+            else:
+                remember(p, q, rnd)
             return p, q
         picks, queries = {}, {}
         try:
@@ -1670,8 +1672,60 @@ def _choose_with_claude_code(cfg, project, finder, lines, rev_path, ch_path, top
                                f"монтаж не начинаю. Повторите сборку позже: уже полученные ответы сохранены.")
         return picks, queries
 
-    log(f"Claude Code смотрит кадры ({len(lines)} строк сценария)...")
-    picks, queries = ask(lines, "кадры_лист", "Claude проверяет кадры")
+    # выбор сохраняется после каждого листа: после остановки или перезапуска уже проверенные строки
+    # на листы не попадают и Claude их второй раз не смотрит
+    import threading as _th
+    part_path = Path(project) / "выбор_кадров.part.json"
+    part = _load_json(part_path, {}) if part_path.exists() else {}
+    part_lock = _th.Lock()
+
+    def lkey(ln):
+        return _key(ln.get("text", ""), str(ln.get("n", "")), "p1")
+
+    def remember(p, q, rnd):
+        with part_lock:
+            for no, ks in p.items():
+                ln = by_no.get(no)
+                if not ln:
+                    continue
+                new = [{k: ln["cands"][i - 1].get(k) for k in keep} for i in ks if 1 <= i <= len(ln["cands"])]
+                old = part.get(str(no)) or {}
+                if rnd > 1 and old.get("key") == lkey(ln):     # второй круг дополняет выбор первого
+                    have = {c.get("url") for c in old.get("picked") or []}
+                    new = (old.get("picked") or []) + [c for c in new if c.get("url") not in have]
+                part[str(no)] = {"key": lkey(ln), "round": rnd, "query": q.get(no) or "", "picked": new}
+            try:
+                _save_json(part_path, part)
+            except OSError:
+                pass
+
+    def restore(rnd):
+        """Строки, уже проверенные в этом круге: выбор берётся из файла, на листы не идут."""
+        got = {}
+        for no, ln in by_no.items():
+            e = part.get(str(no))
+            if not e or e.get("key") != lkey(ln) or int(e.get("round", 0)) < rnd:
+                continue
+            urls = [c.get("url") for c in ln["cands"]]
+            idx = []
+            for c in e.get("picked") or []:
+                if c.get("url") not in urls:
+                    ln["cands"].append(c)
+                    urls.append(c.get("url"))
+                idx.append(urls.index(c.get("url")) + 1)
+            choices[no] = list(dict.fromkeys(choices.get(no, []) + idx)) if rnd > 1 else idx
+            if e.get("query"):
+                got[no] = e["query"]
+        return got
+
+    restored_q = restore(1)
+    todo1 = [ln for ln in lines if str(ln["no"]) not in part or part[str(ln["no"])].get("key") != lkey(ln)]
+    if len(todo1) < len(lines):
+        log(f"  Выбор кадров продолжается: уже проверено строк {len(lines) - len(todo1)} из {len(lines)} "
+            f"(сохранено после прошлой остановки) — повторно не спрашиваю.")
+    log(f"Claude Code смотрит кадры ({len(todo1)} строк сценария)...")
+    picks, queries = ask(todo1, "кадры_лист", "Claude проверяет кадры", 1) if todo1 else ({}, {})
+    queries = dict(restored_q, **queries)
     for no, ks in picks.items():
         if no in by_no:
             choices[no] = [k for k in ks if 1 <= k <= len(by_no[no]["cands"])]
@@ -1691,7 +1745,10 @@ def _choose_with_claude_code(cfg, project, finder, lines, rev_path, ch_path, top
         # у длинного видео — только строки, где нет НИ ОДНОГО кадра (где один есть, он просто дольше на экране)
         need_ = (lambda no: not choices.get(no)) if len(by_no) > 120 else \
                 (lambda no: len(choices.get(no, [])) < by_no[no]["n"])
-        retry = [by_no[no] for no in by_no if need_(no) and queries.get(no)]
+        q2 = restore(rnd + 1)                       # этот круг уже был до остановки — его ответы из файла
+        retry = [by_no[no] for no in by_no if need_(no) and queries.get(no)
+                 and int((part.get(str(no)) or {}).get("round", 0)) < rnd + 1]
+        queries.update(q2)
         if not retry:
             break
         log(f"  Круг {rnd + 1}: не хватает подходящих кадров в {len(retry)} строках — ищу по запросам Claude...")
@@ -1707,7 +1764,7 @@ def _choose_with_claude_code(cfg, project, finder, lines, rev_path, ch_path, top
         retry = [ln for ln in retry if len(ln["cands"]) > len(choices.get(ln["no"], []))]
         if not retry:
             break
-        picks2, queries = ask(retry, f"кадры_круг{rnd + 1}", f"Круг {rnd + 1}")
+        picks2, queries = ask(retry, f"кадры_круг{rnd + 1}", f"Круг {rnd + 1}", rnd + 1)
         for no, ks in picks2.items():
             if no in by_no:
                 ks = [k for k in ks if 1 <= k <= len(by_no[no]["cands"])]
@@ -1721,6 +1778,7 @@ def _choose_with_claude_code(cfg, project, finder, lines, rev_path, ch_path, top
         log(f"  Строк без своих кадров: {short} — их время займут соседние кадры той же сцены (без повторов).")
     review.save_review(rev_path, lines)
     ch_path.write_text(json.dumps({str(k): v for k, v in choices.items()}, ensure_ascii=False), encoding="utf-8")
+    part_path.unlink(missing_ok=True)
 
 
 MOTION_SLOW = 6.0      # выше — ролик проигрывается медленнее (см. render.motion_score)
