@@ -9,9 +9,8 @@ import re
 import wave
 from pathlib import Path
 
-from . import align, extras, render, script_format, script_gen, timing, tts
+from . import align, extras, render, script_format, timing, tts
 from .config import MUSIC_DIR, OUTPUT_DIR, ensure_dirs, ffmpeg_exe, lang
-from . import library
 from .visuals import VisualFinder
 
 PAUSE_SEC = 0.45     # пауза между абзацами (0.8 звучало как допрос — слишком рвано)
@@ -60,20 +59,7 @@ def _save_json(p, data):
     Path(p).write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
 
 
-# ---------------- Шаг 1: сценарий ----------------
-def step_script(cfg, niche, niche_path, topic, minutes, project, log=print):
-    project = Path(project)
-    script = script_gen.generate_script(cfg, niche, topic, minutes, log)
-    script["niche_file"] = str(niche_path)
-    script["minutes"] = minutes
-    script["language"] = cfg.get("language", "ru")
-    _save_json(project / "script.json", script)
-    (project / "script.txt").write_text(script_format.to_text(script), encoding="utf-8")
-    extras.write_facts(script, project / "ПРОВЕРИТЬ_ФАКТЫ.txt")
-    log(f"Сценарий сохранён: {project / 'script.txt'}")
-    return script
-
-
+# ---------------- Шаг 1: сценарий (готовый текст из чата) ----------------
 def project_from_text(txt_path, niche_path, log=print):
     """Новый проект из готового сценария (.txt), написанного вручную или в чате."""
     text = Path(txt_path).read_text(encoding="utf-8-sig")
@@ -433,13 +419,12 @@ def step_build(cfg, niche, project, log=print, stop_flag=lambda: False, progress
     voice = f"{cfg.get('elevenlabs_voice_id')}:{cfg.get('eleven_speed')}:{cfg.get('eleven_stability')}:{cfg.get('elevenlabs_model')}"
     if not str(cfg.get("elevenlabs_voice_id", "")).strip():
         raise RuntimeError("Не выбран голос диктора — выберите его на вкладке «Голоса».")
-    if cfg.get("visual_check") == "claude_code":
+    cfg["visual_check"] = "claude_code"               # кадры всегда проверяет Claude Code по подписке
+    if True:
         from . import claude_code
         if not claude_code.find_exe():
             raise RuntimeError("Кадры должен проверять Claude Code, но он не установлен. Установите его "
-                               "(PowerShell: irm https://claude.ai/install.ps1 | iex, затем в терминале: claude → /login) "
-                               "или выберите другой способ "
-                               "проверки в «Параметры → Монтаж».")
+                               "(PowerShell: irm https://claude.ai/install.ps1 | iex, затем в терминале: claude → /login).")
     segs = [s for ch in script["chapters"] for s in ch["segments"]]
     log(f"Озвучка: {len(segs)} абзацев ({'Lumean' if provider == 'lumean' else 'ElevenLabs'}, {L['name']})...")
     todo = []
@@ -582,12 +567,6 @@ def step_build(cfg, niche, project, log=print, stop_flag=lambda: False, progress
             finder.topic_items = finder.topic_archive(script["archive"])
         except Exception as e:
             log(f"  Архив темы не прочитан: {e}")
-    from . import vision
-    vision.reset()
-    try:
-        finder.library = library.update_index(cfg, log, stop_flag)
-    except Exception as e:
-        log(f"  Библиотека футажей не прочитана: {e}")
     for v in vis_cache.values():
         for item in v.get("items", []):
             finder.used.add(item.get("url", ""))
@@ -696,76 +675,18 @@ def step_build(cfg, niche, project, log=print, stop_flag=lambda: False, progress
         log(f"  Предел фото не применён: {e}")
     finder.person_alt = {sp["query"]: sp.get("shown", "") for b in seg_blocks for sp in b["specs"]
                          if sp["visual"] == "person"}
-    mode = cfg.get("visual_check", "claude")
-    if mode == "auto":
-        mode = "claude"
-    if mode == "claude":
-        if str(cfg.get("anthropic_key", "")).strip() or str(cfg.get("lumean_key", "")).strip():
-            cfg["llm_provider"] = "claude"            # проверка кадров и запасные запросы — через Claude
-            cfg["strict_visuals"] = True
-            log("  Кадры проверяет Claude.")
-        else:
-            mode = "chat"
-            log("  Нет ключа Lumean или Claude — кадры выберете через листы в чат.")
-    if mode == "none":
-        cfg["strict_visuals"] = False
-    if mode == "claude_code":
-        log("  Кадры проверяет Claude Code (по подписке Claude).")
-    if mode in ("chat", "claude_code"):
-        _choose_in_chat(cfg, project, finder, seg_blocks, jobs, vis_cache, log, check_stop, progress,
-                        auto=(mode == "claude_code"), topic=_topic_rules(script, cfg, niche),
-                        photos=script.get("photos"))
-    else:
-        def run_job(job):
-            bi, si = job
-            b = seg_blocks[bi]
-            spec = b["specs"][si]
-            topic = script.get("topic", "")
-            key = _key(spec["visual"], spec["query"], str(spec["n"]), spec["text"][:80],
-                       "strict" if cfg.get("strict_visuals", True) else "", "v2")
-            cached = vis_cache.get(key)
-            if cached and all(Path(it["path"]).exists() for it in cached["items"]):
-                return key, cached
-            items = []
-            if spec["visual"] == "person":
-                items = [dict(f, person=True) for f in finder.find_person(spec["query"], spec["text"], topic)]
-                rest = spec["n"] - len(items)
-                if rest > 0:
-                    items += finder.find("stock", spec["fill_query"], rest, spec["text"], topic)
-            else:
-                items = finder.find(spec["visual"], spec["query"], spec["n"], spec["text"], topic)
-            out = {"items": [{"path": f["path"], "kind": f["kind"], "url": f["url"], "duration": f.get("duration", 0),
-                              "person": bool(f.get("person"))} for f in items],
-                   "credits": [f["credit"] for f in items]}
-            return key, out
-
-        from concurrent.futures import ThreadPoolExecutor
-        done = 0
-        with ThreadPoolExecutor(max_workers=3) as ex:
-            for (bi, si), (key, res) in zip(jobs, ex.map(run_job, jobs)):
-                check_stop()
-                vis_cache[key] = res
-                seg_blocks[bi]["specs"][si]["items"] = res["items"]
-                done += 1
-                if done % 5 == 0 or done == len(jobs):
-                    _save_json(vis_cache_path, vis_cache)
-                    log(f"  Кадры подобраны: {done}/{len(jobs)} строк сценария")
-                progress(0.10 + 0.35 * done / len(jobs), f"Подбор кадров {done}/{len(jobs)}")
+    log("  Кадры проверяет Claude Code (по подписке Claude).")
+    _choose_in_chat(cfg, project, finder, seg_blocks, jobs, vis_cache, log, check_stop, progress,
+                    topic=_topic_rules(script, cfg, niche), photos=script.get("photos"))
     finder.credits = [c for v in vis_cache.values() for c in v.get("credits", [])
                       if any(c.get("url") == it.get("url") for b in seg_blocks for sp in b["specs"]
                              for it in sp.get("items", []))]
     _calm_videos(project, seg_blocks, log, progress)
     for b in seg_blocks:
         b["items"] = [it for sp in b["specs"] for it in sp.get("items", [])]
-    st = vision.stats()
     n_video = sum(1 for b in seg_blocks for it in b["items"] if it["kind"] == "video")
     n_all = sum(len(b["items"]) for b in seg_blocks)
     log(f"  Найдено кадров: {n_all}, из них видео: {n_video}, фото: {n_all - n_video}.")
-    if st.get("off"):
-        log("  ВНИМАНИЕ: проверка по смыслу отключилась во время подбора — часть кадров выбрана по тегам. "
-            "Нажмите «Проверить всё» в настройках и пришлите результат.")
-    elif st.get("checked"):
-        log(f"  Нейросеть проверила {st['checked']} кадров-кандидатов.")
 
     # ---------- 4. раскладка: каждая строка кадров звучит со своим предложением ----------
     shots = []          # {kind, src, s, e (сэмплы), mood, first_of_seg, ...}
@@ -1019,7 +940,7 @@ def step_build(cfg, niche, project, log=print, stop_flag=lambda: False, progress
     log(f"  Кадров в монтаже: {len(shots)} (в среднем {total_sec / max(1, len(shots)):.1f} с), "
         f"повторно использовано роликов: {reused}.")
 
-    if cfg.get("visual_check") == "claude_code" and cfg.get("qa_check", True):
+    if cfg.get("qa_check", False):
         _quality_check(cfg, project, shots, finder, _topic_rules(script, cfg, niche), log, progress)
     _apply_fixes(shots, fixes, fixes_path, finder, media_dir, log)
     if True:
@@ -1361,7 +1282,6 @@ def step_build(cfg, niche, project, log=print, stop_flag=lambda: False, progress
     except Exception:
         pass
     _free_disk(project, shots_dir, shots, log)
-    _review_before_render(cfg, project, shots, fixes, fixes_path, log, check_stop, progress)
     workers = max(2, min(6, (os.cpu_count() or 4) // 2))
     log(f"Монтаж: {len(shots)} кадров (потоков: {workers}). Кодирование: "
         f"{'видеокарта NVIDIA' if render.gpu_available() else 'процессор'}. Это самый долгий этап.")
@@ -1458,8 +1378,8 @@ def _photo_share(seg_blocks):
 
 
 def _choose_in_chat(cfg, project, finder, seg_blocks, jobs, vis_cache, log, check_stop, progress,
-                    auto=False, topic="", photos=None):
-    """Кадры выбирает Claude в чате по листам с превью (см. pipeline/review.py)."""
+                    auto=True, topic="", photos=None):
+    """Кадры выбирает Claude Code по листам с превью (см. pipeline/review.py)."""
     from . import review
     rev_path, ch_path = project / "review.json", project / "выбор_кадров.json"
     sig = [[bi, si, seg_blocks[bi]["specs"][si]["visual"], seg_blocks[bi]["specs"][si]["query"],
@@ -1603,8 +1523,7 @@ def _choose_in_chat(cfg, project, finder, seg_blocks, jobs, vis_cache, log, chec
         _choose_with_claude_code(cfg, project, finder, pick_lines, rev_path, ch_path, topic, log, check_stop, progress)
         review.save_review(rev_path, lines)       # вместе с фразами-листами (тот же список, кандидаты обновлены)
     if not ch_path.exists():
-        sheets = review.make_sheets(pick_lines, project, log)
-        raise review.NeedChoices(sheets, len(lines))
+        raise RuntimeError("Выбор кадров не сохранился — повторите сборку (проверенные листы не пропадут).")
     choices = {int(k): v for k, v in json.loads(ch_path.read_text(encoding="utf-8")).items()}
     log("Скачиваю выбранные кадры...")
     picked = [(ln, [ln["cands"][k - 1] for k in choices.get(ln["no"], []) if 0 < k <= len(ln["cands"])])
@@ -1647,9 +1566,8 @@ def _choose_in_chat(cfg, project, finder, seg_blocks, jobs, vis_cache, log, chec
         seg_blocks[bi]["specs"][si]["items"] = items
         seg_blocks[bi]["specs"][si]["_cands"] = ln["cands"]      # запасные варианты — для контроля качества
     st = getattr(finder, "src_stats", {}) or {}
-    names_ = {"_stock": "видео Pixabay", "_pixabay_photos": "фото Pixabay", "_wikimedia": "Wikimedia",
-              "_web_images": "интернет (Bing)", "_loc": "Библ. Конгресса", "_openverse": "Openverse",
-              "_ia_video": "Internet Archive", "_aic": "Чикаго", "_met": "Met"}
+    names_ = {"_stock": "видео Pixabay/Pexels", "_pixabay_photos": "фото Pixabay", "_wikimedia": "Wikimedia",
+              "_web_images": "интернет (Bing)", "_ia_video": "Internet Archive"}
     if st:
         log("  Кандидаты по источникам: " + ", ".join(f"{names_.get(k, k)} {v}" for k, v in
                                                      sorted(st.items(), key=lambda x: -x[1])))
@@ -2131,45 +2049,6 @@ def _free_disk(project, shots_dir, shots, log):
     if free < 6:
         raise RuntimeError(f"На диске свободно только {free:.1f} ГБ — для монтажа нужно хотя бы 6–8 ГБ. "
                            f"Освободите место (корзина, загрузки, старые видео в папке output) и запустите снова.")
-
-
-def _review_before_render(cfg, project, shots, fixes, fixes_path, log, check_stop, progress):
-    """Раскадровка — Claude в чат, ждём «можно монтировать» или список кадров на замену."""
-    from . import checkpoint, telegram
-    wait_min = int(cfg.get("review_wait_min", 120) or 0)
-    if not cfg.get("claude_review", True) or wait_min <= 0 or not all(checkpoint._ok(cfg)):
-        return
-    progress(0.45, "Раскадровка для проверки Claude")
-    try:
-        sheets, index = checkpoint.storyboard(shots, project, SR)
-        base = checkpoint.publish(cfg, project, sheets, index, list(cfg.get("_log_tail", lambda: [])()))
-    except Exception as e:
-        log(f"  Раскадровка для Claude не отправилась ({e}) — монтирую без проверки.")
-        return
-    log(f"Кадры подобраны. Раскадровка ({len(sheets)} листов) отправлена Claude — жду проверки "
-        f"до {wait_min} мин. Напишите Claude в чат: «проверь кадры».")
-    telegram.notify(cfg, f"Кадры для «{project.name[:60]}» подобраны, монтаж ещё не начат.\n"
-                         f"Напиши Claude в чат: «проверь кадры». Жду до {wait_min} мин, потом монтирую сам.")
-    progress(0.45, "Жду проверки кадров Claude")
-    cmd = checkpoint.wait(cfg, project, check_stop, wait_min)
-    if cmd is None:
-        log("  Проверки Claude не было — монтирую как есть.")
-        telegram.notify(cfg, f"Проверки кадров не было за {wait_min} мин — начинаю монтаж как есть.")
-        return
-    times = [str(t) for t in cmd.get("times") or []]
-    if not times and not cmd.get("archive"):
-        log("  Claude проверил кадры: можно монтировать." + (f" {cmd.get('note')}" if cmd.get("note") else ""))
-        telegram.notify(cfg, "Claude проверил кадры — начинаю монтаж.")
-        return
-    fx = _load_json(fixes_path, {})
-    fx["times"] = list(dict.fromkeys((fx.get("times") or []) + times))
-    if cmd.get("archive"):
-        fx["archive"] = list(dict.fromkeys((fx.get("archive") or []) + list(cmd["archive"])))
-    _save_json(fixes_path, fx)
-    log(f"  Claude нашёл кадры на замену: {', '.join(times) or 'новые разделы архива'} — подбираю заново "
-        f"(озвучка и проверенные кадры остаются).")
-    telegram.notify(cfg, f"Claude отметил кадры на замену ({len(times)} шт.) — меняю и пришлю раскадровку снова.")
-    raise checkpoint.Restart()
 
 
 def _apply_fixes(shots, fixes, fixes_path, finder, media_dir, log):

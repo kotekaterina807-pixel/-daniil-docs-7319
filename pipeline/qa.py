@@ -164,8 +164,7 @@ def check(cfg, project, entries, finder, topic, log, progress=None, taken=None, 
     for e in entries:
         e["frame_img"] = _frame(e["shot"], tmp / f"{e['no']}.jpg")
     names = _sheets(entries, project, prefix="проверка" if _round == 1 else "проверка_повтор")
-    from . import illustrate
-    draw_on = illustrate.available(cfg)
+    draw_on = False                                   # рисованные кадры (Leonardo) убраны из программы
     log(f"Контроль качества: Claude Code проверяет каждый кадр ({len(entries)} шт., листов {len(names)})..."
         if _round == 1 else f"  Повторная проверка: {len(entries)} кадров с новыми вариантами...")
     verdicts = {}
@@ -252,8 +251,8 @@ def check(cfg, project, entries, finder, topic, log, progress=None, taken=None, 
             if stop[0]:
                 return no, None
             try:
-                return no, illustrate.generate(cfg, prompt, project / "_drawn" / f"{no}_{abs(hash(prompt)) % 10**8}.jpg", log)
-            except illustrate.IllustrateError:
+                return no, None
+            except Exception:
                 stop[0] = True
                 return no, None
         (project / "_drawn").mkdir(exist_ok=True)

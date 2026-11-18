@@ -228,8 +228,6 @@ def _project_info(d: Path):
         "thumb": thumb.name if thumb.exists() else "",
         "language": data.get("language", "ru"),
         "has_description": (d / "description.txt").exists(),
-        "need_choices": (d / "review.json").exists() and not (d / "выбор_кадров.json").exists() and not video,
-        "sheets": sorted(p.name for p in d.glob("кадры_лист_*.jpg")),
     }
 
 
@@ -362,11 +360,11 @@ def make_shortcut(quiet=False):
 
 
 # ---------------- HTTP ----------------
-PUBLIC_KEYS = ["auto_update", "remote_jobs", "leonardo_key", "ai_images", "pixabay_key", "pexels_key", "proxy_url", "lumean_key", "lumean_ai_model",
-               "tts_provider", "edge_voice", "anthropic_key", "openai_key", "elevenlabs_key", "elevenlabs_voice_id",
+PUBLIC_KEYS = ["auto_update", "remote_jobs", "pixabay_key", "pexels_key", "proxy_url", "lumean_key",
+               "tts_provider", "edge_voice", "elevenlabs_key", "elevenlabs_voice_id", "claude_check_model",
                "music_volume", "shot_seconds", "show_labels", "theme", "sound_done", "open_folder_after",
                "default_niche", "update_repo", "language", "visual_check", "eleven_speed", "eleven_stability", "eleven_style",
-               "tg_token", "tg_chat_id", "tg_send", "tg_notify", "limit_watch", "claude_review", "review_wait_min", "old_look", "report_repo", "report_token", "report_send"]
+               "tg_token", "tg_chat_id", "tg_send", "tg_notify", "limit_watch", "old_look", "report_repo", "report_token", "report_send"]
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -551,18 +549,6 @@ class Handler(BaseHTTPRequestHandler):
                 return _build(d, Path(npath), mode="rebuild")
             ok = run_job("build", job)
             return self._send(200 if ok else 409, {"ok": ok, "error": None if ok else "Уже идёт работа"})
-        if p == "/api/choices":
-            from pipeline import review
-            d = _project_dir(data.get("id"))
-            lines = review.load_review(d / "review.json")
-            if not lines:
-                return self._send(400, {"error": "В проекте нет листов для выбора кадров"})
-            ch = review.parse_choices(data.get("text", ""), lines)
-            if not ch:
-                return self._send(400, {"error": "Не нашёл в тексте номеров. Вставьте ответ Claude целиком: строки вида «12: 3 1»."})
-            missing = [ln["no"] for ln in lines if ln["no"] not in ch]
-            (d / "выбор_кадров.json").write_text(json.dumps({str(k): v for k, v in ch.items()}), encoding="utf-8")
-            return self._send(200, {"ok": True, "lines": len(ch), "missing": missing})
         if p == "/api/stop":
             from pipeline import stopctl
             JOB.stop = True
@@ -714,8 +700,8 @@ class Handler(BaseHTTPRequestHandler):
             return self._send(200, {"ok": True})
         if p == "/api/open_url":
             url = str(data.get("url") or "")
-            if not url.startswith(("https://elevenlabs.io/", "https://console.anthropic.com/", "https://platform.claude.com/",
-                                   "https://lumean.app/", "https://t.me/BotFather", "https://github.com/", "https://app.leonardo.ai/")):
+            if not url.startswith(("https://elevenlabs.io/", "https://lumean.app/", "https://t.me/BotFather",
+                                   "https://github.com/", "https://pixabay.com/", "https://www.pexels.com/")):
                 return self._send(400, {"error": "Этот адрес открыть нельзя"})
             import webbrowser
             webbrowser.open(url)
@@ -783,8 +769,7 @@ class Handler(BaseHTTPRequestHandler):
 
     def _open(self, data):
         what = data.get("what")
-        from pipeline import library
-        places = {"output": config.OUTPUT_DIR, "footage": library.FOOTAGE_DIR, "music": config.MUSIC_DIR, "sfx": config.SFX_DIR,
+        places = {"output": config.OUTPUT_DIR, "music": config.MUSIC_DIR, "sfx": config.SFX_DIR,
                   "voices": ROOT / "voice_samples", "app": ROOT}
         if what in places:
             places[what].mkdir(parents=True, exist_ok=True)
@@ -991,13 +976,11 @@ def _remote_loop():
                         def fjob(d=d, name=name, cmd=cmd):
                             JOB.add_log(f"Правка по команде из чата с Claude: {d.name}")
                             try:
-                                over = {"qa_retry": False, "claude_review": False, "qa_check": False}
+                                over = {"qa_retry": False, "qa_check": False}
                                 if cmd.get("full"):
                                     over = {}
                                 if cmd.get("qa") is False:        # только убрать отмеченные кадры, без новой проверки
                                     over["qa_check"] = False
-                                if cmd.get("review") is False:
-                                    over["claude_review"] = False
                                 if cmd.get("qa_retry") is False:  # одна проверка, без второго круга поиска замен
                                     over["qa_retry"] = False
                                 res = _rebuild(d, mode="reselect" if cmd.get("reselect") else "fix",
@@ -1028,17 +1011,14 @@ def _remote_loop():
                             project = runner.project_from_text(path, npath, JOB.add_log)
                             # экономный режим по умолчанию: без итоговой проверки кадров, без второго круга и без
                             # ожидания раскадровки (всё это тратит лимит Claude). Вернуть: «#! РЕЖИМ: полный»
-                            over = {"qa_retry": False, "claude_review": False, "qa_check": False}
+                            over = {"qa_retry": False, "qa_check": False}
                             if re.search(r"(?im)^#!\s*РЕЖИМ:\s*(полн|full)", text):
                                 over = {}
-                            if re.search(r"(?im)^#!\s*ПРОВЕРКА:\s*(да|yes|on)", text) and not over:  # Claude смотрит раскадровку до монтажа
-                                over["claude_review"] = True
                             res = _build(project, npath, src="по команде из чата", over=over)
                         except Exception as e:
                             remote.status(config.load_config(), name, f"ошибка: {e}")
                             raise
-                        remote.status(config.load_config(), name, "готово" if not (res or {}).get("need_choices")
-                                      else "ждёт выбора кадров в программе")
+                        remote.status(config.load_config(), name, "готово")
                         return res
                     if run_job("build", job):
                         remote.status(cfg, name, "сборка началась")
@@ -1164,10 +1144,9 @@ _WHAT = {"build": ("▶️ Начинаю делать видео", "✅ Вид�
 
 
 def _build(project, npath, mode="build", times=(), src="", over=None):
-    """Сборка проекта. Если нужен выбор кадров в чате — возвращает это как результат, а не ошибку."""
-    from pipeline import review
+    """Сборка проекта."""
     if over is None:        # экономный режим по умолчанию и для кнопки «Собрать видео»: одна проверка кадров, без второго круга
-        over = {"qa_retry": False, "claude_review": False, "qa_check": False}
+        over = {"qa_retry": False, "qa_check": False}
     JOB.project = project.name
     t0 = time.time()
     start, done = _WHAT.get(mode, _WHAT["build"])
@@ -1179,19 +1158,9 @@ def _build(project, npath, mode="build", times=(), src="", over=None):
     notify(f"{start}: «{_title(project)}»" + (f" ({lang})" if lang else "") + (f" {src}" if src else "")
            + (f"\nКадры на: {', '.join(map(str, times))}" if times else ""))
     before = _tokens_left()
-    from pipeline import checkpoint
     try:
-        for _ in range(8):                         # Claude прислал правки перед монтажом — собираем кадры заново
-            try:
-                runner.step_build(dict(config.load_config(), _log_tail=lambda: list(JOB.log), **(over or {})),
-                                  config.load_niche(npath), project, JOB.add_log, lambda: JOB.stop, JOB.progress)
-                break
-            except checkpoint.Restart:
-                continue
-    except review.NeedChoices as e:
-        JOB.add_log("Кадры-кандидаты собраны. Отправьте листы Claude в чат и вставьте его ответ в программу.")
-        notify(f"⏸ «{_title(project)}»: нужен выбор кадров в программе.")
-        return {"project": project.name, "need_choices": True, "sheets": e.sheets, "lines": e.lines}
+        runner.step_build(dict(config.load_config(), _log_tail=lambda: list(JOB.log), **(over or {})),
+                          config.load_niche(npath), project, JOB.add_log, lambda: JOB.stop, JOB.progress)
     except Exception as e:
         stop = JOB.stop or "Остановлено пользователем" in str(e)
         notify(f"⏹ Сборка «{_title(project)}» остановлена." if stop else

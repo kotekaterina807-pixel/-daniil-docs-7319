@@ -11,7 +11,6 @@ from pathlib import Path
 
 import requests
 
-from . import library, vision
 
 UA = {"User-Agent": "DocuStudio/6.5 (personal documentary video tool; https://github.com/kotekaterina807-pixel/-daniil-docs-7319)"}
 
@@ -440,155 +439,6 @@ class VisualFinder:
             return []                    # неудачный поиск не запоминаем — повторится, когда связь вернётся
 
     # ---------- Openverse (CC0 и общественное достояние; без ключа) ----------
-    def _openverse(self, query, min_w=1000):
-        if self._down.get("ov"):
-            return []
-
-        def fetch():
-            out = []
-            try:
-                r = self._get("https://api.openverse.org/v1/images/",
-                              {"q": query, "license": "cc0,pdm", "page_size": 20, "mature": "false"})
-                if r.status_code != 200:
-                    return out
-                for it in r.json().get("results") or []:
-                    if (it.get("width") or 0) < min_w or not it.get("url"):
-                        continue
-                    lic = (it.get("license") or "").lower()
-                    if lic not in ("cc0", "pdm"):
-                        continue
-                    tags = " ".join(t.get("name", "") for t in it.get("tags") or [] if isinstance(t, dict))
-                    if ARCHIVE_BLOCK.search((it.get("title") or "") + " " + tags):
-                        continue
-                    out.append({
-                        "kind": "image", "url": it["url"], "thumb": it.get("thumbnail") or it["url"],
-                        "source": f"Openverse ({it.get('source') or it.get('provider') or 'архив'})",
-                        "page": it.get("foreign_landing_url") or "", "title": it.get("title") or "",
-                        "author": it.get("creator") or "неизвестен",
-                        "license": "CC0" if lic == "cc0" else "Public Domain", "tags": (it.get("title") or "") + " " + tags,
-                    })
-            except requests.ConnectionError as e:
-                self._down["ov"] = True
-                self.log(f"  Openverse недоступен с этого компьютера — дальше без него ({type(e).__name__}).")
-            except Exception as e:
-                self.log(f"  Openverse: {e}")
-            return out
-        return self._cached(("ov", query, min_w), fetch)
-
-    # ---------- Библиотека Конгресса США (только «без известных ограничений»; без ключа) ----------
-    def _loc(self, query, limit=6):
-        if self._down.get("loc"):
-            return []
-
-        def fetch():
-            out = []
-            try:
-                r = self._get("https://www.loc.gov/photos/", {"q": query, "fo": "json", "c": 15, "at": "results"})
-                if r.status_code in (401, 403, 410):
-                    self._down["loc"] = True             # сайт закрыт для этого подключения — не тратим время
-                    return out
-                if r.status_code != 200:
-                    return out
-                for res in r.json().get("results") or []:
-                    if len(out) >= limit:
-                        break
-                    fmt = " ".join(res.get("original_format") or []).lower()
-                    imgs = [u.split("#")[0] for u in res.get("image_url") or []]
-                    page = res.get("url") or res.get("id") or ""
-                    if not imgs or "collection" in fmt or "web page" in fmt or not page:
-                        continue
-                    time.sleep(0.6)                       # бережно к сайту библиотеки
-                    try:
-                        it = self._get(page.rstrip("/") + "/", {"fo": "json", "at": "item"}).json().get("item") or {}
-                    except Exception:
-                        continue
-                    rights = it.get("rights_advisory") or it.get("rights_information") or ""
-                    rights = " ".join(rights) if isinstance(rights, list) else str(rights)
-                    if not re.search(r"no known restrictions|public domain|no copyright", rights, re.I):
-                        continue
-                    title = res.get("title") or ""
-                    if ARCHIVE_BLOCK.search(title):
-                        continue
-                    thumb = next((u for u in imgs if u.endswith("r.jpg")), imgs[0])
-                    out.append({"kind": "image", "url": imgs[-1], "thumb": thumb, "source": "Library of Congress",
-                                "page": page, "title": title, "author": "Library of Congress",
-                                "license": "No known restrictions", "tags": title})
-            except requests.ConnectionError as e:
-                self._down["loc"] = True
-                self.log(f"  Библиотека Конгресса недоступна с этого компьютера — дальше без неё ({type(e).__name__}).")
-            except Exception as e:
-                self.log(f"  Библиотека Конгресса: {e}")
-            return out
-        return self._cached(("loc", query), fetch)
-
-    # ---------- Музей Метрополитен (открытый доступ, CC0; без ключа) ----------
-    def _met(self, query, limit=6):
-        if self._down.get("met"):
-            return []
-
-        def fetch():
-            out = []
-            try:
-                r = self._get("https://collectionapi.metmuseum.org/public/collection/v1/search",
-                              {"q": query, "hasImages": "true"})
-                if r.status_code in (401, 403, 410):
-                    self._down["met"] = True
-                    return out
-                ids = (r.json().get("objectIDs") or [])[:20] if r.status_code == 200 else []
-                for oid in ids:
-                    if len(out) >= limit:
-                        break
-                    o = self._get(f"https://collectionapi.metmuseum.org/public/collection/v1/objects/{oid}", {}).json()
-                    if not o.get("isPublicDomain") or not o.get("primaryImage"):
-                        continue
-                    title = o.get("title") or ""
-                    if ARCHIVE_BLOCK.search(title):
-                        continue
-                    out.append({"kind": "image", "url": o["primaryImage"], "thumb": o.get("primaryImageSmall") or o["primaryImage"],
-                                "source": "The Met (Open Access)", "page": o.get("objectURL") or "",
-                                "title": f"{title} ({o.get('objectDate') or ''})", "author": o.get("artistDisplayName") or "неизвестен",
-                                "license": "CC0", "tags": " ".join([title, o.get("objectName") or "", o.get("culture") or ""])})
-            except requests.ConnectionError as e:
-                self._down["met"] = True
-                self.log(f"  Музей Метрополитен недоступен — дальше без него ({type(e).__name__}).")
-            except Exception as e:
-                self.log(f"  Музей Метрополитен: {e}")
-            return out
-        return self._cached(("met", query), fetch)
-
-    # ---------- Чикагский институт искусств (общественное достояние, CC0; без ключа) ----------
-    def _aic(self, query, limit=8):
-        if self._down.get("aic"):
-            return []
-
-        def fetch():
-            out = []
-            try:
-                r = self._get("https://api.artic.edu/api/v1/artworks/search",
-                              {"q": query, "query[term][is_public_domain]": "true", "limit": 15,
-                               "fields": "id,title,image_id,artist_display,date_display,is_public_domain,thumbnail"})
-                for a in (r.json().get("data") or []) if r.status_code == 200 else []:
-                    if len(out) >= limit:
-                        break
-                    if not a.get("is_public_domain") or not a.get("image_id"):
-                        continue
-                    if ((a.get("thumbnail") or {}).get("width") or 2000) < 900:
-                        continue
-                    title = a.get("title") or ""
-                    base = f"https://www.artic.edu/iiif/2/{a['image_id']}/full"
-                    out.append({"kind": "image", "url": f"{base}/1686,/0/default.jpg", "thumb": f"{base}/400,/0/default.jpg",
-                                "source": "Art Institute of Chicago", "page": f"https://www.artic.edu/artworks/{a['id']}",
-                                "title": f"{title} ({a.get('date_display') or ''})", "author": a.get("artist_display") or "неизвестен",
-                                "license": "CC0", "tags": title})
-            except requests.ConnectionError as e:
-                self._down["aic"] = True
-                self.log(f"  Чикагский институт искусств недоступен — дальше без него ({type(e).__name__}).")
-            except Exception as e:
-                self.log(f"  Чикагский институт искусств: {e}")
-            return out
-        return self._cached(("aic", query), fetch)
-
-    # ---------- Internet Archive: старая кинохроника в общественном достоянии (без ключа) ----------
     def _ia_video(self, query, limit=4):
         if self._down.get("ia"):
             return []
@@ -948,11 +798,11 @@ class VisualFinder:
         return self._cached(("pbi", query), fetch)
 
     def _stock(self, query):
-        """Видео: своя библиотека (footage), затем Pixabay и Pexels."""
-        own = library.search(self.library, query) if self.library else []
-        if not self._warned_pexels and not self.library and not (self.cfg.get("pexels_key", "").strip()
-                                                                 or self.cfg.get("pixabay_key", "").strip()):
-            self.log("  Нет ни библиотеки футажей, ни ключа Pixabay — видеокадров не будет, только архивные фото.")
+        """Видео: Pixabay и Pexels вперемешку."""
+        own = []
+        if not self._warned_pexels and not (self.cfg.get("pexels_key", "").strip()
+                                            or self.cfg.get("pixabay_key", "").strip()):
+            self.log("  Нет ключа Pixabay или Pexels — видеокадров не будет, только архивные фото.")
             self._warned_pexels = True
         a = self._pixabay(query)
         b = self._pexels(query)
@@ -1259,96 +1109,6 @@ class VisualFinder:
         if not out:
             self._diag(person, "ни в одном источнике нет фото с полным именем")
         return out
-
-    def find_person(self, person, narration="", topic=""):
-        """Одно фото человека или пусто."""
-        pool = [c for c in self._person_photos(person, getattr(self, "person_alt", {}).get(person, ""))
-                if c["url"] not in self.used and c.get("thumb")][:6]
-        found = []
-        if pool:
-            order = vision.judge(self.cfg, narration or person, topic, pool, self.log, person=person)
-            if not order and not vision.available():
-                order = [0]
-            for i in order[:1]:
-                self._accept(pool[i], found)
-        return found
-
-    def find(self, visual, query, count, narration="", topic="", person=""):
-        """До count кадров без повторов по всему видео, лучшие по смыслу первыми.
-        Каждый кадр проверяется нейросетью: смысл, водяные знаки, анахронизмы."""
-        if visual == "person":
-            return self.find_person(query, narration, topic)
-        found = []
-        if not self.cfg.get("strict_visuals", True):
-            pool = [c for c in self._candidates(visual, self._variants(query))]
-            pool.sort(key=lambda c: -_overlap(query, c.get("tags", "")) - (0.5 if c["kind"] == "video" else 0))
-            for item in pool:
-                if len(found) >= count:
-                    break
-                self._accept(item, found)
-            return found
-
-        seen = set()
-        reserve = []
-        tried = self._variants(query)
-        rounds = [tried]
-        judged = 0
-        budget = int(self.cfg.get("max_checked_per_segment", 48))
-        r = 0
-        while r < len(rounds) and len(found) < count and judged < budget:
-            pool = [c for c in self._candidates(visual, rounds[r])
-                    if c["url"] not in self.used and c["url"] not in seen and c.get("thumb")]
-            # без проверки нейросетью — по совпадению тегов с запросом
-            if not vision.available():
-                pool.sort(key=lambda c: -_overlap(query, c.get("tags", "")))
-            if visual != "photo":                     # сначала все видео, фото — только если видео не хватило
-                pool.sort(key=lambda c: 0 if c["kind"] == "video" else 1)
-            pos = [0]
-            while len(found) < count and judged < budget:
-                batch = []
-                while pos[0] < len(pool) and len(batch) < 8:
-                    c = pool[pos[0]]
-                    if batch and c["kind"] != batch[0]["kind"]:
-                        break                             # в одной проверке — только видео или только фото
-                    pos[0] += 1
-                    if c["url"] in seen:
-                        continue
-                    seen.add(c["url"])
-                    batch.append(c)
-                if not batch:
-                    break
-                judged += len(batch)
-                min_rel = float(self.cfg.get("min_relevance", 7))
-                for i, rel in vision.judge(self.cfg, narration or query, topic, batch, self.log,
-                                           query=query, scores=True):
-                    if not vision.available() and _overlap(query, batch[i].get("tags", "")) == 0 and \
-                            batch[i]["source"] != "library":
-                        reserve.append((0.0, batch[i]))
-                        continue
-                    if rel and rel < min_rel:
-                        reserve.append((rel, batch[i]))
-                        continue
-                    if len(found) >= count:
-                        reserve.append((rel or 9.0, batch[i]))
-                        continue
-                    self._accept(batch[i], found)
-            r += 1
-            if r == len(rounds) and len(found) < count and len(rounds) < 3 and judged < budget:
-                alt = vision.alt_queries(self.cfg, narration or query, tried, self.log)
-                alt = [q for q in alt if q not in tried]
-                if alt:
-                    tried += alt
-                    rounds.append(alt)
-        # запасные кадры (оценка 5–6) — лучше, чем повтор одного и того же
-        reserve.sort(key=lambda x: -x[0])
-        for rel, c in reserve:
-            if len(found) >= count:
-                break
-            if rel >= float(self.cfg.get("reserve_relevance", 5)) or (not vision.available() and rel == 0.0):
-                self._accept(c, found)
-        if len(found) < count:
-            self.log(f"  «{query}»: подходящих кадров {len(found)} из {count} (проверено {judged}).")
-        return found
 
     def credits_text(self):
         lines = []

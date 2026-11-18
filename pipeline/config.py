@@ -3,7 +3,7 @@ import json
 import os
 from pathlib import Path
 
-VERSION = "15.7 (18.11.2026)"
+VERSION = "15.8 (18.11.2026)"
 CONFIG_REV = 10      # при смене — обновляются настройки монтажа у уже сохранённых конфигов
 ROOT = Path(__file__).resolve().parent.parent
 CONFIG_PATH = ROOT / "config.json"
@@ -13,20 +13,14 @@ SFX_DIR = ROOT / "sfx"        # звуки: typewriter*.mp3 — печать н�
 OUTPUT_DIR = ROOT / "output"
 
 DEFAULTS = {
-    "llm_provider": "claude",         # нейросеть: Claude (проверка кадров)
-    "anthropic_key": "",
-    "claude_model": "claude-sonnet-5-5",
     "pexels_key": "",
     "pixabay_key": "",
     "tts_provider": "lumean",          # lumean — голоса ElevenLabs через Lumean; elevenlabs — напрямую
-    "openai_key": "",
-    "openai_voice": "onyx",
     "elevenlabs_key": "",
     "elevenlabs_voice_id": "",
     "elevenlabs_model": "eleven_multilingual_v2",
-    "lumean_key": "",                  # ключ Lumean: озвучка + Claude для проверки кадров
+    "lumean_key": "",                  # ключ Lumean: озвучка голосами ElevenLabs
     "lumean_template_id": "",          # шаблон «DocuStudio» в Lumean (создаётся сам)
-    "lumean_ai_model": "",             # модель Claude в Lumean; пусто — самая новая Sonnet
     "eleven_voices": [],               # сохранённые голоса ElevenLabs: [{id, name, desc, preview}]
     "eleven_speed": 1.05,               # скорость речи ElevenLabs (0.7–1.2)
     "eleven_stability": 0.35,
@@ -36,31 +30,24 @@ DEFAULTS = {
     "shot_seconds": 3.2,               # средняя длина одного кадра, сек
     "max_shot_seconds": 5.0,           # обычно кадр не длиннее этого
     "show_labels": True,               # всплывающие надписи (места, люди, даты)
-    "visual_check": "claude_code",     # claude_code — Claude Code по подписке; claude — Claude по API; chat — листы в чат; none — без проверки
-    "claude_code_model": "sonnet",
+    "visual_check": "claude_code",     # кадры проверяет Claude Code по подписке (другие режимы убраны в 15.8)
+    "claude_code_model": "sonnet",     # план кадров (что показать на каждой фразе) — нужна сильная модель
+    "claude_check_model": "haiku",     # просмотр листов с кадрами — лёгкая модель, расход лимита в разы меньше
     "tg_token": "",                    # бот Telegram для отправки готовых видео (@BotFather)
     "tg_chat_id": "",                  # ваш чат с ботом — программа узнаёт сама после «Start»
     "tg_send": True,
     "tg_notify": True,
     "limit_watch": True,
-    "claude_review": True,
-    "review_wait_min": 120,
     "old_look": True,
     "word_sync": True,
     "qa_check": True,
     "remote_jobs": True,             # сборка по команде из чата с Claude (очередь в репозитории отчётов)
     "auto_update": True,             # новые версии ставятся сами (не во время сборки)
     "photo_stack": True,             # подряд идущие фото ложатся стопкой со вспышкой
-    "leonardo_key": "",              # необязательно: рисует кадры, которых нет ни в архивах, ни в интернете
-    "ai_images": True,
     "report_repo": "",                 # закрытый репозиторий GitHub для отчётов Claude (владелец/название)
     "report_token": "",                # ключ GitHub только к этому репозиторию (Contents: Read and write)
-    "report_send": True,               # отправлять отчёт после каждой сборки                  # контроль качества: Claude Code проверяет каждый кадр перед монтажом                 # кадры по точному времени слов (распознавание озвучки, Vosk, офлайн)                  # «староватая» картинка: выцветший тёплый цвет, зерно плёнки, виньетка                   # отправлять каждое готовое видео     # модель Claude Code для проверки кадров
-    "strict_visuals": True,            # каждый кадр проверяется нейросетью по смыслу и на водяные знаки
-    "vision_model": "claude-sonnet-5-5",   # Claude проверяет кадры по смыслу
-    "min_relevance": 8,                # порог соответствия смыслу (0–10)
-    "reserve_relevance": 6,            # запасной порог: такие кадры берутся, только если не хватает лучших
-    "max_checked_per_segment": 48,     # сколько кандидатов максимум проверять на один абзац
+    "report_send": True,               # отправлять отчёт после каждой сборки
+    "person_label_gap_sec": 180,       # подпись «имя | кто он» повторяется, только если человека не было 3 мин
     "language": "ru",                  # язык видео по умолчанию (код из LANGS)
     "label_min_gap_sec": 45,           # минимум секунд между всплывающими надписями
     "allow_historic_symbols": False,   # пропускать кадры с символикой экстремистских режимов
@@ -87,6 +74,11 @@ LANGS = {
     "es": {"name": "Español", "prompt": "испанском (Español)", "wpm": 150, "chapter": "CAPÍTULO",
            "timecodes": "Capítulos:", "sources": "Fuentes:", "edge_voice": "es-ES-AlvaroNeural"},
 }
+
+
+REMOVED_KEYS = ("llm_provider", "anthropic_key", "claude_model", "openai_key", "openai_voice", "lumean_ai_model",
+                "claude_review", "review_wait_min", "leonardo_key", "leonardo_model", "ai_images", "strict_visuals",
+                "vision_model", "min_relevance", "reserve_relevance", "max_checked_per_segment")
 
 
 def lang(code) -> dict:
@@ -138,24 +130,20 @@ def load_config() -> dict:
     # Yandex Cloud из программы удалён: его ключи и настройки стираются
     for k in [k for k in cfg if k.startswith("yandex_")]:
         cfg.pop(k, None)
-    cfg["llm_provider"] = "claude"
+    # убранные режимы и сервисы (15.8): ключи стираются, кадры всегда проверяет Claude Code
+    for k in REMOVED_KEYS:
+        cfg.pop(k, None)
+    cfg["visual_check"] = "claude_code"
     if cfg.get("tts_provider") not in ("elevenlabs", "lumean"):
         cfg["tts_provider"] = "lumean"
     if int(cfg.get("config_rev", 0) or 0) < 7 and not str(cfg.get("elevenlabs_key", "")).strip():
         cfg["tts_provider"] = "lumean"
-    if cfg.get("visual_check") == "auto":
-        cfg["visual_check"] = "claude"
     if int(cfg.get("config_rev", 0) or 0) < CONFIG_REV:
         # новая версия монтажа: старые сохранённые значения темпа и голоса заменяются новыми
-        for k in ("shot_seconds", "max_shot_seconds", "min_relevance", "reserve_relevance", "max_checked_per_segment"):
+        for k in ("shot_seconds", "max_shot_seconds"):
             cfg[k] = DEFAULTS[k]
         if int(cfg.get("config_rev", 0) or 0) < 5:
             cfg["tts_provider"] = "lumean"            # основная озвучка — голоса ElevenLabs через Lumean
-            cfg["visual_check"] = "claude"            # кадры проверяет Claude
-            cfg["vision_model"] = DEFAULTS["vision_model"]
-        if int(cfg.get("config_rev", 0) or 0) < 8 and not str(cfg.get("anthropic_key", "")).strip() \
-                and cfg.get("visual_check") in ("claude", "auto"):
-            cfg["visual_check"] = "claude_code"       # кадры проверяет Claude по подписке, без оплаты API
         if int(cfg.get("config_rev", 0) or 0) < 9:     # живее голос: был медленный и ровный
             if float(cfg.get("eleven_speed", 0.9) or 0.9) <= 0.95:
                 cfg["eleven_speed"] = DEFAULTS["eleven_speed"]

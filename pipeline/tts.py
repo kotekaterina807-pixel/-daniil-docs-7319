@@ -50,23 +50,6 @@ def _post_audio(url, headers, body, out_path, log):
     raise TTSError("Сервис озвучки не отвечает.")
 
 
-def _openai(cfg, text, out_mp3, instructions, log):
-    key = cfg.get("openai_key", "").strip()
-    if not key:
-        raise TTSError("Не указан ключ OpenAI в настройках.")
-    body = {
-        "model": "gpt-4o-mini-tts",
-        "voice": cfg.get("openai_voice", "onyx"),
-        "input": text,
-        "response_format": "mp3",
-    }
-    if instructions:
-        body["instructions"] = instructions
-    _post_audio("https://api.openai.com/v1/audio/speech",
-                {"Authorization": f"Bearer {key}", "Content-Type": "application/json"},
-                body, out_mp3, log)
-
-
 EL_API = "https://api.elevenlabs.io/v1"
 
 

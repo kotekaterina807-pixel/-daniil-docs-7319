@@ -10,7 +10,7 @@ from pathlib import Path
 import requests
 from PIL import Image
 
-from . import llm, render, tts
+from . import render, tts
 from .config import ROOT, ffmpeg_exe
 
 UA = {"User-Agent": "DocuStudio/6.5 (personal documentary video tool; https://github.com/kotekaterina807-pixel/-daniil-docs-7319)"}
@@ -87,7 +87,7 @@ def _wikimedia():
 
 
 def _archives():
-    """Openverse и Библиотека Конгресса — дополнительные свободные архивы фото (без ключей)."""
+    """Internet Archive — подлинная хроника и фото (без ключа)."""
     name = "Архивы: Internet Archive"
     res = []
     for label, url, params in (
@@ -159,24 +159,6 @@ def _lumean(cfg):
     return (name, True, msg + f" (~{acc['left'] // 1100} мин озвучки)", True)
 
 
-def _claude(cfg):
-    name = "Проверка кадров — Claude"
-    if not str(cfg.get("anthropic_key", "")).strip() and not str(cfg.get("lumean_key", "")).strip():
-        return (name, False, "нет ключа Lumean или Claude — кадры будут выбираться через листы в чат", False)
-    im = Image.new("RGB", (64, 64), (40, 90, 160))
-    buf = io.BytesIO()
-    im.save(buf, "JPEG")
-    content = [{"type": "image", "b64": base64.b64encode(buf.getvalue()).decode()},
-               {"type": "text", "text": 'Какого цвета эта картинка? Верни СТРОГО JSON: {"color": "одно слово"}'}]
-    try:
-        ans = llm.chat(dict(cfg, llm_provider="claude"), "", content, 50, "vision", lambda m: None).strip()
-        via = "напрямую" if str(cfg.get("anthropic_key", "")).strip() else "через Lumean"
-        model = cfg.get("vision_model") if via == "напрямую" else __import__("pipeline.lumean", fromlist=["x"]).ai_model(cfg)
-        return (name, bool(ans), f"Claude {via}, модель {model}: отвечает («{ans[:30]}»)" if ans else "пустой ответ", True)
-    except Exception as e:
-        return (name, False, str(e)[:300], True)
-
-
 def _claude_code(cfg):
     name = "Проверка кадров — Claude Code (подписка)"
     from . import claude_code, config as _c
@@ -202,18 +184,6 @@ def _people_photos(cfg):
     msg = f"Википедия: {'работает' if wiki else 'фото не получено' + (' (' + notes + ')' if notes else '')}; " \
           f"поиск в интернете: {'работает, картинок ' + str(len(web)) if web else 'не отвечает'}"
     return (name, bool(wiki or web), msg, False)
-
-
-def _leonardo(cfg):
-    name = "Рисованные кадры — Leonardo AI"
-    from . import illustrate
-    if not str(cfg.get("leonardo_key", "")).strip():
-        return (name, True, "не подключено (необязательно) — кадры только из архивов и интернета", False)
-    try:
-        illustrate.check(cfg)
-        return (name, True, f"работает, модель {illustrate._model.get('name') or cfg.get('leonardo_model')}", False)
-    except Exception as e:
-        return (name, False, str(e)[:250], False)
 
 
 def _music():
@@ -260,11 +230,8 @@ def run_all(cfg, log=print):
     checks = [_ffmpeg, _gpu, _disk]
     checks.append(lambda: _proxy(cfg))
     checks.append(lambda: _lumean(cfg) if tts.provider_of(cfg) == "lumean" else _eleven(cfg))
-    if cfg.get("visual_check", "claude") in ("claude", "auto"):
-        checks.append(lambda: _claude(cfg))
-    if cfg.get("visual_check") == "claude_code":
-        checks.append(lambda: _claude_code(cfg))
-    checks += [lambda: _pixabay(cfg), _wikimedia, _archives, lambda: _people_photos(cfg), lambda: _leonardo(cfg), _music, lambda: _word_sync(cfg), lambda: _report(cfg), _routes]
+    checks.append(lambda: _claude_code(cfg))
+    checks += [lambda: _pixabay(cfg), _wikimedia, _archives, lambda: _people_photos(cfg), _music, lambda: _word_sync(cfg), lambda: _report(cfg), _routes]
     out = []
     for fn in checks:
         try:

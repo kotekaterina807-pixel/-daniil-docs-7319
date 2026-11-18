@@ -347,17 +347,6 @@ function onJobDone(j) {
   if (j.kind === "build") {
     loadRecent();
     if (EL.hasKey) loadUsage();
-    if (j.result && j.result.need_choices) {
-      if (S.cfg.sound_done) chime();
-      showChoose(j.result.project, j.result.sheets.length, j.result.lines);
-      modal("Нужен выбор кадров", `<p>Кандидаты под все ${j.result.lines} строк сценария собраны на ${j.result.sheets.length} листах.</p>
-        <p class="muted">Отправьте листы Claude в чат — он выберет кадры по смыслу. Его ответ вставьте сюда, и сборка продолжится.</p>`, [
-        { text: "Позже" },
-        { text: "Открыть листы", onClick: () => { api("/api/open", { what: "project", id: j.result.project }); return true; } },
-        { text: "Вставить ответ Claude", cls: "primary", onClick: () => { setTimeout(() => pasteChoices(j.result.project), 50); } },
-      ]);
-      return;
-    }
     if (j.error) {
       if (S.cfg.sound_done) chime();
       modal("Сборка остановилась", `<p>${esc(j.error)}</p><p class="muted small">Подробности — в журнале на главной и в файле error_log.txt. Пересборка продолжит с места остановки.</p>`);
@@ -381,30 +370,6 @@ function onJobDone(j) {
 const runCheck = () => api("/api/selfcheck", {}).then(() => toast("Проверяю подключения…")).catch((e) => toast(e.message, "err"));
 $("#checkBtn").onclick = runCheck;
 $("#checkBtn2").onclick = runCheck;
-
-// ---------- выбор кадров через Claude ----------
-function showChoose(pid, sheets, lines) {
-  S.choose = pid;
-  $("#chooseCard").hidden = !pid;
-  if (pid) $("#chooseText").textContent = `Кандидаты собраны: ${lines || "все"} строк сценария, листов: ${sheets}.`;
-}
-$("#chooseOpen").onclick = () => S.choose && api("/api/open", { what: "project", id: S.choose }).catch((e) => toast(e.message, "err"));
-$("#choosePaste").onclick = () => S.choose && pasteChoices(S.choose);
-function pasteChoices(pid) {
-  modal("Ответ Claude с выбором кадров", `<p class="muted small">Вставьте сюда ответ Claude целиком (Ctrl+V). Строки вида <code>12: 3 1</code> — номер строки сценария и номера кадров по порядку.</p>
-    <textarea id="choiceText" placeholder="1: 2 5&#10;2: 1&#10;3: 4 7"></textarea>`, [
-    { text: "Отмена" },
-    { text: "Продолжить сборку", cls: "primary", onClick: async () => {
-      try {
-        const r = await api("/api/choices", { id: pid, text: $("#choiceText").value });
-        if (r.missing && r.missing.length) toast(`Для строк ${r.missing.join(", ")} кадров нет — возьмутся соседние`, "", 6000);
-        await api("/api/rebuild", { id: pid });
-        showChoose(null); toast("Кадры приняты, сборка продолжается", "ok"); go("home");
-      } catch (e) { toast(e.message, "err", 7000); return true; }
-    } },
-  ]);
-  setTimeout(() => $("#choiceText") && $("#choiceText").focus(), 80);
-}
 
 // ---------- проекты ----------
 const ICON = {
@@ -443,10 +408,10 @@ function renderProjects() {
         ${p.duration ? `<span class="badge">${esc(p.duration)}</span>` : ""}</div>
       <div class="pbody">
         <div class="ptitle">${esc(p.title)}</div>
-        <div class="pmeta"><span class="chip ${p.ready ? "ok" : (p.building || p.need_choices) ? "work" : "wait"}">${p.ready ? "Готово" : p.building ? `В работе · ${p.progress}%` : p.need_choices ? "Ждёт выбора кадров" : "Не собрано"}</span>
+        <div class="pmeta"><span class="chip ${p.ready ? "ok" : p.building ? "work" : "wait"}">${p.ready ? "Готово" : p.building ? `В работе · ${p.progress}%` : "Не собрано"}</span>
           <span>${esc(p.created)}</span>${p.size_mb ? `<span>· ${p.size_mb} МБ</span>` : ""}</div>
         <div class="pactions">
-          ${p.building ? '<button class="btn small" disabled>Собирается…</button>' : p.need_choices ? '<button class="btn small primary" data-act="choose">Выбор кадров</button>'
+          ${p.building ? '<button class="btn small" disabled>Собирается…</button>' 
             : `<button class="btn small ${p.ready ? "primary" : ""}" data-act="${p.ready ? "video" : "rebuild"}">${p.ready ? "Смотреть" : "Собрать"}</button>`}
           <span class="spacer"></span>
           <button class="ibtn" data-act="desc" title="Описание для YouTube" ${p.has_description ? "" : "disabled"}>${ICON.text}</button>
@@ -481,7 +446,6 @@ $("#projects").addEventListener("click", async (e) => {
   try {
     if (act === "video" && p && !p.ready) return;
     if (act === "video") openPlayer(p);
-    else if (act === "choose") { showChoose(id, (p.sheets || []).length); pasteChoices(id); }
     else if (["project", "script"].includes(act)) await api("/api/open", { what: act, id });
     else if (act === "tg") {
       if (!S.cfg.tg_chat_id) { toast("Сначала подключите Telegram: Параметры → Сервисы и ключи", "err", 6000); return; }
@@ -519,9 +483,6 @@ async function loadRecent() {
   let list = [];
   try { list = await api("/api/projects"); } catch (e) {}
   S.projects = list;
-  const pend = list.find((p) => p.need_choices && !p.building);
-  if (pend && !S.jobRunning) showChoose(pend.id, (pend.sheets || []).length);
-  else if (!pend) showChoose(null);
   const box = $("#recent");
   if (!list.length) { box.innerHTML = '<p class="muted small">Здесь появятся ваши видео.</p>'; return; }
   box.innerHTML = list.slice(0, 4).map((p) => `<div class="ritem" data-id="${esc(p.id)}">

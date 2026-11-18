@@ -1,3 +1,13 @@
 # Файлы, удалённые в новых версиях (обновление сотрёт их у пользователя)
 app_classic.py
 start_classic.bat
+pipeline/vision.py
+pipeline/llm.py
+pipeline/script_gen.py
+pipeline/checkpoint.py
+pipeline/illustrate.py
+pipeline/library.py
+niches/disasters.json
+niches/lost.json
+niches/ocean.json
+niches/space.json

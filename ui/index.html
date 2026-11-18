@@ -83,24 +83,6 @@
             </div>
           </div>
 
-          <div class="card choose" id="chooseCard" hidden>
-            <div class="card-head">
-              <div>
-                <h2>Нужен выбор кадров</h2>
-                <p class="muted" id="chooseText"></p>
-              </div>
-            </div>
-            <ol class="howto">
-              <li>Нажмите «Открыть листы» — откроется папка проекта с файлами <b>кадры_лист_01.jpg</b>, <b>02</b>…</li>
-              <li>Перетащите все листы в чат Claude и напишите: «выбери кадры».</li>
-              <li>Claude ответит списком строк вида <code>12: 3 1</code>. Скопируйте ответ целиком.</li>
-              <li>Нажмите «Вставить ответ Claude» — сборка продолжится сама.</li>
-            </ol>
-            <div class="row gap">
-              <button class="btn ghost" id="chooseOpen">Открыть листы</button>
-              <button class="btn primary" id="choosePaste">Вставить ответ Claude</button>
-            </div>
-          </div>
 
           <div class="card job" id="jobCard" hidden>
             <div class="card-head">
@@ -286,12 +268,10 @@
             <div class="range-wrap"><input type="range" min="2.5" max="8" step="0.5" data-key="shot_seconds" id="shotSec"><span class="range-val" id="shotVal"></span></div>
           </div>
           <div class="set-row">
-            <div><b>Кто проверяет кадры по смыслу</b><p class="muted small">Claude смотрит кандидатов и берёт только кадры по смыслу фразы, без водяных знаков. Claude Code — по вашей подписке Claude, без оплаты API</p></div>
-            <div class="select-wrap"><select data-key="visual_check">
-              <option value="claude_code">Claude Code — по подписке (рекомендую)</option>
-              <option value="claude">Claude по ключу API — платно</option>
-              <option value="chat">Claude в чате — листы вручную</option>
-              <option value="none">Без проверки — по тегам</option></select></div>
+            <div><b>Модель для проверки кадров</b><p class="muted small">Claude Code по подписке смотрит листы с кандидатами. Haiku тратит лимит в разы меньше; Sonnet точнее, но дороже</p></div>
+            <div class="select-wrap"><select data-key="claude_check_model">
+              <option value="haiku">Haiku — экономно (рекомендую)</option>
+              <option value="sonnet">Sonnet — точнее, больше расход</option></select></div>
           </div>
           <div class="set-row">
             <div><b>Всплывающие надписи</b><p class="muted small">Места, даты и имена людей внизу кадра</p></div>
@@ -304,7 +284,7 @@
           <div class="set-row">
             <div><b>Озвучка</b><p class="muted small">Lumean — основной вариант, голос выбирается во вкладке «Голоса»</p></div>
             <div class="select-wrap"><select data-key="tts_provider">
-              <option value="lumean">Lumean (голоса ElevenLabs)</option><option value="edge">Edge (бесплатно, запасной)</option></select></div>
+              <option value="lumean">Lumean (голоса ElevenLabs)</option><option value="elevenlabs">ElevenLabs напрямую</option></select></div>
           </div>
         </div>
       </div>
@@ -350,12 +330,13 @@
       <div class="tabpane" id="tab-keys">
         <div class="card settings">
           <h3 class="sec">Основные</h3>
-          <div class="key-row" data-k="lumean_key" data-label="Ключ Lumean" data-secret="1" data-hint="озвучка голосами ElevenLabs + Claude для проверки кадров"></div>
+          <div class="key-row" data-k="lumean_key" data-label="Ключ Lumean" data-secret="1" data-hint="озвучка голосами ElevenLabs"></div>
           <div class="key-row" data-k="pixabay_key" data-label="Ключ Pixabay" data-secret="1" data-hint="видео и фото"></div>
-          <div class="key-row" data-k="leonardo_key" data-label="Ключ API Leonardo" data-secret="1" data-hint="необязательно: рисует кадр точно про слова диктора, когда подходящего фото нет нигде. Оплата API отдельно от подписки"></div>
+          <div class="key-row" data-k="pexels_key" data-label="Ключ Pexels" data-secret="1" data-hint="необязательно: ещё видео для кадров"></div>
           <div class="row gap" style="margin:6px 0 4px">
-            <button class="btn ghost small" data-url="https://lumean.app/developers">Открыть ключи Lumean</button>
-            <button class="btn ghost small" data-url="https://app.leonardo.ai/api-access">Открыть API Leonardo</button>
+            <button class="btn ghost small" data-url="https://lumean.app/developers">Ключи Lumean</button>
+            <button class="btn ghost small" data-url="https://pixabay.com/api/docs/">Ключ Pixabay</button>
+            <button class="btn ghost small" data-url="https://www.pexels.com/api/">Ключ Pexels</button>
           </div>
           <h3 class="sec">Отчёты для Claude — проверка готовых видео</h3>
           <div class="set-row">
@@ -394,11 +375,7 @@
             <div><b>Сообщать о ходе работы</b><p class="muted small">Начало и конец сборки, правки, ошибки, а также когда кончился и когда сбросился лимит Claude</p></div>
             <label class="switch"><input type="checkbox" data-key="tg_notify"><span></span></label>
           </div>
-          <div class="set-row">
-            <div><b>Проверка Claude перед монтажом</b><p class="muted small">Когда кадры подобраны, программа отправляет раскадровку Claude и ждёт его ответа: «монтировать» или «заменить такие-то кадры». Напишите Claude «проверь кадры», когда придёт сообщение. Нет ответа 2 часа — монтирует сама</p></div>
-            <label class="switch"><input type="checkbox" data-key="claude_review"><span></span></label>
-          </div>
-          <div class="set-row">
+                    <div class="set-row">
             <div><b>Следить за лимитом Claude</b><p class="muted small">Раз в 30 минут программа коротко спрашивает Claude (самая лёгкая модель), не кончился ли лимит. Пока он исчерпан — проверяет в момент сброса</p></div>
             <label class="switch"><input type="checkbox" data-key="limit_watch"><span></span></label>
           </div>
