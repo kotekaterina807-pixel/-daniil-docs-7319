@@ -11,6 +11,7 @@ const S = { cfg: {}, niches: [], voices: [], projects: [], logNext: 0, doneId: n
             lastJobKind: "", restarting: false, offline: 0 };
 
 const PAGES = {
+  assistant: ["Помощник", "Почему встала сборка и команды: продолжай, останови, очередь"],
   home: ["Главная", "Документальные видео из вашего сценария"],
   projects: ["Проекты", "Все собранные видео: смотреть, пересобрать, взять описание для YouTube"],
   voices: ["Голоса", "Выбор голоса диктора на слух"],
@@ -116,6 +117,7 @@ function go(page) {
   if (page === "projects") loadProjects();
   if (page === "voices") loadVoices();
   if (page === "music") loadMusic();
+  if (page === "assistant") loadChat();
   if (page === "settings") moveInk();
   $(".main").scrollTop = 0;
 }
@@ -880,3 +882,25 @@ async function loadInit() {
     setTimeout(() => toast("Сначала вставьте ключи: Параметры → Сервисы и ключи", "", 6000), 600);
   }
 })();
+
+
+// ---------- помощник ----------
+function renderChat(st, vanish) {
+  const box = $("#chatList");
+  const draw = () => {
+    box.classList.remove("vanish");
+    box.innerHTML = (st.messages || []).map((m) => `<div class="msg ${m.role === "user" ? "me" : "bot"}"><div>${esc(m.text).replace(/\n/g, "<br>")}</div><span>${esc(m.t || "")}</span></div>`).join("")
+      || `<p class="muted small">${st.summary ? esc(st.summary) : "Спросите «почему встало» или нажмите кнопку ниже."}</p>`;
+    box.scrollTop = box.scrollHeight;
+  };
+  if (vanish && $("#chatFx").checked) { box.classList.add("vanish"); setTimeout(draw, 650); } else draw();
+}
+async function loadChat() { try { renderChat(await api("/api/assistant")); } catch (e) {} }
+async function say(text) {
+  if (!text.trim()) return;
+  try { const st = await api("/api/assistant", { text }); renderChat(st, st.cleared); } catch (e) { toast(e.message, "err"); }
+}
+$("#chatForm").onsubmit = (e) => { e.preventDefault(); const t = $("#chatText").value; $("#chatText").value = ""; say(t); };
+document.addEventListener("click", (e) => { const b = e.target.closest("[data-say]"); if (b) say(b.dataset.say); });
+try { $("#chatFx").checked = localStorage.getItem("ds-chatfx") !== "0"; } catch (e) {}
+$("#chatFx").onchange = () => { try { localStorage.setItem("ds-chatfx", $("#chatFx").checked ? "1" : "0"); } catch (e) {} };

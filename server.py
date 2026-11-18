@@ -89,6 +89,7 @@ class Job:
         self.done_id = 0 if not hasattr(self, "done_id") else self.done_id
 
     def add_log(self, msg):
+        self.last_log_t = time.time()
         with self.lock:
             for line in str(msg).splitlines() or [""]:
                 self.log.append(line)
@@ -145,7 +146,10 @@ class Job:
     def live_data(self):
         """Компактное состояние сборки для status/live.json (его читает Claude в чате)."""
         snap = self.tracker.snapshot() if self.tracker else {}
+        moved = max([t for t in (getattr(self, "last_log_t", 0), (self.tracker.last_d_t or (0,))[0] if self.tracker else 0,
+                                 (self.tracker.cur_t0 or 0) if self.tracker else 0, self.t0 or 0) if t] or [time.time()])
         return dict(snap, project=self.project, running=self.running, error=self.error,
+                    idle_min=round((time.time() - moved) / 60) if self.running else 0,
                     minutes=round((time.time() - (self.t0 or time.time())) / 60),
                     log=[str(x) for x in list(self.log)[-40:]])
 
@@ -474,6 +478,9 @@ class Handler(BaseHTTPRequestHandler):
                 })
             if p == "/api/projects":
                 return self._send(200, list_projects())
+            if p == "/api/assistant":
+                from pipeline import assistant
+                return self._send(200, assistant.load())
             if p == "/api/project_file":
                 d = _project_dir(q.get("id", [""])[0])
                 name = Path(q.get("name", [""])[0]).name
@@ -549,6 +556,8 @@ class Handler(BaseHTTPRequestHandler):
                 return _build(d, Path(npath), mode="rebuild")
             ok = run_job("build", job)
             return self._send(200 if ok else 409, {"ok": ok, "error": None if ok else "Уже идёт работа"})
+        if p == "/api/assistant":
+            return self._send(200, _assistant(str(data.get("text") or "")))
         if p == "/api/stop":
             from pipeline import stopctl
             JOB.stop = True
@@ -1209,6 +1218,51 @@ def _report_bg(project, lines):
         JOB.add_log(f"Отчёт для Claude не отправился: {e} — повторю после перезапуска программы.")
     finally:
         STATE["bg"] = STATE.get("bg", 1) - 1
+
+
+def _assistant(text):
+    """Вкладка «Помощник»: команда или вопрос → ответ по компактному состоянию сборки."""
+    from pipeline import assistant, remote, stopctl
+    st = assistant.load()
+    if text.strip():
+        assistant.add(st, "user", text.strip())
+    cmd = assistant.command(text)
+    if cmd == "clear":
+        st = {"messages": [], "summary": st.get("summary", "")}
+        assistant.save(st)
+        return dict(st, cleared=True)
+    if cmd == "help":
+        reply = assistant.HELP
+    elif cmd == "stop":
+        if JOB.running:
+            JOB.stop = True
+            n = stopctl.stop()
+            JOB.add_log("Остановка по команде помощника" + (f" (прервано процессов: {n})" if n else "") + ".")
+            reply = "Останавливаю сборку. Сделанное сохранится — «продолжай» запустит её с места остановки."
+        else:
+            reply = "Сейчас ничего не собирается."
+    elif cmd == "continue":
+        if JOB.running:
+            reply = "Сборка уже идёт. " + assistant.diagnose(JOB.live_data(), STATE).split("\n")[0]
+        else:
+            todo = [p_ for p_ in list_projects() if not p_.get("ready")]
+            if not todo:
+                reply = "Незаконченных сборок нет."
+            else:
+                d = _project_dir(todo[0]["id"])
+                ok = run_job("build", lambda d=d: _rebuild(d, mode="rebuild"))
+                reply = (f"Продолжаю сборку «{todo[0]['title']}» с места остановки." if ok
+                         else "Не получилось запустить: программа занята.")
+    elif cmd == "queue":
+        try:
+            q = [n for n, _ in remote.pending(config.load_config())]
+            reply = ("В очереди из чата: " + ", ".join(q)) if q else "Очередь из чата пуста."
+        except Exception as e:
+            reply = f"Очередь не прочитана: {e}"
+    else:
+        reply = assistant.diagnose(JOB.live_data(), STATE)
+    cleared = assistant.add(st, "bot", reply)
+    return dict(st, cleared=cleared)
 
 
 def _resend_reports():
