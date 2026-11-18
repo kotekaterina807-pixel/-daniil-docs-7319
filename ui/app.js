@@ -355,6 +355,10 @@ function onJobDone(j) {
   if (j.kind === "build") {
     loadRecent();
     if (EL.hasKey) loadUsage();
+    if (j.error && /остановлено пользователем/i.test(j.error)) {
+      toast("Сборка остановлена. Новые сборки не стартуют, пока вы сами не напишете «продолжай».", "", 6000);
+      return;
+    }
     if (j.error) {
       if (S.cfg.sound_done) chime();
       modal("Сборка остановилась", `<p>${esc(j.error)}</p><p class="muted small">Подробности — в журнале на главной и в файле error_log.txt. Пересборка продолжит с места остановки.</p>`);
@@ -397,6 +401,10 @@ function thumbHtml(p) {
   return p.thumb ? `<img src="${fileUrl(`/api/project_file?id=${encodeURIComponent(p.id)}&name=${p.thumb}`)}" alt="" loading="lazy">` : "";
 }
 function renderProjects() {
+  const sig = JSON.stringify([$("#projSearch").value, S.projFilter, (S.projects || []).map((p) => [p.id, p.ready, p.building, p.progress, p.thumb, p.duration, p.size_mb, p.has_description])]);
+  if (sig === S.projSig && $("#projects").children.length) return;        // ничего не изменилось — карточки и картинки не трогаем
+  S.projSig = sig;
+  const anim = !S.projShown; S.projShown = true;                          // красивое появление только при первом показе
   const q = ($("#projSearch").value || "").toLowerCase();
   const f = S.projFilter || "all";
   const list = S.projects.filter((p) => p.title.toLowerCase().includes(q) &&
@@ -410,7 +418,7 @@ function renderProjects() {
     return;
   }
   box.innerHTML = list.map((p, i) => `
-    <div class="pcard" style="animation-delay:${Math.min(i, 12) * 35}ms" data-id="${esc(p.id)}">
+    <div class="pcard${anim ? "" : " still"}" style="animation-delay:${Math.min(i, 12) * 35}ms" data-id="${esc(p.id)}">
       <div class="pthumb" data-act="video">${thumbHtml(p)}
         ${p.ready ? `<div class="play"><span>${PLAY}</span></div>` : ""}
         ${p.duration ? `<span class="badge">${esc(p.duration)}</span>` : ""}</div>
@@ -893,7 +901,7 @@ function renderChat(st, vanish) {
       || `<p class="muted small">${st.summary ? esc(st.summary) : "Спросите «почему встало» или нажмите кнопку ниже."}</p>`;
     box.scrollTop = box.scrollHeight;
   };
-  if (vanish && $("#chatFx").checked) { box.classList.add("vanish"); setTimeout(draw, 650); } else draw();
+  if (vanish) { box.classList.add("vanish"); setTimeout(draw, 650); } else draw();
 }
 async function loadChat() { try { renderChat(await api("/api/assistant")); } catch (e) {} }
 async function say(text) {
@@ -902,5 +910,3 @@ async function say(text) {
 }
 $("#chatForm").onsubmit = (e) => { e.preventDefault(); const t = $("#chatText").value; $("#chatText").value = ""; say(t); };
 document.addEventListener("click", (e) => { const b = e.target.closest("[data-say]"); if (b) say(b.dataset.say); });
-try { $("#chatFx").checked = localStorage.getItem("ds-chatfx") !== "0"; } catch (e) {}
-$("#chatFx").onchange = () => { try { localStorage.setItem("ds-chatfx", $("#chatFx").checked ? "1" : "0"); } catch (e) {} };

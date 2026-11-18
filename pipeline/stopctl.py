@@ -83,3 +83,30 @@ def stop():
             except Exception:
                 pass
     return n
+
+
+# ---- удержание: после «стоп» новые сборки (в том числе из очереди чата) не стартуют, пока пользователь сам не скажет
+def _hold_path():
+    from pathlib import Path
+    return Path(__file__).resolve().parent.parent / "hold.flag"
+
+
+def hold_on():
+    try:
+        return _hold_path().exists()
+    except Exception:
+        return False
+
+
+def hold_set():
+    try:
+        _hold_path().write_text(time.strftime("%Y-%m-%d %H:%M:%S"), encoding="utf-8")
+    except Exception:
+        pass
+
+
+def hold_clear():
+    try:
+        _hold_path().unlink()
+    except Exception:
+        pass

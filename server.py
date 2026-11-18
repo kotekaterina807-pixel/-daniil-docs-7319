@@ -168,6 +168,8 @@ def run_job(kind, fn):
         from pipeline import stopctl
         stopctl.install()
         stopctl.reset()
+        if kind == "build":
+            stopctl.hold_clear()            # сборку запустили вручную или командой «продолжай» — удержание снято
 
     def wrapper():
         try:
@@ -561,6 +563,7 @@ class Handler(BaseHTTPRequestHandler):
         if p == "/api/stop":
             from pipeline import stopctl
             JOB.stop = True
+            stopctl.hold_set()
             n = stopctl.stop() if JOB.running else 0
             JOB.add_log("Останавливаю сборку сейчас" + (f" (прервано процессов: {n})" if n else "")
                         + "... Сделанное сохранится — повторная сборка продолжит.")
@@ -965,8 +968,9 @@ def _remote_loop():
                 limits.watch_step(cfg, JOB.running)
             except Exception:
                 pass
+            from pipeline import stopctl as _sc
             if not JOB.running and not STATE.get("restart") and not STATE.get("update_pending") \
-                    and STATE.get("bg", 0) <= 0:
+                    and STATE.get("bg", 0) <= 0 and not _sc.hold_on():
                 q = [x for x in remote.pending(cfg) if not x[0].lower().startswith("review")]
                 if q:
                     name, sha = q[0]
@@ -1234,14 +1238,16 @@ def _assistant(text):
     if cmd == "help":
         reply = assistant.HELP
     elif cmd == "stop":
+        stopctl.hold_set()                              # новые сборки и очередь не стартуют, пока не напишешь «продолжай»
         if JOB.running:
             JOB.stop = True
             n = stopctl.stop()
             JOB.add_log("Остановка по команде помощника" + (f" (прервано процессов: {n})" if n else "") + ".")
-            reply = "Останавливаю сборку. Сделанное сохранится — «продолжай» запустит её с места остановки."
+            reply = "Останавливаю сборку. Новые сборки не стартуют, пока ты сам не напишешь «продолжай»."
         else:
-            reply = "Сейчас ничего не собирается."
+            reply = "Сейчас ничего не собирается. Новые сборки и очередь не стартуют, пока ты сам не напишешь «продолжай»."
     elif cmd == "continue":
+        stopctl.hold_clear()
         if JOB.running:
             reply = "Сборка уже идёт. " + assistant.diagnose(JOB.live_data(), STATE).split("\n")[0]
         else:
