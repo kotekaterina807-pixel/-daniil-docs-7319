@@ -1234,7 +1234,7 @@ def _niche_path(niche_id):
     for name, path in niches.items():
         if path.name == cfg.get("default_niche"):
             return path
-    return next(iter(niches.values()))
+    return next((p_ for p_ in niches.values() if p_.name == "mysteries.json"), next(iter(niches.values())))
 
 
 def apply_proxy(cfg=None):

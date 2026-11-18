@@ -15,7 +15,6 @@ const PAGES = {
   projects: ["Проекты", "Все собранные видео: смотреть, пересобрать, взять описание для YouTube"],
   voices: ["Голоса", "Выбор голоса диктора на слух"],
   music: ["Музыка", "Фоновая музыка под голосом"],
-  edit: ["Монтаж", "Темп кадров, проверка кадров, надписи, плёнка и озвучка"],
   settings: ["Параметры", "Оформление, звук, ключи и обновления"],
 };
 
@@ -121,6 +120,13 @@ function go(page) {
   $(".main").scrollTop = 0;
 }
 $$(".nav-item").forEach((n) => n.onclick = () => go(n.dataset.page));
+// заставка при запуске: исчезает, как только программа ответила (не дольше 2,5 с)
+(function () {
+  const sp = document.getElementById("splash"); if (!sp) return;
+  const hide = () => { sp.classList.add("out"); setTimeout(() => sp.remove(), 700); };
+  window.addEventListener("load", () => setTimeout(hide, 900));
+  setTimeout(hide, 2500);
+})();
 document.addEventListener("click", (e) => {
   const g = e.target.closest("[data-goto]");
   if (g) go(g.dataset.goto);
