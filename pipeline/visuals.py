@@ -644,6 +644,150 @@ class VisualFinder:
             return out
         return self._cached(("ia", query), fetch)
 
+    # ---------- фото людей: дополнительные источники ----------
+    def _person_categories(self, name, limit=24):
+        """Разделы Commons о человеке («Category:George Mallory», «…(mountaineer)») и их подразделы."""
+        if self._down.get("wm"):
+            return []
+
+        def fetch():
+            out = []
+            try:
+                r = self._get("https://commons.wikimedia.org/w/api.php", {
+                    "action": "query", "format": "json", "list": "search", "srsearch": f'intitle:"{name}"',
+                    "srnamespace": 14, "srlimit": 5})
+                hits = [h.get("title", "") for h in (r.json().get("query") or {}).get("search") or []]
+            except Exception:
+                hits = []
+            parts = [x.lower() for x in re.findall(r"\w+", name)]
+            for h in hits:
+                low = h.lower()
+                if parts and all(p_ in low for p_ in parts[-1:]) and parts[0] in low and \
+                        not re.search(r"grave|tomb|memorial|statue|monument|house|street|ship|mountain", low):
+                    out += self._commons_category(h, depth=1, limit=limit)
+                if len(out) >= limit:
+                    break
+            return out[:limit]
+        return self._cached(("pcat", name), fetch)
+
+    def _wikidata_image(self, name):
+        """Портрет из Викиданных (свойство P18 «изображение») — файл в Commons."""
+        if self._down.get("wm"):
+            return []
+
+        def fetch():
+            try:
+                r = self._get("https://www.wikidata.org/w/api.php", {
+                    "action": "wbsearchentities", "format": "json", "search": name, "language": "en",
+                    "type": "item", "limit": 3})
+                ids = [h["id"] for h in r.json().get("search") or [] if h.get("id")]
+                if not ids:
+                    return []
+                r = self._get("https://www.wikidata.org/w/api.php", {
+                    "action": "wbgetentities", "format": "json", "ids": "|".join(ids), "props": "claims|labels",
+                    "languages": "en"})
+                files = []
+                for e in (r.json().get("entities") or {}).values():
+                    cl = e.get("claims") or {}
+                    human = any(((c.get("mainsnak") or {}).get("datavalue") or {}).get("value", {}).get("id") == "Q5"
+                                for c in cl.get("P31") or [])
+                    if not human:
+                        continue
+                    for c in (cl.get("P18") or [])[:2]:
+                        v = ((c.get("mainsnak") or {}).get("datavalue") or {}).get("value")
+                        if isinstance(v, str):
+                            files.append("File:" + v)
+                if not files:
+                    return []
+                r = self._get("https://commons.wikimedia.org/w/api.php", {
+                    "action": "query", "format": "json", "titles": "|".join(files[:4]),
+                    "prop": "imageinfo|categories", "iiprop": "url|size|extmetadata", "iiurlwidth": 1920,
+                    "cllimit": "max"})
+                out = []
+                for p in ((r.json().get("query") or {}).get("pages") or {}).values():
+                    it = self._wm_item(p, min_w=250, min_h=250, check_cats=False)
+                    if it:
+                        it["tags"] = name + " " + it.get("tags", "")
+                        it["title"] = name + " — " + it["title"]
+                        out.append(it)
+                return out
+            except Exception:
+                return []
+        return self._cached(("wd", name), fetch)
+
+    def _europeana(self, query, limit=8):
+        """Europeana: фото из европейских архивов и музеев, только открытые лицензии (reusability=open)."""
+        if self._down.get("eu"):
+            return []
+
+        def fetch():
+            out = []
+            try:
+                r = self._get("https://api.europeana.eu/record/v2/search.json", {
+                    "wskey": self.cfg.get("europeana_key") or "api2demo", "query": f'"{query}"', "media": "true",
+                    "qf": "TYPE:IMAGE", "reusability": "open", "rows": 12, "profile": "standard"})
+                if r.status_code != 200:
+                    return []
+                for it in r.json().get("items") or []:
+                    url = (it.get("edmIsShownBy") or [""])[0]
+                    thumb = (it.get("edmPreview") or [url])[0]
+                    if not url.startswith("http"):
+                        continue
+                    title = " ".join(it.get("title") or [])[:160]
+                    if ARCHIVE_BLOCK.search(title):
+                        continue
+                    out.append({"kind": "image", "url": url, "thumb": thumb, "source": "Europeana",
+                                "page": it.get("guid") or url, "title": title,
+                                "author": " ".join(it.get("dataProvider") or []) or "архив",
+                                "license": (it.get("rights") or ["open"])[0], "tags": title})
+                    if len(out) >= limit:
+                        break
+            except requests.ConnectionError:
+                self._down["eu"] = True
+            except Exception:
+                pass
+            return out
+        return self._cached(("eu", query), fetch)
+
+    def _ia_images(self, query, limit=4):
+        """Internet Archive: фотографии (mediatype:image) в общественном достоянии."""
+        if self._down.get("ia"):
+            return []
+
+        def fetch():
+            out = []
+            try:
+                q = (f'title:("{query}") AND mediatype:(image) AND '
+                     f'(licenseurl:*publicdomain* OR licenseurl:*zero* OR rights:"public domain")')
+                r = self._get("https://archive.org/advancedsearch.php",
+                              {"q": q, "fl[]": ["identifier", "title"], "rows": 8, "output": "json"})
+                docs = ((r.json().get("response") or {}).get("docs") or []) if r.status_code == 200 else []
+                for d in docs:
+                    if len(out) >= limit:
+                        break
+                    ident, title = d.get("identifier"), d.get("title") or ""
+                    if not ident or ARCHIVE_BLOCK.search(title):
+                        continue
+                    meta = self._get(f"https://archive.org/metadata/{ident}", {}).json()
+                    files = [f for f in meta.get("files") or []
+                             if re.search(r"\.(jpe?g|png)$", str(f.get("name", "")), re.I)
+                             and "thumb" not in str(f.get("name", "")).lower()]
+                    files.sort(key=lambda f: -int(f.get("size") or 0))
+                    if not files:
+                        continue
+                    url = f"https://archive.org/download/{ident}/{requests.utils.quote(files[0]['name'])}"
+                    out.append({"kind": "image", "url": url, "thumb": f"https://archive.org/services/img/{ident}",
+                                "source": "Internet Archive (общественное достояние)",
+                                "page": f"https://archive.org/details/{ident}", "title": title,
+                                "author": (meta.get("metadata") or {}).get("creator") or "неизвестен",
+                                "license": "Public Domain", "tags": title})
+            except requests.ConnectionError:
+                self._down["ia"] = True
+            except Exception:
+                pass
+            return out
+        return self._cached(("iai", query), fetch)
+
     def _wiki_page_image(self, name, lang):
         """Главное фото статьи Википедии о человеке — только если файл лежит в Commons со свободной лицензией."""
         def fetch():
@@ -1080,7 +1224,17 @@ class VisualFinder:
                         add(self._wiki_page_image(t, lang))
         for n in [x for x in names if not re.search("[а-яё]", x, re.I)][:1]:
             # раздел Commons «Category:Имя Фамилия» — там подлинные фото именно этого человека
-            add(self._commons_category(n, depth=0, limit=12))
+            add(self._commons_category(n, depth=1, limit=24))
+            if len(out) < 4:                              # раздел называется иначе: «… (mountaineer)»
+                add(self._person_categories(n))
+            if len(out) < 4:                              # портрет из Викиданных
+                add(self._wikidata_image(n))
+            if len(out) < 3:                              # европейские архивы и Internet Archive
+                k0 = len(out)
+                add(self._europeana(n), need_name=True)
+                add(self._ia_images(n), need_name=True)
+                if len(out) > k0:
+                    self._diag(person, f"Europeana / Internet Archive: фото {len(out) - k0}")
         # подлинные фото темы (архив Commons), где в названии файла есть его имя и фамилия
         add([c for c in getattr(self, "topic_items", None) or [] if c.get("kind") == "image"], need_name=True)
         for n in names:

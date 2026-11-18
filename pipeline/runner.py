@@ -1147,10 +1147,11 @@ def step_build(cfg, niche, project, log=print, stop_flag=lambda: False, progress
                 shots.pop(j)
             sh["e"] = max(sh["e"], want)
         i += 1
-    # подпись «Имя Фамилия | кто он» — на КАЖДОМ фото человека, ровно пока фото на экране
-    # (тот же человек снова через несколько секунд — подпись не повторяем)
+    # подпись «Имя Фамилия | кто он» — при первом появлении человека и снова, только если его давно
+    # не было (по умолчанию 3 минуты): зритель понимает, о ком речь, а экран не пестрит подписями
     overlays[:] = [o for o in overlays if not o.get("person")]
     last_label = {}
+    p_gap = float(cfg.get("person_label_gap_sec", 180))
     if cfg.get("show_labels", True):
         for sh in shots:
             who = sh.get("who") or ""
@@ -1163,6 +1164,10 @@ def step_build(cfg, niche, project, log=print, stop_flag=lambda: False, progress
             if prev and abs(prev["start"] + prev["frames"] - a * render.FPS) < 0.5 * render.FPS:
                 prev["frames"] = max(1, int(round(b_ * render.FPS)) - prev["start"])   # тот же человек дальше — подпись не мигает
                 continue
+            key_ = who.split("|")[0].strip().lower()
+            if key_ in last_label and a - last_label[key_] < p_gap:
+                last_label[key_] = a                       # человек на экране недавно был подписан — без подписи
+                continue
             # подпись человека важнее остальных: другие надписи на это время убираем
             s_, e_ = a * render.FPS, b_ * render.FPS
             overlays[:] = [o for o in overlays if o["anim"] != "label" or o.get("person")
@@ -1173,9 +1178,10 @@ def step_build(cfg, niche, project, log=print, stop_flag=lambda: False, progress
             # на КАЖДОЕ появление фото — подпись полностью выезжает и держится, пока фото на экране
             overlays.append({"png": str(lp), "start": int(round(a * render.FPS)),
                              "frames": max(1, int(round((b_ - a) * render.FPS))), "anim": "label", "person": who})
-            last_label[who] = a
+            last_label[key_] = a
         n_ps = sum(1 for sh in shots if sh.get("person"))
-        log(f"  Фото людей в монтаже: {n_ps}, подписей «имя | кто он»: {len(last_label) and sum(1 for o in overlays if o.get('person'))}.")
+        log(f"  Фото людей в монтаже: {n_ps}, подписей «имя | кто он»: {sum(1 for o in overlays if o.get('person'))} "
+            f"(людей {len(last_label)}; повтор подписи — если человека не было {int(p_gap // 60)} мин).")
     # подписи важных мест (#! МЕСТО): когда место впервые звучит, внизу «Место | что это» — как у людей, но реже
     places = script.get("places") or []
     if places and cfg.get("show_labels", True):
@@ -1183,19 +1189,24 @@ def step_build(cfg, niche, project, log=print, stop_flag=lambda: False, progress
         gap_pl = float(cfg.get("place_label_gap_sec", 60))
         for b_ in seg_blocks:
             rec_ = b_.get("words") or []
-            if not rec_ or b_.get("prolog"):
+            if b_.get("prolog"):
                 continue
             bs_, be_ = b_["start"] / SR, b_["end"] / SR
             for pl in places:
                 if pl["name"] in done_pl:
                     continue
                 st_ = None
-                for w0 in [w for w in pl["name"].split() if len(w) > 3][::-1] or pl["name"].split()[:1]:
+                for w0 in ([w for w in pl["name"].split() if len(w) > 3][::-1] or pl["name"].split()[:1]) if rec_ else []:
                     st_ = align.word_time(rec_, w0[:max(4, len(w0) - 2)], 0.0, be_ - bs_)
                     if st_ is not None:                   # сначала последнее слово: «USS Solomons» → «Solomons»
                         break
-                if st_ is None:
-                    continue
+                if st_ is None:                           # распознавание не услышало — по месту слова в тексте
+                    txt0 = b_["seg"].get("text", "")
+                    k_ = next((txt0.lower().find(w.lower()) for w in pl["name"].split()
+                               if len(w) > 3 and txt0.lower().find(w.lower()) >= 0), -1)
+                    if k_ < 0:
+                        continue
+                    st_ = (be_ - bs_) * k_ / max(1, len(txt0))
                 t_ = bs_ + st_
                 if t_ - last_pl < gap_pl:
                     continue
