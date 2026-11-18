@@ -769,7 +769,7 @@ def step_build(cfg, niche, project, log=print, stop_flag=lambda: False, progress
     finder.credits = [c for v in vis_cache.values() for c in v.get("credits", [])
                       if any(c.get("url") == it.get("url") for b in seg_blocks for sp in b["specs"]
                              for it in sp.get("items", []))]
-    _calm_videos(project, seg_blocks, log)
+    _calm_videos(project, seg_blocks, log, progress)
     for b in seg_blocks:
         b["items"] = [it for sp in b["specs"] for it in sp.get("items", [])]
     st = vision.stats()
@@ -1370,14 +1370,14 @@ def step_build(cfg, niche, project, log=print, stop_flag=lambda: False, progress
     log(f"Монтаж: {len(shots)} кадров (потоков: {workers}). Кодирование: "
         f"{'видеокарта NVIDIA' if render.gpu_available() else 'процессор'}. Это самый долгий этап.")
     render.render_shots(shots, workers, log,
-                        on_progress=lambda d, t: progress(0.45 + 0.45 * d / t, f"Монтаж кадров {d}/{t}"))
+                        on_progress=lambda d, t: progress(0, f"Монтаж кадров {d}/{t}"))
     check_stop()
 
     log("Склеиваю видеоряд, переходы и надписи...")
     video_only = project / "video_only.mp4"
     render.assemble(shots, video_only, shots_dir, log, overlays=overlays,
-                    on_progress=lambda d, t: progress(0.90 + 0.07 * d / t, f"Склейка {d}/{t}"))
-    progress(0.97, "Сведение звука")
+                    on_progress=lambda d, t: progress(0, f"Склейка {d}/{t}"))
+    progress(0, "Сведение звука 0/3")
 
     from . import music as _music
     try:
@@ -1403,6 +1403,7 @@ def step_build(cfg, niche, project, log=print, stop_flag=lambda: False, progress
         log(f"  Звук после пересведения: средняя {mean} дБ, пик {peak} дБ.")
 
     # ---------- 6. субтитры, описание, обложки ----------
+    progress(0, "Файлы")
     extras.write_srt(subs, project / "subtitles.srt")
     extras.write_description(script, chapter_starts, finder.credits_text(), project / "description.txt",
                              L["timecodes"], L["sources"])
@@ -1458,7 +1459,8 @@ def _choose_in_chat(cfg, project, finder, seg_blocks, jobs, vis_cache, log, chec
                 log("Claude Code составляет план кадров: что должно быть в кадре на каждой фразе...")
                 progress(0.09, "План кадров")
                 plan = claude_code.plan(cfg, [{"no": no, "text": seg_blocks[bi]["specs"][si]["text"]}
-                                              for no, (bi, si) in enumerate(jobs, 1)], topic, project, log)
+                                              for no, (bi, si) in enumerate(jobs, 1)], topic, project, log,
+                                        progress=lambda d, t: progress(0, f"План кадров {d}/{t}"))
                 if plan:
                     _save_json(plan_path, {"sig": sig, "plan": {str(k): v for k, v in plan.items()}})
                     log(f"  План готов: {len(plan)} фраз.")
@@ -1587,11 +1589,19 @@ def _choose_in_chat(cfg, project, finder, seg_blocks, jobs, vis_cache, log, chec
             cs.insert(len([c for c in cs if c.get("person")]), ph)
     flat = [c for _, cs in picked for c in cs]
 
+    dl_n = [0]
+    progress(0, f"Скачивание 0/{len(flat)}")
+
     def dl(c):
-        return c["url"], finder._download(c)
+        try:
+            return c["url"], finder._download(c)
+        finally:
+            dl_n[0] += 1
+            progress(0, f"Скачивание {dl_n[0]}/{len(flat)}")
     from concurrent.futures import ThreadPoolExecutor
     with ThreadPoolExecutor(max_workers=4) as ex:
         paths = dict(ex.map(dl, flat))
+    check_stop()
     credits = []
     for (bi, si), (ln, cs) in zip(jobs, picked):
         if ln.get("doc"):
@@ -1619,7 +1629,7 @@ def _choose_in_chat(cfg, project, finder, seg_blocks, jobs, vis_cache, log, chec
     vis_cache["chat"] = {"items": [it for b in seg_blocks for sp in b["specs"] for it in sp.get("items", [])],
                          "credits": credits}
     _save_json(project / "visuals.json", vis_cache)
-    progress(0.45, "Кадры выбраны")
+    progress(0, "Подготовка монтажа")
 
 
 def _choose_with_claude_code(cfg, project, finder, lines, rev_path, ch_path, topic, log, check_stop, progress):
@@ -1633,6 +1643,7 @@ def _choose_with_claude_code(cfg, project, finder, lines, rev_path, ch_path, top
     def ask(sheet_lines, prefix, label):
         sheets = review.make_sheets(sheet_lines, project, log, prefix=prefix)
         done = [0]
+        progress(0, f"Проверка кадров 0/{len(sheets)}")
 
         empty = [0]
 
@@ -1641,7 +1652,7 @@ def _choose_with_claude_code(cfg, project, finder, lines, rev_path, ch_path, top
             ans = claude_code.run_cached(cfg, claude_code.PROMPT.format(sheet=name, topic=topic or "документальное видео"),
                                          project, name, check=lambda a: any(claude_code.parse(a)))
             done[0] += 1
-            progress(0.36 + 0.08 * done[0] / max(1, len(sheets)), f"{label}: лист {done[0]}/{len(sheets)}")
+            progress(0, f"Проверка кадров {done[0]}/{len(sheets)}")
             p, q = claude_code.parse(ans)
             if not p and not q:
                 empty[0] += 1
@@ -1716,7 +1727,7 @@ MOTION_SLOW = 6.0      # выше — ролик проигрывается ме
 MOTION_DROP = 11.0     # выше — ролик убирается, если у строки есть другие кадры
 
 
-def _calm_videos(project, seg_blocks, log):
+def _calm_videos(project, seg_blocks, log, progress=lambda f, t: None):
     """Быстрые и резкие ролики (таймлапсы, тряска, мелькание) режут глаз: замеряем движение,
     слишком быстрые убираем, умеренно быстрые замедляем."""
     cache_path = project / "motion.json"
@@ -1730,8 +1741,9 @@ def _calm_videos(project, seg_blocks, log):
     if todo:
         from concurrent.futures import ThreadPoolExecutor
         with ThreadPoolExecutor(max_workers=4) as ex:
-            for p, sc in zip(todo, ex.map(render.motion_score, todo)):
+            for k, (p, sc) in enumerate(zip(todo, ex.map(render.motion_score, todo)), 1):
                 cache[p] = round(sc, 2)
+                progress(0, f"Подготовка монтажа {k}/{len(todo)}")
         _save_json(cache_path, cache)
     slowed = dropped = 0
     for b in seg_blocks:

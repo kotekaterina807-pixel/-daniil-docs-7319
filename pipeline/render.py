@@ -328,6 +328,7 @@ def render_shots(shots, workers, log=print, on_progress=lambda d, t: None):
     todo = [s for s in shots if not (Path(s["out"]).exists() and Path(s["out"]).stat().st_size > 1000)]
     total = len(shots)
     done = [total - len(todo)]
+    on_progress(done[0], total)                       # готовые куски прошлых сборок — сразу в счётчике
 
     def work(s):
         n = s["frames"] + s["tail"]

@@ -84,7 +84,7 @@ class Job:
         self.result = None
         self.stop = False
         self.project = None          # папка проекта, который сейчас собирается
-        self.hist = []               # (время, доля) — для оценки оставшегося времени
+        self.tracker = None          # этапы сборки: процент, счётчики, оценка времени
         self.eta_t = None
         self.done_id = 0 if not hasattr(self, "done_id") else self.done_id
 
@@ -97,14 +97,20 @@ class Job:
                 self.log_offset = getattr(self, "log_offset", 0) + 1000
 
     def progress(self, frac, stage):
-        frac = max(0.0, min(1.0, frac))
-        if self.frac is None:
-            self.frac_start, self.frac_t0 = frac, time.time() - self.t0
-        self.frac, self.stage = frac, stage
-        now = time.time()
-        self.hist.append((now, frac))
-        if len(self.hist) > 2000:
-            del self.hist[:500]
+        """Сборка сообщает этап строкой «Этап d/t». Процент и оценка времени считаются по этапам (pipeline/progress.py)."""
+        from pipeline import progress as _pg
+        if self.tracker is None:
+            self.tracker = _pg.Tracker()
+        self.tracker.update(stage)
+        self.frac = self.tracker.overall()
+        self.stage = self.tracker.label()
+        if self.tracker.changed:
+            self.tracker.changed = False
+            tr = self.tracker
+            prev = list(tr.durations.items())[-1:] if tr.durations else []
+            took = f" (прошлый этап «{prev[0][0]}» — {_pg.human(prev[0][1])})" if prev and prev[0][1] >= 5 else ""
+            self.add_log(f"— Этап {tr.cur + 1}/{len(_pg.STAGES)}: {_pg.NAMES[tr.cur]}{took}")
+            STATE["live_dirty"] = True              # сменился этап — сразу в status/live.json
 
     def status(self):
         if not self.t0:
@@ -112,30 +118,36 @@ class Job:
                     "result": self.result}
         now = self.t_end or time.time()
         elapsed = now - self.t0
-        eta_text, eta_sec = "", None
-        if self.running and self.frac is not None and self.frac > 0.02 and elapsed > 12 and self.hist:
-            # скорость по последним 3 минутам (этапы идут с разной скоростью) + по всей сборке
-            t_now, f_now = self.hist[-1]
-            old = next(((t, f) for t, f in self.hist if t >= t_now - 180), self.hist[0])
-            rate_win = (f_now - old[1]) / max(1.0, t_now - old[0]) if t_now - old[0] > 20 else 0
-            rate_all = (f_now - self.frac_start) / max(1.0, elapsed - self.frac_t0)
-            rate = 0.6 * rate_win + 0.4 * rate_all if rate_win > 0 else rate_all
-            if rate > 0:
-                raw = (1 - f_now) / rate - (now - t_now)
-                raw = max(0.0, raw)
-                if self.eta is None:
-                    self.eta, self.eta_t = raw, now
-                else:
-                    dt = max(0.0, now - (self.eta_t or now))
-                    self.eta = max(0.0, self.eta - dt)                # время идёт — оценка уменьшается
-                    k = min(1.0, dt / 25.0)                           # плавно подтягиваемся к новой оценке
-                    self.eta += (raw - self.eta) * k
-                    self.eta_t = now
-                eta_sec = round(self.eta)
-                eta_text = _fmt(self.eta)
+        eta_text, eta_sec, snap = "", None, {}
+        tr = self.tracker
+        if tr is not None:
+            self.frac = tr.overall()
+            self.stage = tr.label()
+            snap = tr.snapshot()
+            if self.running and elapsed > 12:
+                raw = tr.eta()
+                if raw is not None:
+                    if self.eta is None:
+                        self.eta, self.eta_t = raw, now
+                    else:                                         # плавно: время идёт — оценка уменьшается
+                        dt = max(0.0, now - (self.eta_t or now))
+                        self.eta = max(30.0, self.eta - dt)
+                        self.eta += (raw - self.eta) * min(1.0, dt / 20.0)
+                        self.eta_t = now
+                    eta_sec = round(self.eta)
+                    eta_text = _fmt(self.eta)
         return {"running": self.running, "kind": self.kind, "frac": self.frac, "stage": self.stage,
                 "elapsed": _fmt(elapsed), "elapsed_sec": round(elapsed), "eta": eta_text, "eta_sec": eta_sec,
+                "stage_no": snap.get("stage_no"), "stages": snap.get("stages"), "stage_name": snap.get("stage_name"),
+                "stage_pct": snap.get("stage_pct"),
                 "error": self.error, "done_id": self.done_id, "result": self.result, "project": self.project}
+
+    def live_data(self):
+        """Компактное состояние сборки для status/live.json (его читает Claude в чате)."""
+        snap = self.tracker.snapshot() if self.tracker else {}
+        return dict(snap, project=self.project, running=self.running, error=self.error,
+                    minutes=round((time.time() - (self.t0 or time.time())) / 60),
+                    log=[str(x) for x in list(self.log)[-40:]])
 
 
 JOB = Job()
@@ -173,8 +185,15 @@ def run_job(kind, fn):
                 except Exception:
                     pass
         finally:
+            if JOB.tracker is not None and kind == "build":
+                try:
+                    if not JOB.error:
+                        JOB.tracker.finish()            # время этапов — для оценки следующих сборок
+                except Exception:
+                    pass
             JOB.running = False
             JOB.t_end = time.time()
+            STATE["live_dirty"] = True
             JOB.done_id += 1
             from pipeline import stopctl
             if stopctl.requested():                     # хвосты остановленной сборки догаснут — потом снова можно
@@ -909,6 +928,25 @@ def _auto_update_loop():
         time.sleep(60)
 
 
+def _live_loop():
+    """status/live.json: при каждой смене этапа (не чаще раза в 20 с), иначе раз в 3 минуты, и в конце сборки."""
+    from pipeline import remote
+    last = 0.0
+    while True:
+        time.sleep(5)
+        try:
+            dirty = STATE.pop("live_dirty", False)
+            due = JOB.running and time.time() - last > 180
+            if (dirty and time.time() - last > 20) or due:
+                last = time.time()
+                if JOB.kind == "build" or JOB.running:
+                    remote.live(config.load_config(), JOB.live_data())
+            elif dirty:
+                STATE["live_dirty"] = True               # отправим, когда пройдут 20 с
+        except Exception:
+            pass
+
+
 def _remote_loop():
     """Сборка по команде из чата: Claude кладёт сценарий в очередь закрытого репозитория отчётов,
     программа раз в минуту забирает его и собирает видео (если сейчас ничего не собирается)."""
@@ -926,15 +964,6 @@ def _remote_loop():
                 limits.watch_step(cfg, JOB.running)
             except Exception:
                 pass
-            if JOB.running and time.time() - STATE.get("live_t", 0) > 600:
-                STATE["live_t"] = time.time()
-                try:
-                    remote.live(cfg, {"project": JOB.project, "stage": JOB.stage,
-                                      "progress": round((JOB.frac or 0) * 100),
-                                      "minutes": round((time.time() - (JOB.t0 or time.time())) / 60),
-                                      "log": [str(x) for x in list(JOB.log)[-60:]]})
-                except Exception:
-                    pass
             if not JOB.running and not STATE.get("restart") and not STATE.get("update_pending") \
                     and STATE.get("bg", 0) <= 0:
                 q = [x for x in remote.pending(cfg) if not x[0].lower().startswith("review")]
@@ -1518,6 +1547,7 @@ def main(argv):
         threading.Thread(target=_watchdog, args=(srv,), daemon=True).start()
         threading.Thread(target=_auto_update_loop, daemon=True).start()
         threading.Thread(target=_remote_loop, daemon=True).start()
+        threading.Thread(target=_live_loop, daemon=True).start()
         if native_window(url):                      # окно закрыто
             STATE["bye"] = time.time()
             STATE["last_seen"] = time.time() - 10
@@ -1535,6 +1565,7 @@ def main(argv):
         threading.Thread(target=_watchdog, args=(srv,), daemon=True).start()
         threading.Thread(target=_auto_update_loop, daemon=True).start()
         threading.Thread(target=_remote_loop, daemon=True).start()
+        threading.Thread(target=_live_loop, daemon=True).start()
     srv.serve_forever()
 
 

@@ -306,11 +306,14 @@ skiing photo», «Mary Celeste ship painting»). Зритель должен в�
 """
 
 
-def plan(cfg, lines, topic, workdir, log=print):
+def plan(cfg, lines, topic, workdir, log=print, progress=None):
     """Режиссёрский план: для каждой строки — что должно быть в кадре и 3 точных запроса для стоков.
     lines: [{"no", "text"}]. Возвращает {no: {"show": str, "queries": [..]}}."""
     out = {}
+    parts = max(1, -(-len(lines) // 45))
     for i in range(0, len(lines), 45):
+        if progress:
+            progress(i // 45, parts)
         chunk = lines[i:i + 45]
         text = "\n".join(f"{ln['no']}. {ln['text']}" for ln in chunk)
         try:

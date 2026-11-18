@@ -285,7 +285,7 @@ async function poll() {
         bar.style.width = mini.style.width = (j.frac * 100).toFixed(1) + "%";
       }
       S.timer = Object.assign(S.timer || {}, { elapsed: j.elapsed_sec || 0, eta: j.eta_sec, at: Date.now(), frac: j.frac });
-      renderSteps(j.stage || "");
+      renderSteps(j);
       tickTimer();
       $("#stopBtn").hidden = j.kind !== "build";
     } else {
@@ -322,25 +322,24 @@ function tickTimer() {
     $("#jobPct").textContent = Math.floor(t.pct) + "%";
   }
   if (t.eta == null) { $("#jobEta").textContent = "считаю…"; $("#jobDoneAt").textContent = "—"; return; }
+  if (t.eta <= 60) { $("#jobEta").textContent = "меньше минуты"; $("#jobDoneAt").textContent = "скоро"; return; }
   const target = Math.max(0, t.eta - d);
   const dt = t.last ? (now - t.last) / 1000 : 0; t.last = now;
   t.disp = t.disp == null ? target : Math.max(0, t.disp - dt);
   t.disp += (target - t.disp) * Math.min(1, dt / 6);          // ~6 секунд на сглаживание скачка
-  $("#jobEta").textContent = "≈ " + human(t.disp);
+  $("#jobEta").textContent = t.disp < 50 ? "меньше минуты" : "≈ " + human(t.disp);
   const at = new Date(now + t.disp * 1000);
   $("#jobDoneAt").textContent = `в ${String(at.getHours()).padStart(2, "0")}:${String(at.getMinutes()).padStart(2, "0")}`;
 }
 setInterval(() => { if (!$("#jobCard").hidden) tickTimer(); }, 250);
 
-// этапы сборки — понятно, на каком шаге работа
-const STEPS = [["Озвучка", /^Озвучка/], ["Подбор кадров", /^(Поиск|Подбор) кадров|^Кадры/], ["Монтаж кадров", /^Монтаж/],
-               ["Склейка", /^Склейка/], ["Звук и файлы", /^(Сведение|Готово)/]];
-function renderSteps(stage) {
-  let cur = STEPS.findIndex(([, re]) => re.test(stage));
-  if (cur < 0) cur = 0;
-  const m = stage.match(/(\d+)\/(\d+)/);
-  $("#jobStep").textContent = `Шаг ${cur + 1} из ${STEPS.length} — ${STEPS[cur][0]}${m ? `: ${m[1]} из ${m[2]}` : ""}`;
-  $("#jobSteps").innerHTML = STEPS.map(([n], i) => `<span class="step ${i < cur ? "done" : i === cur ? "now" : ""}">${i < cur ? "✓ " : ""}${n}</span>`).join("");
+// этапы сборки — понятно, на каком шаге работа (номер этапа и его название приходят от программы)
+const STEPS = ["Озвучка", "План кадров", "Поиск кадров", "Проверка кадров", "Скачивание", "Подготовка монтажа",
+               "Монтаж кадров", "Склейка", "Сведение звука", "Файлы"];
+function renderSteps(j) {
+  const cur = Math.max(0, (j.stage_no || 1) - 1);
+  $("#jobStep").textContent = `Этап ${cur + 1} из ${STEPS.length}`;
+  $("#jobSteps").innerHTML = STEPS.map((n, i) => `<span class="step ${i < cur ? "done" : i === cur ? "now" : ""}">${n}${i === cur && j.stage_pct != null ? ` · ${j.stage_pct}%` : ""}</span>`).join("");
 }
 $("#miniJob").addEventListener("click", () => { go("home"); setTimeout(() => $("#jobCard").scrollIntoView({ behavior: "smooth", block: "center" }), 60); });
 
