@@ -28,7 +28,7 @@ TR_PARA = 0.45       # между абзацами
 TR_CARD = 0.45       # в название главы и из него
 TR_TITLE = 0.80      # из заставки в первый кадр
 PHOTO_CAP = 0.40                                  # не больше 40% кадров ролика — фото
-DARKEN = "eq=brightness=-0.16:saturation=0.8,gblur=sigma=4"   # фон под названием ролика и главы
+DARKEN = "eq=brightness=-0.18:saturation=0.75,gblur=sigma=14"   # фон под названием ролика и главы — мягко размыт
 
 # Лёгкая поправка цвета по настроению
 MOOD_GRADE = {"normal": "", "tense": "eq=brightness=-0.015:saturation=0.95", "climax": "eq=contrast=1.04:saturation=1.03"}
@@ -1258,6 +1258,9 @@ def step_build(cfg, niche, project, log=print, stop_flag=lambda: False, progress
         if nxt.get("stack") is not None and not nxt.get("stack_solo"):
             fr = 0                                    # фото со вспышкой появляется сразу — вспышка звучит ровно на нём
         sh["trans"], sh["tail"] = "fade", fr
+        if fr >= 10 and not sh.get("prolog") and (nxt.get("first_of_seg") or sh.get("role") == "card"
+                                                  or nxt.get("role") == "card"):
+            sh["trans"] = "blur"                      # новый абзац и глава — мягкий наплыв через размытие
         if sh.get("prolog") and nxt.get("prolog") and fr:
             sh["trans"] = ("hblur", "flash", "hblur", "fade")[i % 4]      # «смазанный» рывок и вспышка
     for i, sh in enumerate(shots):

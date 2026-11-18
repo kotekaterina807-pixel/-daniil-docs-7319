@@ -236,7 +236,7 @@ def render_stack_shot(prev, src, total, out, grade, seed, zoom_in=True, label=No
                 fr.alpha_composite(c2, (x0 + (card.width - cw) // 2, y0 + (card.height - ch) // 2 - round(18 * (1 - e))))
                 img = fr.convert("RGB")
                 if flash_on and k < flash:               # вспышка фотоаппарата
-                    img = Image.blend(img, Image.new("RGB", (W, H), (255, 252, 240)), 0.55 * (1 - k / flash))
+                    img = Image.blend(img, Image.new("RGB", (W, H), (255, 252, 240)), 0.22 * (1 - k / flash))
                 yield img.tobytes()
             else:                                        # медленный наезд на «стол»
                 p = (k - anim) / max(1, total - anim - 1)
@@ -441,6 +441,16 @@ def _hblur(plane, r):
     return (c[:, 2 * r + 1:] - c[:, :-2 * r - 1]) / (2 * r + 1)
 
 
+def _blur2(plane, r):
+    """Размытие по горизонтали и вертикали (два прохода скользящим средним — почти как гауссово)."""
+    if r >= 4 and plane.shape[0] % 2 == 0 and plane.shape[1] % 2 == 0:   # быстро: на половинном размере
+        small = plane[::2, ::2].astype(np.float32)
+        x = _hblur(_hblur(small, r // 2).T, r // 2).T
+        return np.repeat(np.repeat(x, 2, axis=0), 2, axis=1)
+    x = _hblur(plane, r)
+    return _hblur(x.T, r).T
+
+
 _CIRCLE = {}
 
 
@@ -486,6 +496,16 @@ def _transition(name, a, b, p):
         y = _hblur(ya, r) * (1 - e) + _hblur(yb, r) * e
         u = _hblur(ua, r // 2) * (1 - e) + _hblur(ub, r // 2) * e
         v = _hblur(va, r // 2) * (1 - e) + _hblur(vb, r // 2) * e
+        return _join(y + 0.5, u + 0.5, v + 0.5)
+    if name == "blur":                                    # мягкий наплыв через размытие (смена абзаца, глава)
+        r = int(22 * (1 - abs(1 - 2 * e)))
+        if r < 2:
+            return _mix(a, b, e)
+        ya, ua, va = _planes(a)
+        yb, ub, vb = _planes(b)
+        y = _blur2(ya, r) * (1 - e) + _blur2(yb, r) * e
+        u = _blur2(ua, max(1, r // 2)) * (1 - e) + _blur2(ub, max(1, r // 2)) * e
+        v = _blur2(va, max(1, r // 2)) * (1 - e) + _blur2(vb, max(1, r // 2)) * e
         return _join(y + 0.5, u + 0.5, v + 0.5)
     return _mix(a, b, e)                                    # fade и всё остальное — наплыв
 
