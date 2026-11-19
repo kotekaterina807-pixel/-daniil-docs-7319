@@ -1731,8 +1731,12 @@ def _choose_with_claude_code(cfg, project, finder, lines, rev_path, ch_path, top
             break
         log(f"  Круг {rnd + 1}: не хватает подходящих кадров в {len(retry)} строках — ищу по запросам Claude...")
         taken = {c["url"] for ln in lines for c in ln["cands"]}
-        for ln in retry:
+        t_r = time.time()
+        for i_r, ln in enumerate(retry):
             check_stop()
+            if i_r and i_r % 15 == 0:
+                el = time.time() - t_r
+                log(f"  Круг {rnd + 1}: поиск {i_r}/{len(retry)}, осталось примерно {int(el / i_r * (len(retry) - i_r) / 60) + 1} мин.")
             kept = [ln["cands"][k - 1] for k in choices.get(ln["no"], [])]
             spec = {"visual": "stock", "query": queries[ln["no"]], "n": ln["n"], "text": ln["text"]}
             new = [{k: c.get(k) for k in keep} for c in review.collect(finder, spec, taken)]
