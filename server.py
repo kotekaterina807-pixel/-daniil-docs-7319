@@ -111,7 +111,24 @@ class Job:
             prev = list(tr.durations.items())[-1:] if tr.durations else []
             took = f" (прошлый этап «{prev[0][0]}» — {_pg.human(prev[0][1])})" if prev and prev[0][1] >= 5 else ""
             self.add_log(f"— Этап {tr.cur + 1}/{len(_pg.STAGES)}: {_pg.NAMES[tr.cur]}{took}")
+            try:                                    # сделанные этапы запоминаются: после остановки и «продолжить» они не гаснут
+                sd = self._stages_file()
+                done = set(self.stages_done_idx()) | set(range(0, tr.cur))
+                if sd:
+                    sd.write_text(json.dumps(sorted(done)), encoding="utf-8")
+            except Exception:
+                pass
             STATE["live_dirty"] = True              # сменился этап — сразу в status/live.json
+
+    def _stages_file(self):
+        return (config.OUTPUT_DIR / self.project / "stages_done.json") if self.project else None
+
+    def stages_done_idx(self):
+        try:
+            sd = self._stages_file()
+            return [int(x) for x in json.loads(sd.read_text(encoding="utf-8"))] if sd and sd.exists() else []
+        except Exception:
+            return []
 
     def status(self):
         if not self.t0:
@@ -140,7 +157,7 @@ class Job:
         return {"running": self.running, "kind": self.kind, "frac": self.frac, "stage": self.stage,
                 "elapsed": _fmt(elapsed), "elapsed_sec": round(elapsed), "eta": eta_text, "eta_sec": eta_sec,
                 "stage_no": snap.get("stage_no"), "stages": snap.get("stages"), "stage_name": snap.get("stage_name"),
-                "stage_pct": snap.get("stage_pct"),
+                "stage_pct": snap.get("stage_pct"), "stages_done_idx": self.stages_done_idx(),
                 "error": self.error, "done_id": self.done_id, "result": self.result, "project": self.project}
 
     def live_data(self):
@@ -195,6 +212,9 @@ def run_job(kind, fn):
                 try:
                     if not JOB.error:
                         JOB.tracker.finish()            # время этапов — для оценки следующих сборок
+                        sf = JOB._stages_file()
+                        if sf and sf.exists():
+                            sf.unlink()                 # сборка закончена — отметки этапов больше не нужны
                 except Exception:
                     pass
             JOB.running = False

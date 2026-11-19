@@ -1393,7 +1393,7 @@ def _choose_in_chat(cfg, project, finder, seg_blocks, jobs, vis_cache, log, chec
     check_calls = -(-(-(-len(jobs) // review.ROWS_PER_SHEET)) // per_)
     log(f"Оценка расхода Claude: ≈{plan_calls + check_calls + max(1, check_calls // 4)} запросов "
         f"(план кадров {plan_calls} — {cfg.get('claude_code_model') or 'sonnet'}, проверка листов ≈{check_calls} "
-        f"+ дозапросы — {cfg.get('claude_check_model') or 'haiku'}). Уже сделанное не повторяется.")
+        f"+ дозапросы — {cfg.get('claude_check_model') or 'sonnet'}). Уже сделанное не повторяется.")
     lines = review.load_review(rev_path)
     if not lines or [ln.get("sig") for ln in lines] != sig:
         lines = None
@@ -1599,7 +1599,9 @@ def _choose_with_claude_code(cfg, project, finder, lines, rev_path, ch_path, top
         sheets = review.make_sheets(sheet_lines, project, log, prefix=prefix)
         per = max(1, int(cfg.get("sheets_per_call", 3)))     # несколько листов за один запрос — в разы меньше расход
         batches = [sheets[i:i + per] for i in range(0, len(sheets), per)]
-        model = cfg.get("claude_check_model") or "haiku"
+        model = cfg.get("claude_check_model") or "sonnet"
+        if "haiku" in str(model).lower():
+            model = "sonnet"                         # Haiku для проверки кадров запрещён: слабый подбор, потом много правок
         log(f"  Запросов к Claude Code: {len(batches)} (листов {len(sheets)}, по {per} за раз, модель {model}).")
         progress(0, f"Проверка кадров 0/{len(sheets)}")
         done = [0]
@@ -1735,6 +1737,7 @@ def _choose_with_claude_code(cfg, project, finder, lines, rev_path, ch_path, top
         t_r = time.time()
         for i_r, ln in enumerate(retry):
             check_stop()
+            progress(0, f"Круг {rnd + 1} поиск {i_r}/{len(retry)}")
             if i_r and i_r % 15 == 0:
                 el = time.time() - t_r
                 log(f"  Круг {rnd + 1}: поиск {i_r}/{len(retry)}, осталось примерно {int(el / i_r * (len(retry) - i_r) / 60) + 1} мин.")

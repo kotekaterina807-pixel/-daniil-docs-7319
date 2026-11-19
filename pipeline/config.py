@@ -3,7 +3,7 @@ import json
 import os
 from pathlib import Path
 
-VERSION = "16.5 (19.11.2026)"
+VERSION = "16.6 (19.11.2026)"
 CONFIG_REV = 10      # при смене — обновляются настройки монтажа у уже сохранённых конфигов
 ROOT = Path(__file__).resolve().parent.parent
 CONFIG_PATH = ROOT / "config.json"
@@ -32,7 +32,7 @@ DEFAULTS = {
     "show_labels": True,               # всплывающие надписи (места, люди, даты)
     "visual_check": "claude_code",     # кадры проверяет Claude Code по подписке (другие режимы убраны в 15.8)
     "claude_code_model": "sonnet",     # план кадров (что показать на каждой фразе) — нужна сильная модель
-    "claude_check_model": "haiku",     # просмотр листов с кадрами — лёгкая модель, расход лимита в разы меньше
+    "claude_check_model": "sonnet",    # просмотр листов с кадрами — не ниже Sonnet (Haiku даёт слабый подбор)
     "tg_token": "",                    # бот Telegram для отправки готовых видео (@BotFather)
     "tg_chat_id": "",                  # ваш чат с ботом — программа узнаёт сама после «Start»
     "tg_send": True,

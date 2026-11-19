@@ -346,8 +346,11 @@ const STEPS = ["Озвучка", "План кадров", "Поиск кадро
                "Монтаж кадров", "Склейка", "Сведение звука", "Файлы"];
 function renderSteps(j) {
   const cur = Math.max(0, (j.stage_no || 1) - 1);
+  if (S.stageProject !== j.project) { S.stageProject = j.project; S.stageSeen = new Set(); }     // новый проект — отметки заново
+  for (let i = 0; i < cur; i++) S.stageSeen.add(i);                         // сделанное остаётся зелёным и не гаснет
+  (j.stages_done_idx || []).forEach((i) => S.stageSeen.add(i));
   $("#jobStep").textContent = `Этап ${cur + 1} из ${STEPS.length}`;
-  $("#jobSteps").innerHTML = STEPS.map((n, i) => `<span class="step ${i < cur ? "done" : i === cur ? "now" : ""}">${n}${i === cur && j.stage_pct != null ? ` · ${j.stage_pct}%` : ""}</span>`).join("");
+  $("#jobSteps").innerHTML = STEPS.map((n, i) => `<span class="step ${i === cur ? "now" : S.stageSeen.has(i) ? "done" : ""}">${n}${i === cur && j.stage_pct != null ? ` · ${j.stage_pct}%` : ""}</span>`).join("");
 }
 $("#miniJob").addEventListener("click", () => { go("home"); setTimeout(() => $("#jobCard").scrollIntoView({ behavior: "smooth", block: "center" }), 60); });
 
