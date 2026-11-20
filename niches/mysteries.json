@@ -78,7 +78,8 @@
     "max_shot_seconds": 5.0,
     "photo_cap": 0.4,
     "music_volume": 0.12,
-    "label_min_gap_sec": 45
+    "label_min_gap_sec": 45,
+    "edit_style": "mysteries"
   },
   "preflight": {
     "min_minutes": 25,

@@ -507,6 +507,31 @@ def _transition(name, a, b, p):
         u = _blur2(ua, max(1, r // 2)) * (1 - e) + _blur2(ub, max(1, r // 2)) * e
         v = _blur2(va, max(1, r // 2)) * (1 - e) + _blur2(vb, max(1, r // 2)) * e
         return _join(y + 0.5, u + 0.5, v + 0.5)
+    if name in ("slide", "whip"):                         # въезд нового кадра сбоку (whip — со смазом движения)
+        sh = int(W * e)
+        sh2 = sh // 2
+        ya, ua, va = _planes(a)
+        yb, ub, vb = _planes(b)
+        y = np.concatenate([ya[:, sh:], yb[:, :sh]], axis=1).astype(np.float32)
+        u = np.concatenate([ua[:, sh2:], ub[:, :sh2]], axis=1).astype(np.float32)
+        v = np.concatenate([va[:, sh2:], vb[:, :sh2]], axis=1).astype(np.float32)
+        if name == "whip":
+            r = int(60 * (1 - abs(1 - 2 * p)))
+            if r >= 2:
+                y, u, v = _hblur(y, r), _hblur(u, r // 2), _hblur(v, r // 2)
+        return _join(y + 0.5, u + 0.5, v + 0.5)
+    if name == "wipe":                                    # жёсткая шторка слева направо
+        x = int(W * e)
+        ya, ua, va = _planes(a)
+        yb, ub, vb = _planes(b)
+        y, u, v = ya.copy(), ua.copy(), va.copy()
+        y[:, :x], u[:, :x // 2], v[:, :x // 2] = yb[:, :x], ub[:, :x // 2], vb[:, :x // 2]
+        y[:, max(0, x - 6):x + 6] = 235
+        return _join(y, u, v)
+    if name == "dipwhite":                                # проход через белый (светлая ниша)
+        w = np.full_like(a, 128)
+        w[:W * H] = 235
+        return _mix(a, w, min(1, 2 * e)) if e < 0.5 else _mix(w, b, 2 * e - 1)
     return _mix(a, b, e)                                    # fade и всё остальное — наплыв
 
 

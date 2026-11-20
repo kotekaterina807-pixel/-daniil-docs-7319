@@ -1277,6 +1277,27 @@ def step_build(cfg, niche, project, log=print, stop_flag=lambda: False, progress
         if nxt.get("stack") is not None and not nxt.get("stack_solo"):
             fr = 0                                    # фото со вспышкой появляется сразу — вспышка звучит ровно на нём
         sh["trans"], sh["tail"] = "fade", fr
+        es = cfg.get("edit_style", "mysteries")
+        if es in ("bau", "food"):
+            # своя манера монтажа у каждой ниши: короткие жёсткие склейки внутри абзаца, свои переходы на смене смысла
+            hard = nxt.get("first_of_seg") or sh.get("role") == "card" or nxt.get("role") == "card" or sh.get("role") == "curtain" or nxt.get("role") == "curtain"
+            if sh.get("role") == "curtain" or nxt.get("role") == "curtain":
+                pass
+            elif not hard:
+                if es == "bau":
+                    sh["trans"], sh["tail"] = ("slide", 8) if i % 7 == 0 and fr else ("fade", 0)
+                else:
+                    sh["trans"], sh["tail"] = ("wipe", 7) if i % 6 == 0 and fr else ("fade", 0)
+            elif fr:
+                if es == "bau":
+                    sh["trans"], sh["tail"] = ("whip", 10) if nxt.get("first_of_seg") else ("dipwhite", 8)
+                else:
+                    sh["trans"], sh["tail"] = ("fadeblack", 9) if nxt.get("first_of_seg") else ("wipe", 8)
+            fr2 = min(sh["tail"], int(sh["frames"] * 0.4), int(nxt["frames"] * 0.4))
+            sh["tail"] = fr2 if fr2 >= 3 else 0
+            if nxt.get("stack") is not None and not nxt.get("stack_solo"):
+                sh["tail"] = 0
+            continue
         if fr >= 10 and not sh.get("prolog") and (nxt.get("first_of_seg") or sh.get("role") == "card"
                                                   or nxt.get("role") == "card"):
             sh["trans"] = "blur"                      # новый абзац и глава — мягкий наплыв через размытие
