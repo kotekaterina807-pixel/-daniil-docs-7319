@@ -1002,6 +1002,20 @@ def _remote_loop():
                         if not d:
                             remote.status(cfg, name, f"ошибка: проект «{cmd.get('project')}» не найден")
                             continue
+                        if cmd.get("resume"):                # продолжить незаконченную сборку с места остановки
+                            def rjob(d=d, name=name):
+                                JOB.add_log(f"Продолжение сборки по команде из чата с Claude: {d.name}")
+                                try:
+                                    res = _rebuild(d, mode="rebuild", src="по команде из чата",
+                                                   over={"qa_retry": False, "qa_check": False})
+                                except Exception as e:
+                                    remote.status(config.load_config(), name, f"ошибка: {e}")
+                                    raise
+                                remote.status(config.load_config(), name, "готово")
+                                return res
+                            if run_job("build", rjob):
+                                remote.status(cfg, name, f"сборка продолжена: {d.name}")
+                            continue
                         _add_fixes(d, cmd.get("times") or [], cmd.get("archive") or [])
                         _patch_script(d, cmd)
                         if cmd.get("reselect"):

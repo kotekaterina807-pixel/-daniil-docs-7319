@@ -1727,7 +1727,7 @@ def _choose_with_claude_code(cfg, project, finder, lines, rev_path, ch_path, top
             f"(сохранено после прошлой остановки) — повторно не спрашиваю.")
     log(f"Claude Code смотрит кадры ({len(todo1)} строк сценария)...")
     picks, queries = ask(todo1, "кадры_лист", "Claude проверяет кадры", 1) if todo1 else ({}, {})
-    queries = dict(restored_q, **queries)
+    queries = {**(restored_q or {}), **(queries or {})}   # ключи — номера строк (int), dict(**) их не принимает
     for no, ks in picks.items():
         if no in by_no:
             choices[no] = [k for k in ks if 1 <= k <= len(by_no[no]["cands"])]
