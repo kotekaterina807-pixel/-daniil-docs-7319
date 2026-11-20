@@ -23,5 +23,7 @@
     "de": "Militärgeschichte",
     "fr": "Histoire militaire",
     "es": "Historia militar"
-  }
+  },
+  "order": 9,
+  "hidden": true
 }

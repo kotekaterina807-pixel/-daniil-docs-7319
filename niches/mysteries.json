@@ -68,5 +68,6 @@
       "title_card": false,
       "grade": "eq=contrast=1.06:saturation=0.85:gamma=0.97,colorbalance=rs=0.02:bs=-0.02,vignette=PI/7"
     }
-  }
+  },
+  "order": 1
 }

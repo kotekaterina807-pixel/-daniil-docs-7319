@@ -3,7 +3,7 @@ import json
 import os
 from pathlib import Path
 
-VERSION = "16.6 (19.11.2026)"
+VERSION = "16.7 (20.11.2026)"
 CONFIG_REV = 10      # при смене — обновляются настройки монтажа у уже сохранённых конфигов
 ROOT = Path(__file__).resolve().parent.parent
 CONFIG_PATH = ROOT / "config.json"
@@ -171,14 +171,16 @@ def save_config(cfg: dict) -> Path:
 
 def list_niches() -> dict:
     """Возвращает {название ниши: путь к файлу}."""
-    out = {}
-    for p in sorted(NICHES_DIR.glob("*.json")):
+    found = []
+    for p in NICHES_DIR.glob("*.json"):
         try:
             data = json.loads(p.read_text(encoding="utf-8"))
-            out[data.get("name", p.stem)] = p
+            if data.get("hidden"):
+                continue                                   # скрытые ниши (лежат в папке, но не показываются в выборе)
+            found.append((data.get("order", 50), data.get("name", p.stem), p))
         except Exception:
             continue
-    return out
+    return {name: p for _, name, p in sorted(found, key=lambda x: (x[0], x[1]))}
 
 
 def load_niche(path) -> dict:
