@@ -193,6 +193,21 @@ def synthesize(cfg, text, out_file, log=print, voice=None, language="ru", name="
     tid = ensure_template(cfg, voice, save_template)
     body = {"template_id": tid, "input_text": text, "name": (name or text[:60])[:120],
             "config_override": _tts_config(cfg, voice, language)}
+    last = None
+    for attempt in range(3):                       # сбой сервиса («пустое аудио») — новый заказ, до 3 раз
+        try:
+            return _order(cfg, body, voice, save_template, out_file)
+        except LumeanError as e:
+            last = e
+            if "не озвучил абзац" not in str(e) or attempt == 2:
+                break
+            log(f"  Lumean: сбой озвучки ({e}) — повторяю заказ ({attempt + 2}/3)...")
+            time.sleep(10)
+    raise LumeanError(f"{last} Абзац: «{text[:80]}…»")
+
+
+def _order(cfg, body, voice, save_template, out_file):
+    """Один заказ озвучки: создать, дождаться, скачать."""
     try:
         order = _req(cfg, "POST", "/orders", json=body)
     except LumeanError as e:

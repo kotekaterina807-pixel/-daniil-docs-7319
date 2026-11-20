@@ -991,8 +991,12 @@ def _remote_loop():
                 pass
             from pipeline import stopctl as _sc
             if not JOB.running and not STATE.get("restart") and not STATE.get("update_pending") \
-                    and STATE.get("bg", 0) <= 0 and not _sc.hold_on():
+                    and STATE.get("bg", 0) <= 0:
+                held = _sc.hold_on()
                 q = [x for x in remote.pending(cfg) if not x[0].lower().startswith("review")]
+                if held:                      # после «Стоп» берём только команду «resume_…json»: её кладут,
+                    q = [x for x in q          # когда ты сам в чате попросил продолжить
+                         if x[0].lower().startswith("resume_") and x[0].lower().endswith(".json")]
                 if q:
                     name, sha = q[0]
                     text = remote.take(cfg, name, sha)
@@ -1003,6 +1007,7 @@ def _remote_loop():
                             remote.status(cfg, name, f"ошибка: проект «{cmd.get('project')}» не найден")
                             continue
                         if cmd.get("resume"):                # продолжить незаконченную сборку с места остановки
+                            _sc.hold_clear()
                             def rjob(d=d, name=name):
                                 JOB.add_log(f"Продолжение сборки по команде из чата с Claude: {d.name}")
                                 try:
