@@ -1352,6 +1352,9 @@ def step_build(cfg, niche, project, log=print, stop_flag=lambda: False, progress
         else:
             log("  Громкость в норме (−18…−16 дБ, пик не выше −1 дБ).")
     progress(0, "Сведение звука 3/3")
+    if int(cfg.get("output_height", 1440) or 1080) > 1080:     # итог — 2K 60 кадров/с (YouTube даёт VP9)
+        log("Перевожу готовое видео в 2K (2560×1440, 60 кадров/с)...")
+        render.upscale(final, int(cfg.get("output_height", 1440)), 60, log)
 
     # ---------- 6. субтитры, описание, обложки ----------
     progress(0, "Файлы")

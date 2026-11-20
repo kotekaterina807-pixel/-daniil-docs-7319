@@ -845,6 +845,25 @@ def final_mix(video, narration, music, out, total_sec, music_volume=0.12, sfx=No
     _run_loud(cmd, filt, out, total_sec)
 
 
+def upscale(path, height=1440, fps=60, log=print):
+    """Готовое видео → 2K (2560×1440) и 60 кадров/с: YouTube для 2K даёт кодек VP9 и заметно лучшую картинку.
+    Звук не перекодируется. Если не вышло — остаётся 1080p."""
+    path = Path(path)
+    w = int(round(height * 16 / 9 / 2)) * 2
+    tmp = path.with_suffix(".2k.mp4")
+    try:
+        _run([ffmpeg_exe(), "-y", "-hide_banner", "-loglevel", "error", "-i", str(path), "-map", "0:v", "-map", "0:a",
+              "-vf", f"scale={w}:{height}:flags=lanczos,fps={fps},format=yuv420p", "-c:v", "libx264", "-preset", "fast",
+              "-crf", "17", "-profile:v", "high", "-c:a", "copy", "-movflags", "+faststart", str(tmp)])
+        os.replace(tmp, path)
+        log(f"  Видео в {w}×{height}, {fps} кадров/с.")
+        return True
+    except Exception as e:
+        tmp.unlink(missing_ok=True)
+        log(f"  Перевод в 2K не удался ({str(e)[:120]}) — остаётся 1920×1080.")
+        return False
+
+
 def audio_level(path):
     """Средняя громкость и пик звука готового файла в дБ (None, None — звуковой дорожки нет или ffmpeg не ответил)."""
     try:

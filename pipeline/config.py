@@ -3,7 +3,7 @@ import json
 import os
 from pathlib import Path
 
-VERSION = "16.8 (20.11.2026)"
+VERSION = "16.9 (20.11.2026)"
 CONFIG_REV = 10      # при смене — обновляются настройки монтажа у уже сохранённых конфигов
 ROOT = Path(__file__).resolve().parent.parent
 CONFIG_PATH = ROOT / "config.json"
@@ -27,6 +27,7 @@ DEFAULTS = {
     "eleven_style": 0.35,
     "edge_voice": "ru-RU-DmitryNeural",
     "music_volume": 0.12,              # громкость фоновой музыки (0..1)
+    "output_height": 1440,            # итоговое видео: 1440 = 2K (2560×1440), 60 кадров/с; 1080 — без перевода
     "shot_seconds": 3.2,               # средняя длина одного кадра, сек
     "max_shot_seconds": 5.0,           # обычно кадр не длиннее этого
     "show_labels": True,               # всплывающие надписи (места, люди, даты)
