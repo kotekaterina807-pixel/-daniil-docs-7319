@@ -69,5 +69,20 @@
       "grade": "eq=contrast=1.06:saturation=0.85:gamma=0.97,colorbalance=rs=0.02:bs=-0.02,vignette=PI/7"
     }
   },
-  "order": 1
+  "order": 1,
+  "card_theme": "night",
+  "settings": {
+    "old_look": true,
+    "photo_stack": true,
+    "shot_seconds": 3.2,
+    "max_shot_seconds": 5.0,
+    "photo_cap": 0.4,
+    "music_volume": 0.12,
+    "label_min_gap_sec": 45
+  },
+  "preflight": {
+    "min_minutes": 25,
+    "min_queries": 100
+  },
+  "ui_desc": "Немецкий · 25–30 мин · архивные фото и хроника, старая плёнка, тёмные карточки"
 }

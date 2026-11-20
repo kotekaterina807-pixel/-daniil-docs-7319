@@ -878,6 +878,8 @@ async function loadInit() {
   const opts = d.niches.map((n) => `<option value="${esc(n.id)}">${esc(n.name)}</option>`).join("");
   $("#nicheSel").innerHTML = opts; $("#defNiche").innerHTML = opts;
   $("#nicheSel").value = d.cfg.default_niche || (d.niches[0] && d.niches[0].id);
+  const nnote = () => { const n = (S.niches || []).find((x) => x.id === $("#nicheSel").value); $("#nicheNote").textContent = (n && n.desc) || ""; };
+  $("#nicheSel").onchange = nnote; nnote();
   applyTheme(d.cfg.theme || "light");
   bindSettings();
   renderKeys();

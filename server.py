@@ -491,7 +491,7 @@ class Handler(BaseHTTPRequestHandler):
                                         "selfcheck": STATE["selfcheck"]})
             if p == "/api/init":
                 cfg = config.load_config()
-                niches = [{"id": str(v.name), "name": k} for k, v in config.list_niches().items()]
+                niches = [{"id": str(v.name), "name": k, "desc": config.load_niche(v).get("ui_desc", "")} for k, v in config.list_niches().items()]
                 return self._send(200, {
                     "version": config.VERSION,
                     "cfg": {k: cfg.get(k, "") for k in PUBLIC_KEYS},
@@ -785,12 +785,13 @@ class Handler(BaseHTTPRequestHandler):
             name += ".txt"
         path = inbox / f"{time.strftime('%Y%m%d_%H%M%S')}_{name}"
         path.write_text(text.replace("\r\n", "\n"), encoding="utf-8-sig")
-        npath = _niche_path(data.get("niche"))
+        npath = _niche_from_text(text, data.get("niche"))
 
         def job():
             try:
                 from pipeline import preflight
-                for ln_ in preflight.check(text):
+                JOB.add_log(f"Ниша: {config.load_niche(npath).get('name', npath.stem)}")
+                for ln_ in preflight.check(text, **(config.load_niche(npath).get("preflight") or {})):
                     JOB.add_log(ln_)
             except Exception:
                 pass
@@ -1030,14 +1031,15 @@ def _remote_loop():
                     inbox.mkdir(parents=True, exist_ok=True)
                     path = inbox / f"{time.strftime('%Y%m%d_%H%M%S')}_{Path(name).name}"
                     path.write_text(text.replace("\r\n", "\n"), encoding="utf-8-sig")
-                    npath = _niche_path(cfg.get("niche"))
+                    npath = _niche_from_text(text, cfg.get("niche"))
 
                     def job(path=path, npath=npath, name=name, text=text):
                         JOB.add_log(f"Сборка по команде из чата с Claude: {name}")
                         try:
                             try:
                                 from pipeline import preflight
-                                for ln_ in preflight.check(text):
+                                JOB.add_log(f"Ниша: {config.load_niche(npath).get('name', npath.stem)}")
+                                for ln_ in preflight.check(text, **(config.load_niche(npath).get("preflight") or {})):
                                     JOB.add_log(ln_)
                             except Exception:
                                 pass
@@ -1303,6 +1305,15 @@ def _resend_reports():
             _report_bg(proj, None)
     except Exception:
         pass
+
+
+def _niche_from_text(text, fallback):
+    """Ниша из строки сценария «#! НИША: bau» (bau / food / mysteries или название), иначе выбранная."""
+    m = re.search(r"(?im)^#!\s*НИША\s*:\s*(.+?)\s*$", text or "")
+    if m:
+        v = m.group(1).strip()
+        return _niche_path(v if v.endswith(".json") or " " in v else v.lower() + ".json")
+    return _niche_path(fallback)
 
 
 def _niche_path(niche_id):

@@ -40,5 +40,29 @@
     "Язык: короткие фразы, конкретика, источник и год у каждого факта."
   ],
   "styles": {},
-  "order": 3
+  "order": 3,
+  "card_theme": "dark",
+  "card_accent": [
+    226,
+    58,
+    44
+  ],
+  "title_card": false,
+  "settings": {
+    "old_look": false,
+    "photo_stack": true,
+    "shot_seconds": 3.6,
+    "max_shot_seconds": 5.5,
+    "photo_cap": 0.3,
+    "music_volume": 0.1,
+    "label_min_gap_sec": 25,
+    "eleven_speed": 1.1,
+    "person_label_gap_sec": 240
+  },
+  "preflight": {
+    "wpm": 165,
+    "min_minutes": 12,
+    "min_queries": 40
+  },
+  "ui_desc": "Испанский · 12–15 мин · тёмные карточки: даты, цитаты, новости; список продуктов, фото до 30%"
 }

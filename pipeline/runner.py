@@ -323,6 +323,10 @@ def _sfx_events(shots):
             whoosh(t0 - 0.6, 0.12, 1.8)
             last_wh = t0
             continue
+        if name.startswith("info_") and not (i and Path(str(shots[i - 1].get("src", ""))).name == name):
+            whoosh(t0 - 0.15, 0.05, 0.9)                  # инфо-карточка въезжает — мягкий «свуш»
+            last_wh = t0
+            continue
         if name.startswith("doc_") and tw and not sh.get("no_type"):
             a = sh.get("type_start") if sh.get("type_start") is not None else 0.3
             b = sh.get("type_end") if sh.get("type_end") is not None else (t1 - t0 - 0.6)
@@ -378,6 +382,10 @@ def step_build(cfg, niche, project, log=print, stop_flag=lambda: False, progress
     code = script.get("language", cfg.get("language", "ru"))
     L = lang(code)
     cfg = dict(cfg)
+    ns = {k: v for k, v in (niche.get("settings") or {}).items() if k not in ("qa_check", "qa_retry", "claude_review")}
+    if ns:                                         # у каждой ниши свои настройки монтажа (кадр, фото, вид, музыка)
+        cfg.update(ns)
+        log(f"Ниша «{niche.get('name', '')}»: свои настройки монтажа ({', '.join(sorted(ns))}).")
     cfg["language"] = code
     from .config import voice_for_lang, voice_lang
     v_ = voice_for_lang(cfg, code)                    # голос диктора — на языке видео
@@ -649,6 +657,10 @@ def step_build(cfg, niche, project, log=print, stop_flag=lambda: False, progress
                 spec["map"] = query
                 b["specs"].append(spec)                   # карта рисуется сама — подбирать нечего
                 continue
+            if vis == "info":
+                spec["info"], spec["n"] = query, 1
+                b["specs"].append(spec)                   # инфо-карточка рисуется сама — подбирать нечего
+                continue
             b["specs"].append(spec)
             jobs.append((bi, len(b["specs"]) - 1))
 
@@ -801,6 +813,12 @@ def step_build(cfg, niche, project, log=print, stop_flag=lambda: False, progress
                                                  board_state, script, finder, log)]
                 except Exception as e:
                     log(f"  Доска расследования не получилась ({str(e)[:120]}) — будет обычный кадр.")
+        for spec in specs_:                        # инфо-карточки (цифра, дата, цитата…) — заранее, свои кадры
+            if spec["visual"] == "info" and not spec.get("items"):
+                try:
+                    spec["items"] = [_info_item(spec, shots_dir, max(1.6, spec["t1"] - spec["t0"]), niche, accent)]
+                except Exception as e:
+                    log(f"  Инфо-карточка не получилась ({str(e)[:120]}) — будет обычный кадр.")
         for spec in specs_:                        # листы с текстом — заранее, у них свои кадры
             if spec["visual"] == "document" and not spec.get("items"):
                 try:
@@ -1982,8 +2000,10 @@ def _assign_specs(script_specs, units):
     others = [(v, q) for v, q in script_specs if v not in ("person", "document")]
     for j, (v, q) in enumerate(others):            # подсказки по порядку
         u = min(n - 1, j * n // max(1, len(others)))
-        if not vis[u][1] or v == "archive":
-            vis[u] = [v if v in ("archive", "photo", "stock", "newsreel") else "stock", q]
+        if vis[u][0] == "info" and v != "info":
+            continue                               # инфо-карточку на фразе не перебиваем
+        if not vis[u][1] or v in ("archive", "info"):
+            vis[u] = [v if v in ("archive", "photo", "stock", "newsreel", "info") else "stock", q]
     for v, q in script_specs:
         if v != "person":
             continue
@@ -1997,8 +2017,8 @@ def _assign_specs(script_specs, units):
             persons[u] = q
     for i in range(n):                             # фразы без подсказки — подсказка соседней
         if not vis[i][1]:
-            vis[i][1] = next((vis[j][1] for j in list(range(i - 1, -1, -1)) + list(range(i + 1, n)) if vis[j][1]),
-                             "dark atmosphere")
+            vis[i][1] = next((vis[j][1] for j in list(range(i - 1, -1, -1)) + list(range(i + 1, n))
+                              if vis[j][1] and vis[j][0] != "info"), "dark atmosphere")
     docs = {}
     for i, (_, _, t) in enumerate(units):          # цитата в «кавычках» из речи — лист с этим текстом
         m = re.search(r"«([^»]{14,})»", t)
@@ -2476,6 +2496,18 @@ def _board_item(spec, b, shots_dir, length, t0, state, script, finder, log):
         fx.make_board_clip(title, sub, pins, new, clip_len, out, seed=title, times=times,
                            focus_names=[nm for nm, _ in people])
     return {"path": str(out), "kind": "video", "url": "board:" + out.stem, "duration": clip_len + 0.5}
+
+
+def _info_item(spec, shots_dir, length, niche, accent):
+    """Инфо-карточка: большая цифра, дата, цитата, сравнение, заголовок, таймлайн, новость (pipeline/cards.py)."""
+    from . import cards
+    kind, _, text = str(spec["info"]).partition("::")
+    theme = niche.get("card_theme", "night")
+    acc = tuple(niche.get("card_accent") or accent)
+    out = shots_dir / f"info_{_key(kind, text, f'{length:.2f}', theme, str(acc), 'c1')}.mp4"
+    if not out.exists():
+        cards.make_info_clip(kind, text, length, out, theme, acc)
+    return {"path": str(out), "kind": "video", "url": "card:info:" + text[:60], "duration": length + 0.3}
 
 
 def _document_item(spec, b, shots_dir, length, t0):
