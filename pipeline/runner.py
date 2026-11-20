@@ -90,7 +90,7 @@ def _key(*parts):
 def _pick_music(niche):
     folder = MUSIC_DIR / niche.get("id", "")
     files = []
-    for d in (folder, MUSIC_DIR):
+    for d in ((folder,) if niche.get("id") in ("bau", "food") else (folder, MUSIC_DIR)):
         if d.exists():
             files = [p for p in d.iterdir() if p.suffix.lower() in (".mp3", ".wav", ".m4a", ".ogg", ".flac")]
             if files:
@@ -354,6 +354,17 @@ def _grade(niche, mood, old_look=False):
     return ",".join(parts) or "null"
 
 
+def _credit_of(it):
+    """Подпись источника фото: «Foto: автор / источник, лицензия» (только для фото из свободных архивов)."""
+    if not it or it.get("kind") != "image" or str(it.get("url", "")).startswith("card:"):
+        return ""
+    a, src, lic = (str(it.get(k) or "").strip() for k in ("author", "source", "license"))
+    a = re.sub(r"<[^>]+>", "", a)[:50]
+    if not (a or src):
+        return ""
+    return "Foto: " + " / ".join(x for x in (a, src) if x) + (f", {lic}" if lic else "")
+
+
 def _frame_from_video(clip, out):
     import subprocess
     subprocess.run([ffmpeg_exe(), "-y", "-hide_banner", "-loglevel", "error", "-ss", "1", "-i", str(clip),
@@ -387,6 +398,8 @@ def step_build(cfg, niche, project, log=print, stop_flag=lambda: False, progress
         cfg.update(ns)
         log(f"Ниша «{niche.get('name', '')}»: свои настройки монтажа ({', '.join(sorted(ns))}).")
     cfg["language"] = code
+    _look = {"bau": "studio", "food": "polaroid"}.get(str(cfg.get("edit_style", "")))   # вид кадров ниши
+    extras.LABEL_STYLE = {"studio": "studio", "polaroid": "food"}.get(_look)          # подписи в стиле ниши
     from .config import voice_for_lang, voice_lang
     v_ = voice_for_lang(cfg, code)                    # голос диктора — на языке видео
     if v_ and v_.get("id") != cfg.get("elevenlabs_voice_id"):
@@ -756,6 +769,17 @@ def step_build(cfg, niche, project, log=print, stop_flag=lambda: False, progress
                           "s": b["start"], "e": b["end"], "mood": "normal", "darken": True, "role": "title"})
             add_overlay(title_png, 0.5, TITLE_SEC - 0.3, "title")
             continue
+        if b["type"] == "card" and _look:
+            ci = b["chapter"]
+            ln_ = (b["end"] - b["start"]) / SR + 1.5
+            cp_ = shots_dir / f"look_chap_{_look}_{ci}_{_key(script['chapters'][ci]['title'], str(accent), f'{ln_:.2f}')}.mp4"
+            if not cp_.exists():
+                from . import looks as _lk
+                _lk.make_chapter_clip(_look, ci, script["chapters"][ci]["title"], ln_, cp_,
+                                      L.get("chapter", "KAPITEL"), accent)
+            shots.append({"kind": "video", "src": str(cp_), "clip_dur": ln_, "offset_n": 0,
+                          "s": b["start"], "e": b["end"], "mood": "normal", "role": "card"})
+            continue
         if b["type"] == "card":
             ci = b["chapter"]
             nxt = next((x for x in seg_blocks if x["chapter"] == ci), None)
@@ -775,7 +799,7 @@ def step_build(cfg, niche, project, log=print, stop_flag=lambda: False, progress
         # надпись абзаца: не чаще раза в label_gap секунд
         if (cfg.get("show_labels", True) and s.get("label") and seg_start - last_label >= label_gap
                 and seg_start >= title_sec + 1):
-            lp = shots_dir / f"label2_{_key(s['label'], str(accent))}.png"
+            lp = shots_dir / f"label2_{_key(s['label'], str(accent), str(extras.LABEL_STYLE))}.png"
             extras.make_label(s["label"], lp, accent)
             add_overlay(lp, seg_start + 0.3, min(LABEL_SEC, span - 0.4), "label")
             last_label = seg_start
@@ -843,7 +867,7 @@ def step_build(cfg, niche, project, log=print, stop_flag=lambda: False, progress
             if spec.get("auto_person") and any(it.get("person") for it in items) and cfg.get("show_labels", True) \
                     and length >= 1.8 and seg_start + t0 + 0.1 >= busy_until[0]:
                 nm = spec["auto_person"][1]               # фото названного во фразе человека — подпись с именем
-                lp = shots_dir / f"label2_{_key(nm, str(accent))}.png"
+                lp = shots_dir / f"label2_{_key(nm, str(accent), str(extras.LABEL_STYLE))}.png"
                 extras.make_label(nm, lp, accent)
                 dur = min(LABEL_SEC - 1, length - 0.2)
                 add_overlay(lp, seg_start + t0 + 0.1, dur, "label", person=True)
@@ -856,7 +880,7 @@ def step_build(cfg, niche, project, log=print, stop_flag=lambda: False, progress
                         items.insert(0, ph)
                         has_photo = True
                         if cfg.get("show_labels", True) and length >= 1.8:
-                            lp = shots_dir / f"label2_{_key(spec['shown'], str(accent))}.png"
+                            lp = shots_dir / f"label2_{_key(spec['shown'], str(accent), str(extras.LABEL_STYLE))}.png"
                             extras.make_label(spec["shown"] + (" | " + spec["role"] if spec.get("role") else ""), lp, accent)
                             dur = min(LABEL_SEC - 1, length - 0.2)
                             add_overlay(lp, seg_start + t0 + 0.1, dur, "label", person=True)
@@ -871,7 +895,7 @@ def step_build(cfg, niche, project, log=print, stop_flag=lambda: False, progress
                                      "duration": 0, "person": True})
                 elif cfg.get("show_labels", True) and length >= 1.8:
                     # подпись с именем у фото человека — всегда, она важнее прочих надписей
-                    lp = shots_dir / f"label2_{_key(spec['shown'], str(accent))}.png"
+                    lp = shots_dir / f"label2_{_key(spec['shown'], str(accent), str(extras.LABEL_STYLE))}.png"
                     extras.make_label(spec["shown"] + (" | " + spec["role"] if spec.get("role") else ""), lp, accent)
                     dur = min(LABEL_SEC - 1, length - 0.2)
                     add_overlay(lp, seg_start + t0 + 0.1, dur, "label", person=True)
@@ -945,6 +969,7 @@ def step_build(cfg, niche, project, log=print, stop_flag=lambda: False, progress
                     "map_times": (it or {}).get("map_times"),
                     "focus": spec.get("focus") if (it and it["kind"] == "image" and n == 1) else None,
                     "src_url": (it or {}).get("url", ""),
+                    "credit": _credit_of(it),
                     "prolog": bool(b.get("prolog")),
                     "_qa": {"blk": b, "spec": spec, "a": t0 + edges[j], "b": t0 + edges[j + 1],
                             "url": (it or {}).get("url", "")},
@@ -1096,7 +1121,9 @@ def step_build(cfg, niche, project, log=print, stop_flag=lambda: False, progress
         for sh in shots:
             who = sh.get("who") or ""
             if not sh.get("person") or not who or str(sh.get("src", "")).find("person_") >= 0:
-                continue                                   # у карточки имя и так крупно написано
+                continue
+            if _look and sh.get("kind") == "image":
+                continue                                   # у ниши имя пишется рядом с фото, а не подписью снизу                                   # у карточки имя и так крупно написано
             a, b_ = sh["s"] / SR + 0.15, sh["e"] / SR - 0.15
             if b_ - a < 1.0:
                 continue
@@ -1112,7 +1139,7 @@ def step_build(cfg, niche, project, log=print, stop_flag=lambda: False, progress
             s_, e_ = a * render.FPS, b_ * render.FPS
             overlays[:] = [o for o in overlays if o["anim"] != "label" or o.get("person")
                            or o["start"] + o["frames"] < s_ - 12 or o["start"] > e_ + 12]
-            lp = shots_dir / f"label3_{_key(who, str(accent))}.png"
+            lp = shots_dir / f"label3_{_key(who, str(accent), str(extras.LABEL_STYLE))}.png"
             if not lp.exists():
                 extras.make_label(who, lp, accent)
             # на КАЖДОЕ появление фото — подпись полностью выезжает и держится, пока фото на экране
@@ -1155,7 +1182,7 @@ def step_build(cfg, niche, project, log=print, stop_flag=lambda: False, progress
                 if sh_ is None or sh_.get("person") or nm_.startswith(("map_", "radio_", "board_", "person_", "doc_")):
                     continue                              # на карте место и так подписано; на лицах — подпись человека
                 txt_ = pl["name"] + (" | " + pl["role"] if pl.get("role") else "")
-                lp_ = shots_dir / f"label2_{_key(txt_, str(accent))}.png"
+                lp_ = shots_dir / f"label2_{_key(txt_, str(accent), str(extras.LABEL_STYLE))}.png"
                 extras.make_label(txt_, lp_, accent)
                 if add_overlay(lp_, t_ + 0.2, LABEL_SEC - 1, "label"):
                     done_pl.add(pl["name"])
@@ -1231,6 +1258,29 @@ def step_build(cfg, niche, project, log=print, stop_flag=lambda: False, progress
                     group.append(sh)
         flush()
 
+    # ---------- 4в. свой вид кадров у ниши: стройка — карточки в студии, еда — снимки на размытом фоне ----------
+    if _look:
+        k_in, n_look = 0, 0
+        for sh in shots:
+            if sh.get("first_of_seg"):
+                k_in = 0
+            nm = Path(str(sh.get("src", ""))).name
+            ok = (sh["kind"] in ("image", "video") and sh.get("src") and not sh.get("role") and not sh.get("focus")
+                  and not nm.startswith(("person_", "doc_", "map_", "radio_", "board_", "info_", "look_"))
+                  and (sh["e"] - sh["s"]) / SR >= 1.3)
+            if ok:
+                if sh["kind"] == "image":
+                    sh["look"] = _look
+                    if sh.get("person") and sh.get("who"):
+                        sh["side"], sh["caption"] = True, sh["who"]      # фото слева, имя крупно справа
+                elif (k_in % 2 == 1) if _look == "studio" else (k_in % 3 == 2):
+                    sh["look"] = _look
+                if sh.get("look"):
+                    n_look += 1
+            k_in += 1
+        log(f"  Вид ниши «{_look}»: {n_look} из {len(shots)} кадров — карточками "
+            f"({'серебристая студия' if _look == 'studio' else 'снимок на размытом фоне'}).")
+
     shots = _fit_docs(shots)
     # карта и лист с печатью, разрезанные на несколько кадров, идут непрерывно (а не с начала в каждом куске)
     first_s = {}
@@ -1293,6 +1343,8 @@ def step_build(cfg, niche, project, log=print, stop_flag=lambda: False, progress
                     sh["trans"], sh["tail"] = ("whip", 10) if nxt.get("first_of_seg") else ("dipwhite", 8)
                 else:
                     sh["trans"], sh["tail"] = ("fadeblack", 9) if nxt.get("first_of_seg") else ("wipe", 8)
+            if nxt.get("look") and sh["trans"] not in ("whip", "fadeblack", "dipwhite"):
+                sh["tail"] = 0                            # карточка сама въезжает — без наплыва
             fr2 = min(sh["tail"], int(sh["frames"] * 0.4), int(nxt["frames"] * 0.4))
             sh["tail"] = fr2 if fr2 >= 3 else 0
             if nxt.get("stack") is not None and not nxt.get("stack_solo"):
@@ -1305,7 +1357,9 @@ def step_build(cfg, niche, project, log=print, stop_flag=lambda: False, progress
             sh["trans"] = ("hblur", "flash", "hblur", "fade")[i % 4]      # «смазанный» рывок и вспышка
     for i, sh in enumerate(shots):
         g = _grade(niche, sh["mood"], bool(cfg.get("old_look", True)))
-        if Path(str(sh.get("src") or "")).name.startswith(("map_", "radio_", "board_")):
+        if Path(str(sh.get("src") or "")).name.startswith("look_"):
+            g = "null"                                 # заставка главы ниши — свои цвета
+        elif Path(str(sh.get("src") or "")).name.startswith(("map_", "radio_", "board_")):
             g = LIGHT_LOOK                             # у карты, доски и переговоров свои цвета — только зерно
         if sh.get("darken"):
             g = (g + "," if g != "null" else "") + DARKEN
@@ -1314,6 +1368,8 @@ def step_build(cfg, niche, project, log=print, stop_flag=lambda: False, progress
                                                           sh["grade"], str(sh.get("zoom_in")), str(sh.get("offset_n", 0)),
                                                           str(sh.get("stack")), str(sh.get("stack_solo")),
                                                           str(sh.get("focus_boxes") or ""),
+                                                          str(sh.get("look") or ""), str(sh.get("side") or ""),
+                                                          str(sh.get("caption") or ""), str(sh.get("credit") or "") if sh.get("look") else "",
                                                           *([f"cs{sh['clip_start']}"] if sh.get("clip_start") else []),
                                                           "v4") + ".mp4"))   # готовые кадры прошлых сборок подхватываются
 
@@ -1344,7 +1400,7 @@ def step_build(cfg, niche, project, log=print, stop_flag=lambda: False, progress
     except Exception as e:
         log(f"  Музыка по главам не получилась ({e}) — один трек.")
         music, mdesc = _pick_music(niche), ""
-    log(f"Свожу звук{' с музыкой: ' + (mdesc or music.name) if music else ' (музыки нет: положите mp3 в папку music)'}...")
+    log(f"Свожу звук{' с музыкой: ' + (mdesc or music.name) if music else (f' (музыки нет: положите треки в папку music/{niche.get("id")})' if niche.get("id") in ("bau", "food") else ' (музыки нет: положите mp3 в папку music)')}...")
     final = project / f"{_slug(script.get('title', 'video'))}.mp4"
     sfx = _sfx_events(shots)
     if sfx:

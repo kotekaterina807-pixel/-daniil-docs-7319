@@ -338,6 +338,9 @@ def render_shots(shots, workers, log=print, on_progress=lambda d, t: None):
                 render_title(s["src"], s["title_png"], n, tmp)
             elif s["kind"] == "card":
                 render_card(s["src"], n, tmp)
+            elif s.get("look") and s["kind"] in ("image", "video") and s["src"]:
+                from . import looks
+                looks.render_look_shot(s, n, tmp, Path(s["out"]).parent / "_look")
             elif s["kind"] == "video":
                 render_video_shot(s["src"], n, tmp, s["grade"], s.get("label"), s.get("clip_dur", 0),
                                  s.get("offset_n", 0), s.get("speed", 1.0), s.get("clip_start"))

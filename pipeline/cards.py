@@ -50,6 +50,9 @@ def _ease(x):
 
 def _bg(theme, seed=""):
     th = THEMES.get(theme) or THEMES["dark"]
+    if theme == "light":                                  # стройка: та же серебристая студия, что под карточками кадров
+        from .looks import studio_bg
+        return studio_bg().copy()
     img = Image.new("RGB", (W, H), th["bg2"])
     glow = Image.new("L", (W, H), 0)
     gd = ImageDraw.Draw(glow)

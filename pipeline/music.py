@@ -38,7 +38,8 @@ FOLDER = {"спокойная": "calm", "calm": "calm", "загадочная": 
 def tracks(niche_id=""):
     """Треки из папки music (или music/<ниша>), включая подпапки настроений:
     music/пролог, music/загадочная, music/тревожная, music/спокойная, music/эпичная."""
-    for d in (MUSIC_DIR / niche_id, MUSIC_DIR) if niche_id else (MUSIC_DIR,):
+    own_only = niche_id in ("bau", "food")              # у стройки и еды своя музыка: мрачные треки тайн им не подходят
+    for d in ((MUSIC_DIR / niche_id,) if own_only else (MUSIC_DIR / niche_id, MUSIC_DIR)) if niche_id else (MUSIC_DIR,):
         if d.exists():
             files = sorted(p for p in d.iterdir() if p.suffix.lower() in EXT)
             for sub in sorted(x for x in d.iterdir() if x.is_dir() and x.name.lower() in FOLDER):

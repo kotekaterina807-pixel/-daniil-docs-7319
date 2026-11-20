@@ -211,7 +211,13 @@ def _soft_shadow(img, radius=10, alpha=150):
     return Image.alpha_composite(shadow, img)
 
 
+LABEL_STYLE = None             # у ниши свой вид подписей (стройка — «studio», еда — «food»); None — прежний
+
+
 def make_label(text, out_path, accent=(200, 30, 30)):
+    if LABEL_STYLE:
+        from . import looks
+        return looks.make_label(LABEL_STYLE, text, out_path, accent)
     """Подпись внизу слева: тонкий шрифт, тонкая акцентная линия, мягкая тень. Прозрачный PNG 1920x1080.
     text: «Главное | пояснение» (пояснение необязательно)."""
     W, H = 1920, 1080
