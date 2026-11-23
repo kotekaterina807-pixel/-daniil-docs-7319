@@ -489,7 +489,19 @@ class VisualFinder:
         yrs = getattr(self, "era_years", None)
         if not yrs:
             return []
-        return self._ia_video(query, limit, yrs)
+        out = list(self._ia_video(query, limit, yrs))
+        if len(out) < 2:                          # точный запрос не нашёл — короче (2 главных слова), потом общие
+            words = [w for w in re.findall(r"[a-zA-Z]{4,}", query or "")
+                     if w.lower() not in STOP and not MODERN.search(w)][:2]
+            more = [" ".join(words)] if words else []
+            more += list((self.niche or {}).get("newsreel_generic") or []) if isinstance(self.niche, dict) else []
+            for q in more:
+                for c in self._ia_video(q, limit, yrs):
+                    if c["url"] not in {x["url"] for x in out} and c["url"] not in self.used:
+                        out.append(c)
+                if len(out) >= 2:
+                    break
+        return out
 
     def _ia_video(self, query, limit=4, years=None):
         if self._down.get("ia"):

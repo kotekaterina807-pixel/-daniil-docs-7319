@@ -566,10 +566,12 @@ def step_build(cfg, niche, project, log=print, stop_flag=lambda: False, progress
     _yrs = [int(y) for y in re.findall(r"\b(1[89]\d\d)\b", (script.get("era") or "") + " " + (script.get("title") or ""))]
     if _yrs:                                         # годы темы: хроника ищется среди фильмов этих лет (±20)
         finder.era_years = (min(_yrs) - 15, max(_yrs) + 20)
+        if max(_yrs) <= 1965:                        # кино до 1895 почти нет: для старых тем берём хронику до 1950-х
+            finder.era_years = (min(_yrs) - 15, min(1975, max(max(_yrs) + 20, 1955)))
     nr_share, nr_acc = float(cfg.get("newsreel_share", 0) or 0), [0.0]
     if nr_share and _yrs:
-        log(f"  Старая хроника: каждая {round(1 / nr_share)}-я видео-строка — сначала киносъёмка "
-            f"{finder.era_years[0]}–{finder.era_years[1]} гг. (Internet Archive), нет подходящей — обычное видео.")
+        log(f"  Старая хроника: {round(nr_share * 100)}% видео-строк — сначала киносъёмка "
+            f"{finder.era_years[0]}–{finder.era_years[1]} гг. (Internet Archive), современное видео — только если старой нет.")
     fixes_path = project / "правки.json"                 # правки после просмотра: какие кадры убрать
     fixes = _load_json(fixes_path, {})
     if fixes.get("archive"):
