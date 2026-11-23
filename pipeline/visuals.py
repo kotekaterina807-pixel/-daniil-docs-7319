@@ -73,6 +73,12 @@ ARCHIVE_BLOCK = re.compile(
     re.I)
 
 
+# Кадры, которые YouTube может ограничить или которые не по теме: дети и младенцы, беременность, роды, медицина,
+# обнажённое тело. В ролики этих каналов не попадают, даже если подошли по запросу.
+SENSITIVE = re.compile(r"\b(baby|babies|newborn|infant|toddler|pregnan\w*|maternity|childbirth|birth|womb|fetus|"
+                       r"embryo|belly|bump|nude|naked|nudity|erotic|sexy|lingerie|bikini|breast\w*|surgery|surgeon|"
+                       r"syringe|injection|gore|corpse|autopsy)\b", re.I)
+
 STOP = {"the", "and", "with", "from", "into", "over", "under", "near", "for", "old", "a", "an", "of", "in", "on", "at"}
 
 
@@ -947,6 +953,8 @@ class VisualFinder:
         for src in order:
             for q in queries:
                 for c in src(q):
+                    if SENSITIVE.search(" ".join(str(c.get(k, "")) for k in ("title", "tags", "url", "page"))):
+                        continue
                     st = self.__dict__.setdefault("src_stats", {})
                     k = getattr(src, "__name__", "?")
                     st[k] = st.get(k, 0) + 1

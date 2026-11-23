@@ -1026,6 +1026,29 @@ def step_build(cfg, niche, project, log=print, stop_flag=lambda: False, progress
     for a_, b_ in zip(shots, shots[1:]):
         a_["e"] = b_["s"]
     shots = [sh for sh in shots if sh["e"] > sh["s"]]
+    # инфо-карточка висит не дольше ~4,5 с (в хуке 3,6 с): дальше на экране видео, а не неподвижная плашка
+    cap_card, cut_n, shots2 = float(cfg.get("info_max_sec", 4.5)), 0, []
+    for idx, sh in enumerate(shots):
+        shots2.append(sh)
+        nm_ = Path(str(sh.get("src", ""))).name
+        cap_ = min(cap_card, 3.6) if sh.get("prolog") else cap_card
+        if not nm_.startswith("info_") or (sh["e"] - sh["s"]) / SR <= cap_ + 1.2:
+            continue
+        donor = next((x for x in shots[idx + 1:idx + 4] + shots[max(0, idx - 3):idx][::-1]
+                      if _plain(x) and x.get("kind") == "video" and x.get("src")), None)
+        if not donor:
+            continue
+        mid = sh["s"] + int(cap_ * SR)
+        tail = {k: donor[k] for k in ("kind", "src", "clip_dur", "speed", "mood") if k in donor}
+        tail.update({"offset_n": int(donor.get("offset_n", 0)) + 2, "s": mid, "e": sh["e"], "first_of_seg": False,
+                     "zoom_in": not sh.get("zoom_in", True), "person": False, "prolog": sh.get("prolog", False),
+                     "src_url": donor.get("src_url", "")})
+        sh["e"] = mid
+        shots2.append(tail)
+        cut_n += 1
+    shots = shots2
+    if cut_n:
+        log(f"  Длинных инфо-карточек сокращено до {cap_card:.1f} с: {cut_n} (дальше на экране видео).")
     reused = sum(1 for v in use_count.values() if v > 1)
     log(f"  Кадров в монтаже: {len(shots)} (в среднем {total_sec / max(1, len(shots)):.1f} с), "
         f"повторно использовано роликов: {reused}.")
