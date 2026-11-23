@@ -79,7 +79,8 @@
     "photo_cap": 0.4,
     "music_volume": 0.12,
     "label_min_gap_sec": 45,
-    "edit_style": "mysteries"
+    "edit_style": "mysteries",
+    "newsreel_share": 0.3
   },
   "preflight": {
     "min_minutes": 25,

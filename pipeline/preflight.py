@@ -40,7 +40,7 @@ def check(text, wpm=None, photo_cap=0.40, min_minutes=None, min_queries=100):
     share = photos / max(1, shots + len(kinds["человек"]))
     minutes = words / wpm
     out = [f"Предпроверка сценария: {words} слов (≈{minutes:.1f} мин), глав {chapters}, строк кадров {shots}, "
-           f"фото-строк {photos} ({share * 100:.0f}%), инфо-карточек {len(kinds['карточка'])}."]
+           f"фото-строк {photos} ({share * 100:.0f}%), хроники {len(kinds['хроника'])}, инфо-карточек {len(kinds['карточка'])}."]
     warn = []
     lo = min_minutes or MIN_MINUTES                       # у каждой ниши своя длина (тайны 25–30, стройка/еда 12–15)
     hi = GOOD_MINUTES if lo == MIN_MINUTES else lo + 4

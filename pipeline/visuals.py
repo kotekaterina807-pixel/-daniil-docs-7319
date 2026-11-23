@@ -439,7 +439,14 @@ class VisualFinder:
             return []                    # неудачный поиск не запоминаем — повторится, когда связь вернётся
 
     # ---------- Openverse (CC0 и общественное достояние; без ключа) ----------
-    def _ia_video(self, query, limit=4):
+    def _ia_newsreel(self, query, limit=4):
+        """Старая киносъёмка той эпохи: тот же поиск Internet Archive, но только фильмы годов темы (±20 лет)."""
+        yrs = getattr(self, "era_years", None)
+        if not yrs:
+            return []
+        return self._ia_video(query, limit, yrs)
+
+    def _ia_video(self, query, limit=4, years=None):
         if self._down.get("ia"):
             return []
 
@@ -457,6 +464,8 @@ class VisualFinder:
             try:
                 q = (f"({query}) AND mediatype:(movies) AND "
                      f"(licenseurl:*publicdomain* OR licenseurl:*zero* OR rights:\"public domain\")")
+                if years:
+                    q += f" AND year:[{years[0]} TO {years[1]}]"
                 r = self._get("https://archive.org/advancedsearch.php",
                               {"q": q, "fl[]": ["identifier", "title", "licenseurl"], "rows": 12,
                                "sort[]": "downloads desc", "output": "json"})
@@ -492,7 +501,7 @@ class VisualFinder:
             except Exception as e:
                 self.log(f"  Internet Archive: {e}")
             return out
-        return self._cached(("ia", query), fetch)
+        return self._cached(("ia", query, tuple(years or ())), fetch)
 
     # ---------- фото людей: дополнительные источники ----------
     def _person_categories(self, name, limit=24):
@@ -930,7 +939,7 @@ class VisualFinder:
                      self._stock, self._pixabay_photos]
         elif visual == "newsreel":
             # [хроника] — подлинная киносъёмка той эпохи (Internet Archive, общественное достояние), потом сток
-            order = [self._ia_video, self._stock, self._wikimedia]
+            order = [self._ia_newsreel, self._ia_video, self._stock, self._wikimedia]
         elif visual == "photo":
             order = [self._web_images, self._wikimedia, self._pixabay_photos, self._stock]
         else:

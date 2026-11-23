@@ -563,6 +563,13 @@ def step_build(cfg, niche, project, log=print, stop_flag=lambda: False, progress
     vis_cache_path = project / "visuals.json"
     vis_cache = _load_json(vis_cache_path, {})
     finder = VisualFinder(cfg, niche, media_dir, log)
+    _yrs = [int(y) for y in re.findall(r"\b(1[89]\d\d)\b", (script.get("era") or "") + " " + (script.get("title") or ""))]
+    if _yrs:                                         # годы темы: хроника ищется среди фильмов этих лет (±20)
+        finder.era_years = (min(_yrs) - 15, max(_yrs) + 20)
+    nr_share, nr_acc = float(cfg.get("newsreel_share", 0) or 0), [0.0]
+    if nr_share and _yrs:
+        log(f"  Старая хроника: каждая {round(1 / nr_share)}-я видео-строка — сначала киносъёмка "
+            f"{finder.era_years[0]}–{finder.era_years[1]} гг. (Internet Archive), нет подходящей — обычное видео.")
     fixes_path = project / "правки.json"                 # правки после просмотра: какие кадры убрать
     fixes = _load_json(fixes_path, {})
     if fixes.get("archive"):
@@ -638,6 +645,11 @@ def step_build(cfg, niche, project, log=print, stop_flag=lambda: False, progress
             texts.append(txt)
         b["specs"] = []
         for i, ((vis, query), (t0, t1), txt) in enumerate(zip(specs, ranges, texts)):
+            if vis == "stock" and nr_share > 0 and getattr(finder, "era_years", None):
+                nr_acc[0] += nr_share                  # часть видео-строк — сначала старая киносъёмка той эпохи
+                if nr_acc[0] >= 1.0:
+                    nr_acc[0] -= 1.0
+                    vis = "newsreel"
             length = max(0.1, t1 - t0)
             n = max(1, round(length / shot_sec), math.ceil(length / max_shot - 1e-6))
             n = min(n, max(1, int(length / min_shot)))
