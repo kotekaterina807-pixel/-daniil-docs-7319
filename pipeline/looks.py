@@ -164,7 +164,8 @@ def _pill(d, x, y, text, bg, fg, size=36, left=False):
 
 def _kb_card(src, n, cw, ch, zoom_in=True, amp=0.06):
     """Фото внутри карточки: медленный наезд/отъезд с субпиксельной точностью. Кадры размера карточки."""
-    im = Image.open(src).convert("RGB")
+    from .render import open_photo
+    im = open_photo(src)
     bw, bh = round(cw * (1 + amp)), round(ch * (1 + amp))
     sc = max(bw / im.width, bh / im.height)
     im = im.resize((max(bw, round(im.width * sc)), max(bh, round(im.height * sc))), Image.LANCZOS)

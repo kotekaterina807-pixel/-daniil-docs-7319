@@ -261,6 +261,20 @@ def make_hook_png(text, out_path, accent=(200, 30, 30)):
     img.save(out_path)
 
 
+def make_bar_png(out_path, top=True, h=138):
+    """Чёрная кино-полоса (кадр 2.39:1) с мягким краем. Прозрачный PNG 1920x1080."""
+    W, H = 1920, 1080
+    img = Image.new("RGBA", (W, H), (0, 0, 0, 0))
+    d = ImageDraw.Draw(img)
+    y0, y1 = (0, h) if top else (H - h, H)
+    d.rectangle([0, y0, W, y1], fill=(0, 0, 0, 255))
+    for i in range(6):
+        a = int(255 * (1 - (i + 1) / 7))
+        yy = y1 + i if top else y0 - 1 - i
+        d.line([(0, yy), (W, yy)], fill=(0, 0, 0, a))
+    img.save(out_path)
+
+
 LABEL_STYLE = None             # у ниши свой вид подписей (стройка — «studio», еда — «food»); None — прежний
 
 
@@ -280,6 +294,17 @@ def make_label(text, out_path, accent=(200, 30, 30)):
     x0, bottom = 120, H - 140
     block_h = 72 + (46 if sub else 0)
     top = bottom - block_h
+    # тёмная подложка: белый текст читается и на светлом фото (белые поля, снег, небо)
+    tw = max(d.textlength(main, font=f_main), (_tracked_width(d, sub.upper(), f_sub, 3) if sub else 0))
+    plate = Image.new("RGBA", (W, H), (0, 0, 0, 0))
+    pd = ImageDraw.Draw(plate)
+    px0, px1 = x0 - 60, x0 + tw + 70
+    for i in range(0, 40):                                # к правому краю подложка растворяется
+        xa = px1 + i * 4
+        pd.rectangle([xa, top - 22, xa + 4, bottom + 18], fill=(0, 0, 0, int(165 * (1 - i / 40))))
+    pd.rectangle([px0, top - 22, px1, bottom + 18], fill=(0, 0, 0, 165))
+    img = Image.alpha_composite(img, plate.filter(ImageFilter.GaussianBlur(10)))
+    d = ImageDraw.Draw(img)
     d.rectangle([x0 - 26, top + 8, x0 - 23, bottom - 4], fill=tuple(accent) + (255,))
     d.text((x0, top), main, font=f_main, fill=(250, 250, 250, 255))
     if sub:

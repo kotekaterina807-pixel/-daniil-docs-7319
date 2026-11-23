@@ -763,8 +763,17 @@ def step_build(cfg, niche, project, log=print, stop_flag=lambda: False, progress
                 hp = shots_dir / f"hookq_{_key(hook_state['title_q'], str(accent), str(extras.LABEL_STYLE))}.png"
                 extras.make_hook_png(hook_state["title_q"], hp, accent)
                 add_overlay(hp, at + 0.3, 3.8, "title")
+                hook_state["at"] = at + 0.3
                 log(f"  Хук: вопрос из названия на экране на {at:.0f}-й секунде.")
             hook_state["done"] = True
+        if b["type"] == "curtain" and not _look and cfg.get("hook_bars", True):
+            # хук как в кино: сверху и снизу чёрные полосы (2.39:1), с главы 1 — снова полный кадр
+            for nm_, top_ in (("top", True), ("bot", False)):
+                bp = shots_dir / f"hookbar_{nm_}.png"
+                if not bp.exists():
+                    extras.make_bar_png(bp, top_)
+                overlays.insert(0, {"png": str(bp), "start": 0, "frames": int(round((b["start"] / SR + 0.5) * render.FPS)),
+                                    "anim": "bar_" + nm_, "person": False})
         if b["type"] == "curtain":                    # занавес после пролога: затемнение
             shots.append({"kind": "black", "src": "", "s": b["start"], "e": b["end"], "mood": "normal",
                           "role": "curtain"})
@@ -827,7 +836,7 @@ def step_build(cfg, niche, project, log=print, stop_flag=lambda: False, progress
                     hp = shots_dir / f"hookq_{_key(show, str(accent), str(extras.LABEL_STYLE))}.png"
                     extras.make_hook_png(show, hp, accent)
                     add_overlay(hp, at + 0.2, 3.8, "title")
-                    hook_state["done"] = True
+                    hook_state["done"], hook_state["at"] = True, at + 0.2
                     log(f"  Хук: вопрос ролика на экране на {at:.0f}-й секунде.")
         first_in_seg = True
         # строки без кадров не показывают чужие ролики повторно: их время забирает соседняя строка
@@ -1152,6 +1161,9 @@ def step_build(cfg, niche, project, log=print, stop_flag=lambda: False, progress
             a, b_ = sh["s"] / SR + 0.15, sh["e"] / SR - 0.15
             if b_ - a < 1.0:
                 continue
+            # подпись держится столько, сколько нужно, чтобы спокойно прочитать (а не только пока фото на экране)
+            read_ = min(8.0, max(4.5, 2.2 + 0.32 * len(who.replace("|", " ").split())))
+            b_ = max(b_, a + read_)
             prev = next((o for o in reversed(overlays) if o.get("person") == who), None)
             if prev and abs(prev["start"] + prev["frames"] - a * render.FPS) < 0.5 * render.FPS:
                 prev["frames"] = max(1, int(round(b_ * render.FPS)) - prev["start"])   # тот же человек дальше — подпись не мигает
@@ -1428,6 +1440,11 @@ def step_build(cfg, niche, project, log=print, stop_flag=lambda: False, progress
     log(f"Свожу звук{' с музыкой: ' + (mdesc or music.name) if music else (f' (музыки нет: положите треки в папку music/{niche.get("id")})' if niche.get("id") in ("bau", "food") else ' (музыки нет: положите mp3 в папку music)')}...")
     final = project / f"{_slug(script.get('title', 'video'))}.mp4"
     sfx = _sfx_events(shots)
+    if hook_state.get("at"):                          # вопрос ролика на экране — мягкий низкий удар, без резкости
+        hf = _sfx_file("hit")
+        if hf:
+            sfx.append({"file": str(hf), "at": max(0.0, hook_state["at"] - 0.05), "dur": 2.0, "vol": 0.05,
+                        "fade_in": 0.06, "fade": 0.8})
     if sfx:
         log(f"  Звуки: {len(sfx)} (мягкие переходы к главам и абзацам, тихая машинка на листах, перо на карте).")
     render.final_mix(video_only, narration, music, final, total_sec, float(cfg.get("music_volume", 0.12)), sfx=sfx)

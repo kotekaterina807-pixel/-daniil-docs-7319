@@ -66,10 +66,49 @@ def _cover(im, w, h):
     return im.crop((left, top, left + w, top + h))
 
 
+def trim_border(im):
+    """Срезает белые (и чёрные) поля по краям старых фото и сканов: рамку паспарту, поля страницы.
+    Не больше 25% с каждой стороны; рисунок внутри не трогает."""
+    try:
+        g = np.asarray(im.convert("L").resize((max(8, im.width // 4), max(8, im.height // 4))), dtype=np.float32)
+    except Exception:
+        return im
+    h, w = g.shape
+
+    def flat(line):
+        m, sd = float(line.mean()), float(line.std())
+        return (m > 222 and sd < 16) or (m < 22 and sd < 10)
+
+    t = 0
+    while t < h * 0.25 and flat(g[t]):
+        t += 1
+    b = h
+    while b > h * 0.75 and flat(g[b - 1]):
+        b -= 1
+    l = 0
+    while l < w * 0.25 and flat(g[t:b, l]):
+        l += 1
+    r = w
+    while r > w * 0.75 and flat(g[t:b, r - 1]):
+        r -= 1
+    if t == 0 and l == 0 and b == h and r == w:
+        return im
+    m = 2                                                # ещё чуть-чуть внутрь — без светлой каймы
+    box = (min(im.width - 2, (l + (m if l else 0)) * 4), min(im.height - 2, (t + (m if t else 0)) * 4),
+           max(2, (r - (m if r < w else 0)) * 4), max(2, (b - (m if b < h else 0)) * 4))
+    if box[2] - box[0] < im.width * 0.4 or box[3] - box[1] < im.height * 0.4:
+        return im
+    return im.crop(box)
+
+
+def open_photo(path):
+    return trim_border(Image.open(path).convert("RGB"))
+
+
 def prepare_base(path, blur_dark=False):
     """Кадр с запасом под зум. Вертикальные фото — целиком по центру на размытом фоне."""
     bw, bh = round(W * (1 + ZOOM)) + 2, round(H * (1 + ZOOM)) + 2
-    im = Image.open(path).convert("RGB")
+    im = open_photo(path)
     if im.width / im.height >= 1.5:
         base = _cover(im, bw, bh)
     else:
@@ -177,7 +216,7 @@ def _print_card(src, seed, max_w=1180, max_h=760):
     """Фото как старый отпечаток: белая рамка, лёгкий наклон, мягкая тень. RGBA и угол."""
     import random
     rnd = random.Random(str(seed))
-    im = Image.open(src).convert("RGB")
+    im = open_photo(src)
     sc = min(max_w / im.width, max_h / im.height)
     im = im.resize((max(2, round(im.width * sc)), max(2, round(im.height * sc))), Image.LANCZOS)
     im = _old_print(im)
@@ -199,7 +238,7 @@ def _print_card(src, seed, max_w=1180, max_h=760):
 
 
 def _stack_background(first_src):
-    bg = _cover(Image.open(first_src).convert("RGB"), W, H).filter(ImageFilter.GaussianBlur(30))
+    bg = _cover(open_photo(first_src), W, H).filter(ImageFilter.GaussianBlur(30))
     return ImageEnhance.Brightness(bg).enhance(0.38).convert("RGBA")
 
 
@@ -576,10 +615,14 @@ class _Overlay:
         """(прозрачность 0..1, сдвиг x, сдвиг y) для кадра i от начала надписи."""
         sc = FPS / 30.0                                   # тайминги анимаций заданы для 30 кадров/с
         i, n = i / sc, self.frames / sc
-        if self.anim == "label":                          # выезд слева за 90 кадров, мягкое затухание
-            p = min(1.0, i / 90.0)
+        if self.anim in ("bar_top", "bar_bot"):          # кино-полосы в хуке: въезжают и уезжают
+            p = min(1.0, i / 24.0, max(0.0, (n - i) / 24.0))
             ease = 1 - (1 - p) ** 3
-            k = min(1.0, i / 45.0)
+            return 1.0, 0.0, (-1 if self.anim == "bar_top" else 1) * 170.0 * (1 - ease)
+        if self.anim == "label":                          # выезд слева за ~1,3 с, мягкое затухание
+            p = min(1.0, i / 40.0)
+            ease = 1 - (1 - p) ** 3
+            k = min(1.0, i / 20.0)
             k = k * k * (3 - 2 * k)
             out = n - i
             if out < 24:
