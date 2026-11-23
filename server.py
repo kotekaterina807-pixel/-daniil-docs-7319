@@ -386,7 +386,7 @@ def make_shortcut(quiet=False):
 
 
 # ---------------- HTTP ----------------
-PUBLIC_KEYS = ["auto_update", "remote_jobs", "pixabay_key", "pexels_key", "proxy_url", "lumean_key",
+PUBLIC_KEYS = ["auto_update", "remote_jobs", "pixabay_key", "youtube_api_key", "pexels_key", "proxy_url", "lumean_key",
                "tts_provider", "edge_voice", "elevenlabs_key", "elevenlabs_voice_id", "claude_check_model",
                "music_volume", "shot_seconds", "show_labels", "theme", "sound_done", "open_folder_after",
                "default_niche", "update_repo", "language", "visual_check", "eleven_speed", "eleven_stability", "eleven_style",
@@ -733,7 +733,7 @@ class Handler(BaseHTTPRequestHandler):
         if p == "/api/open_url":
             url = str(data.get("url") or "")
             if not url.startswith(("https://elevenlabs.io/", "https://lumean.app/", "https://t.me/BotFather",
-                                   "https://github.com/", "https://pixabay.com/", "https://www.pexels.com/")):
+                                   "https://github.com/", "https://pixabay.com/", "https://console.cloud.google.com/", "https://www.pexels.com/")):
                 return self._send(400, {"error": "Этот адрес открыть нельзя"})
             import webbrowser
             webbrowser.open(url)
@@ -1002,6 +1002,14 @@ def _remote_loop():
                     text = remote.take(cfg, name, sha)
                     if name.lower().endswith(".json"):            # правка готового видео
                         cmd = json.loads(text)
+                        if cmd.get("outliers"):              # поиск выстреливших роликов — без сборки видео
+                            try:
+                                from pipeline import outliers
+                                rows, folder = outliers.run(cfg, cmd, JOB.add_log)
+                                remote.status(cfg, name, f"готово: {len(rows)} роликов, {folder}")
+                            except Exception as e:
+                                remote.status(cfg, name, f"ошибка: {e}")
+                            continue
                         d = _find_project(cmd.get("project", ""))
                         if not d:
                             remote.status(cfg, name, f"ошибка: проект «{cmd.get('project')}» не найден")

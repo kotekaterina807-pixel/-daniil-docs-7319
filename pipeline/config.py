@@ -3,7 +3,7 @@ import json
 import os
 from pathlib import Path
 
-VERSION = "17.7 (23.11.2026)"
+VERSION = "17.8 (23.11.2026)"
 CONFIG_REV = 10      # при смене — обновляются настройки монтажа у уже сохранённых конфигов
 ROOT = Path(__file__).resolve().parent.parent
 CONFIG_PATH = ROOT / "config.json"
@@ -15,6 +15,7 @@ OUTPUT_DIR = ROOT / "output"
 DEFAULTS = {
     "pexels_key": "",
     "pixabay_key": "",
+    "youtube_api_key": "",             # YouTube Data API v3: поиск выстреливших роликов у молодых каналов
     "tts_provider": "lumean",          # lumean — голоса ElevenLabs через Lumean; elevenlabs — напрямую
     "elevenlabs_key": "",
     "elevenlabs_voice_id": "",
