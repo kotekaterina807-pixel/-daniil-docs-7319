@@ -16,3 +16,4 @@ __pycache__/
 sfx/*
 !sfx/README.txt
 routes.json
+data/

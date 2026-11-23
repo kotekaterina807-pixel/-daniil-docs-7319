@@ -239,6 +239,44 @@ def check(cfg, project, entries, finder, topic, log, progress=None, taken=None, 
             bad = [n for n in bad if n not in fixed]
             for k, v in (rep2.get("prompts") or {}).items():
                 prompts.setdefault(int(k), v)
+    archived = 0
+    if _round == 1:
+        # забракованные сток-кадры запоминаем для ниши: в следующих роликах их уже не предложат
+        try:
+            from .visuals import add_banned
+            add_banned(getattr(finder, "niche", None),
+                       {(by_no[no]["shot"].get("_qa") or {}).get("url") for no, v in verdicts.items() if v != "ok"})
+        except Exception:
+            pass
+    if _round == 1 and bad:
+        # замены нет — ставим подлинное фото темы (#! АРХИВ), которое ещё не было в ролике: оно точно из той
+        # эпохи и про ту историю. Подбираем по словам, которые звучат в этот момент.
+        import re as _re
+        pool = [c for c in getattr(finder, "topic_items", None) or []
+                if c.get("kind") == "image" and c.get("url") not in taken and c.get("url") not in finder.used]
+
+        def _w(t):
+            return {w for w in _re.findall(r"\w{4,}", str(t or "").lower())}
+        for no in list(bad):
+            if not pool:
+                break
+            e = by_no[no]
+            if e["shot"].get("person"):
+                continue
+            said = _w(e.get("said"))
+            pool.sort(key=lambda c: -len(said & _w(" ".join(str(c.get(k, "")) for k in ("title", "tags", "page")))))
+            c = pool.pop(0)
+            path = finder._download(c)
+            if not path:
+                continue
+            finder.used.add(c["url"])
+            e["shot"].update({"kind": "image", "src": str(path), "clip_dur": 0, "offset_n": 0, "speed": 1.0,
+                              "person": False})
+            bad.remove(no)
+            archived += 1
+        if archived:
+            log(f"  Вместо забракованных кадров поставлены подлинные фото темы: {archived}.")
+            replaced += archived
     drawn = 0
     if draw_on and bad and _round == 1:                               # нет подходящего кадра — рисуем ровно про эти слова
         from concurrent.futures import ThreadPoolExecutor as _TP

@@ -79,7 +79,45 @@ SENSITIVE = re.compile(r"\b(baby|babies|newborn|infant|toddler|pregnan\w*|matern
                        r"embryo|belly|bump|nude|naked|nudity|erotic|sexy|lingerie|bikini|breast\w*|surgery|surgeon|"
                        r"syringe|injection|gore|corpse|autopsy)\b", re.I)
 
+# Признаки современной съёмки. Если история до 1965 года, такие видео не берём: дрон над дорогой,
+# машины, город, телефоны выдают «сегодня» и ломают эпоху (на Фосетте 2/3 кадров браковались так).
+MODERN = re.compile(r"\b(drone|aerial|uav|fpv|highway|motorway|freeway|traffic|road|street|car|cars|truck|bus|"
+                    r"city|cityscape|skyline|skyscraper|downtown|urban|smartphone|phone|iphone|laptop|computer|"
+                    r"screen|tablet|selfie|neon|led|tourist|tourists|hiker|hikers|backpack\w*|tent|kayak|"
+                    r"jet|airplane|plane|helicopter|train|wind\s*turbine|solar|asphalt|parking|office|"
+                    r"business\w*|businessman|4k|hd|modern|futuristic|vlog|youtuber|camera|gopro|timelapse|"
+                    r"hyperlapse|sunglasses|jeans|sneakers|headphones|plastic)\b", re.I)
+
 STOP = {"the", "and", "with", "from", "into", "over", "under", "near", "for", "old", "a", "an", "of", "in", "on", "at"}
+
+
+BAN_DIR = Path(__file__).resolve().parent.parent / "data"
+
+
+def _ban_file(niche):
+    n = niche.get("id") if isinstance(niche, dict) else niche
+    return BAN_DIR / f"ban_{re.sub(r'[^a-z0-9_-]', '', str(n or 'default').lower()) or 'default'}.json"
+
+
+def load_banned(niche):
+    """Кадры, которые Claude забраковал в прошлых роликах этой ниши (сток и хроника). Повторно не предлагаются."""
+    try:
+        return set(json.loads(_ban_file(niche).read_text(encoding="utf-8")))
+    except Exception:
+        return set()
+
+
+def add_banned(niche, urls):
+    urls = {u for u in urls if u and str(u).startswith("http") and "wikimedia.org" not in str(u)}
+    if not urls:
+        return 0
+    try:
+        BAN_DIR.mkdir(exist_ok=True)
+        cur = load_banned(niche) | urls
+        _ban_file(niche).write_text(json.dumps(sorted(cur), ensure_ascii=False, indent=0), encoding="utf-8")
+    except Exception:
+        return 0
+    return len(urls)
 
 
 def _words(text):
@@ -99,6 +137,7 @@ class VisualFinder:
         self.media_dir.mkdir(parents=True, exist_ok=True)
         self.log = log
         self.used = set()
+        self.banned = load_banned(niche)
         self.credits = []
         self._cache = {}
         self._warned_pexels = False
@@ -953,8 +992,16 @@ class VisualFinder:
         for src in order:
             for q in queries:
                 for c in src(q):
-                    if SENSITIVE.search(" ".join(str(c.get(k, "")) for k in ("title", "tags", "url", "page"))):
+                    _meta = " ".join(str(c.get(k, "")) for k in ("title", "tags", "url", "page"))
+                    if SENSITIVE.search(_meta):
                         continue
+                    _yr = getattr(self, "era_years", None)
+                    if _yr and _yr[1] < 1985 and src in (self._stock, self._pixabay_photos) \
+                            and MODERN.search(_meta):
+                        continue                      # старая эпоха — современные сток-кадры не берём
+                    if c.get("url") in self.banned:
+                        continue                      # забракован в прошлых роликах этой ниши
+
                     st = self.__dict__.setdefault("src_stats", {})
                     k = getattr(src, "__name__", "?")
                     st[k] = st.get(k, 0) + 1
