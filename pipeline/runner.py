@@ -19,7 +19,7 @@ DOC_HOLD = 3.0       # лист после последнего напечата
 DOC_PAUSE = 2.6      # лист в конце главы: тишина, чтобы зритель дочитал до названия следующей главы
 CARD_SEC = 1.8       # название главы поверх видео
 TITLE_SEC = 4.0      # заставка с названием в начале
-CURTAIN_SEC = 2.2    # «занавес» после пролога: затемнение и удар, потом глава 1
+CURTAIN_SEC = 1.2    # «занавес» после пролога: короткое затемнение и удар — без долгой тишины после хука
 PROLOG_SHOT = 1.6    # в прологе кадры короче — современный быстрый монтаж
 LABEL_SEC = 5.0      # сколько держится всплывающая подпись
 
@@ -644,7 +644,7 @@ def step_build(cfg, niche, project, log=print, stop_flag=lambda: False, progress
             if cfg.get("visual_check") == "claude_code":
                 n = 3 if length >= 8.0 else 2 if length >= 4.6 else 1   # фраза ≈ кадр; от 4 с — два, от 7 с — три
             if b.get("prolog"):                       # пролог: короткие кадры, быстрый монтаж
-                n = max(1, min(4, round(length / PROLOG_SHOT)))
+                n = max(1, min(5, round(length / PROLOG_SHOT)))
             spec = {"visual": vis, "query": query, "t0": t0, "t1": t1, "n": n, "text": txt}
             if vis in ("archive", "photo") and query in focus_q:
                 spec["focus"] = focus_q[query]          # фото с приближениями: один кадр на всю фразу
@@ -750,11 +750,21 @@ def step_build(cfg, niche, project, log=print, stop_flag=lambda: False, progress
         return True
 
     zoom_flip = False
+    _tq = (script.get("title") or "").split(":", 1)[-1].strip()
+    hook_state = {"done": False, "segs": [], "title_q": _tq if _tq.endswith("?") and len(_tq) <= 70 else ""}
     board_state = {"pins": [], "photos": {}}
     rw = {"de": "Funkverkehr", "ru": "Радиообмен", "en": "Radio traffic", "fr": "Trafic radio", "es": "Tráfico de radio"}
     radio_header = rw.get(code, rw["en"]) + (" · " + (script.get("board") or {}).get("sub", "").split("·")[0].strip()
                                              if (script.get("board") or {}).get("sub") else "")
     for b in blocks:
+        if b["type"] == "curtain" and not hook_state["done"] and hook_state["title_q"] and hook_state["segs"]:
+            at = hook_state["segs"][1] if len(hook_state["segs"]) > 1 else hook_state["segs"][0] + 3.0
+            if at < 35:                               # в прологе нет вопроса — показываем вопрос из названия
+                hp = shots_dir / f"hookq_{_key(hook_state['title_q'], str(accent), str(extras.LABEL_STYLE))}.png"
+                extras.make_hook_png(hook_state["title_q"], hp, accent)
+                add_overlay(hp, at + 0.3, 3.8, "title")
+                log(f"  Хук: вопрос из названия на экране на {at:.0f}-й секунде.")
+            hook_state["done"] = True
         if b["type"] == "curtain":                    # занавес после пролога: затемнение
             shots.append({"kind": "black", "src": "", "s": b["start"], "e": b["end"], "mood": "normal",
                           "role": "curtain"})
@@ -804,6 +814,21 @@ def step_build(cfg, niche, project, log=print, stop_flag=lambda: False, progress
             add_overlay(lp, seg_start + 0.3, min(LABEL_SEC, span - 0.4), "label")
             last_label = seg_start
             busy_until[0] = seg_start + 0.3 + min(LABEL_SEC, span - 0.4)
+        # хук: крупный вопрос ролика на экране, когда он звучит в прологе (не позже ~35 с)
+        if b.get("prolog") and not hook_state["done"]:
+            hook_state["segs"].append(seg_start)
+            txt_ = s.get("text", "") or ""
+            qm = re.search(r"[^.!?]*\?", txt_)
+            if qm and seg_start < 35:
+                q_ = qm.group(0).strip()
+                show = hook_state["title_q"] or q_
+                if len(show) <= 90:
+                    at = seg_start + span * (qm.start() / max(1, len(txt_)))
+                    hp = shots_dir / f"hookq_{_key(show, str(accent), str(extras.LABEL_STYLE))}.png"
+                    extras.make_hook_png(show, hp, accent)
+                    add_overlay(hp, at + 0.2, 3.8, "title")
+                    hook_state["done"] = True
+                    log(f"  Хук: вопрос ролика на экране на {at:.0f}-й секунде.")
         first_in_seg = True
         # строки без кадров не показывают чужие ролики повторно: их время забирает соседняя строка
         # (предыдущая в абзаце, иначе следующая), её кадры просто идут дольше

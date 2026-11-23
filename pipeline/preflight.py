@@ -70,4 +70,49 @@ def check(text, wpm=None, photo_cap=0.40, min_minutes=None, min_queries=100):
     calls = -(-sheets // 3) + -(-lines_est // 45)
     out.append(f"  Оценка расхода Claude: ≈{calls} запросов (план кадров {-(-lines_est // 45)}, проверка "
                f"≈{sheets} листов пачками по 3).")
+    out += hook_check(text, wpm)
     return out + [f"  Внимание: {w}" for w in warn]
+
+
+SCENE_START = re.compile(r"^(?:\d{1,2}\.\s*)?(?:januar|februar|märz|april|mai|juni|juli|august|september|oktober|"
+                         r"november|dezember|enero|febrero|marzo|abril|mayo|junio|julio|agosto|septiembre|octubre|"
+                         r"noviembre|diciembre|im (?:jahr|sommer|winter|frühjahr|herbst)|\d{4})\b[^.!?]{0,40}[.]", re.I)
+
+
+def hook_check(text, wpm):
+    """Хук (пролог): длина, когда звучит вопрос ролика, не начинается ли ролик с описания обстановки.
+    Статистика канала: зрители уходят в первую минуту — сильное должно звучать в первой фразе."""
+    lines, on = [], False
+    for raw in (text or "").replace("\r\n", "\n").split("\n"):
+        ln = raw.strip()
+        if ln.startswith("=="):
+            if on:
+                break
+            on = bool(re.match(r"^==\s*ПРОЛОГ", ln, re.I))
+            continue
+        if on and ln and not ln.startswith(("#", "[")):
+            lines.append(ln)
+    if not lines:
+        return ["  Хук: пролога (== ПРОЛОГ ==) нет — ролик начнётся сразу с главы."]
+    words = " ".join(lines).split()
+    sec = lambda n: n / max(1, wpm) * 60
+    total = sec(len(words))
+    out, warn = [], []
+    q_at = None
+    for i, w in enumerate(words):
+        if "?" in w:
+            q_at = sec(i + 1)
+            break
+    first = re.split(r"(?<=[.!?])\s+", " ".join(lines))[0]
+    out.append(f"  Хук: пролог ≈{total:.0f} с, первый вопрос на ≈{q_at:.0f}-й секунде." if q_at is not None
+               else f"  Хук: пролог ≈{total:.0f} с, вопроса в прологе нет.")
+    if total > 50:
+        warn.append(f"пролог ≈{total:.0f} с — длиннее 45 с, зрители уходят раньше. Сократите до 30–45 с")
+    if q_at is None:
+        warn.append("в прологе нет вопроса ролика. Нужен до 20-й секунды (на экране его покажет программа)")
+    elif q_at > 22:
+        warn.append(f"вопрос ролика звучит только на ≈{q_at:.0f}-й секунде, нужен до 20-й. Перенесите его выше")
+    if SCENE_START.match(first) or len(first.split()) <= 4:
+        warn.append(f"ролик начинается с обстановки («{first[:60]}»). Первая фраза должна быть главной уликой "
+                    "или последним моментом, дата и место — после")
+    return out + [f"  Внимание (хук): {w}" for w in warn]

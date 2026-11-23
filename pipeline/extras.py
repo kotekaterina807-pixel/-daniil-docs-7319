@@ -211,6 +211,56 @@ def _soft_shadow(img, radius=10, alpha=150):
     return Image.alpha_composite(shadow, img)
 
 
+def make_hook_png(text, out_path, accent=(200, 30, 30)):
+    """Крупный вопрос ролика в хуке. Прозрачный PNG 1920x1080: тёмная полоса по центру, белый жирный текст,
+    акцентная черта. У стройки и еды — в стиле их подписей."""
+    from PIL import Image, ImageDraw, ImageFilter
+    W, H = 1920, 1080
+    img = Image.new("RGBA", (W, H), (0, 0, 0, 0))
+    d = ImageDraw.Draw(img)
+    size = 76
+    while size > 44:
+        f = _font(size, FONT_CANDIDATES)
+        words, lines, cur = text.split(), [], ""
+        for w in words:
+            t = (cur + " " + w).strip()
+            if d.textlength(t, font=f) <= 1500 or not cur:
+                cur = t
+            else:
+                lines.append(cur)
+                cur = w
+        lines.append(cur)
+        if len(lines) <= 2:
+            break
+        size -= 6
+    lh = int(size * 1.22)
+    th = lh * len(lines)
+    y0 = H // 2 - th // 2 + 40
+    light = LABEL_STYLE == "studio"
+    band = Image.new("RGBA", (W, H), (0, 0, 0, 0))
+    bd = ImageDraw.Draw(band)
+    if LABEL_STYLE == "food":
+        bd.rectangle([0, y0 - 40, W, y0 + th + 40], fill=(250, 204, 21, 235))
+    elif light:
+        bd.rounded_rectangle([180, y0 - 44, W - 180, y0 + th + 44], 28, fill=(255, 255, 255, 240))
+    else:
+        for i in range(0, 120):                              # тёмная полоса, края растворяются
+            a = int(215 * min(1.0, (1 - abs(i - 60) / 60) * 2.2))
+            yy = y0 - 60 + int(i * (th + 120) / 120)
+            bd.rectangle([0, yy, W, yy + (th + 120) // 120 + 1], fill=(0, 0, 0, a))
+    img = Image.alpha_composite(img, band.filter(ImageFilter.GaussianBlur(6 if not light else 0)))
+    d = ImageDraw.Draw(img)
+    col = (18, 18, 18, 255) if LABEL_STYLE in ("food", "studio") else (245, 240, 230, 255)
+    for i, ln in enumerate(lines):
+        tw = d.textlength(ln, font=f)
+        if not light and LABEL_STYLE != "food":
+            d.text((W / 2 - tw / 2 + 3, y0 + i * lh + 4), ln, font=f, fill=(0, 0, 0, 200))
+        d.text((W / 2 - tw / 2, y0 + i * lh), ln, font=f, fill=col)
+    if LABEL_STYLE != "food":
+        d.rectangle([W / 2 - 90, y0 + th + 14, W / 2 + 90, y0 + th + 20], fill=tuple(accent) + (255,))
+    img.save(out_path)
+
+
 LABEL_STYLE = None             # у ниши свой вид подписей (стройка — «studio», еда — «food»); None — прежний
 
 
