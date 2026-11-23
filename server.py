@@ -994,6 +994,8 @@ def _remote_loop():
                     and STATE.get("bg", 0) <= 0:
                 held = _sc.hold_on()
                 q = [x for x in remote.pending(cfg) if not x[0].lower().startswith("review")]
+                if not (cfg.get("youtube_api_key") or "").strip():   # поиск роликов ждёт, пока не вставлен ключ
+                    q = [x for x in q if not x[0].lower().startswith("outliers")]
                 if held:                      # после «Стоп» берём только команду «resume_…json»: её кладут,
                     q = [x for x in q          # когда ты сам в чате попросил продолжить
                          if x[0].lower().startswith("resume_") and x[0].lower().endswith(".json")]
