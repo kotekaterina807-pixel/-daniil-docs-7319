@@ -99,6 +99,8 @@ def find(cfg, cmd, log=print):
         sec = _dur((v.get("contentDetails") or {}).get("duration"))
         if views < min_views or n_vid > max_videos or age > ch_days or sec < min_sec:
             continue
+        if cmd.get("max_subs") and subs > int(cmd["max_subs"]):
+            continue
         rows.append({
             "title": sn["title"], "url": f"https://www.youtube.com/watch?v={vid}",
             "thumb": ((sn.get("thumbnails") or {}).get("high") or {}).get("url", ""),
@@ -114,13 +116,27 @@ def find(cfg, cmd, log=print):
     return rows
 
 
+def by_channel(rows):
+    """Один ряд на канал — его самый популярный ролик из найденных."""
+    best = {}
+    for r in rows:
+        k = r["channel_url"]
+        if k not in best or r["views"] > best[k]["views"]:
+            best[k] = r
+    return sorted(best.values(), key=lambda r: -r["views"])
+
+
 def page(rows, cmd):
     def fmt(n):
         return f"{n:,}".replace(",", " ")
     cards = []
     for r in rows:
+        head = (f'<div class="h"><img class="av" src="{html.escape(r["channel_thumb"])}">'
+                f'<div><a href="{html.escape(r["channel_url"])}"><b>{html.escape(r["channel"])}</b></a><br>'
+                f'<span class="m">{fmt(r["subs"])} подписчиков · {r["channel_videos"]} роликов · с {r["channel_since"]}</span></div></div>'
+                if cmd.get("mode") == "channels" else "")
         cards.append(
-            f'<div class="c"><a href="{html.escape(r["url"])}"><img src="{html.escape(r["thumb"])}"></a>'
+            f'<div class="c">{head}<a href="{html.escape(r["url"])}"><img src="{html.escape(r["thumb"])}"></a>'
             f'<div class="t"><a href="{html.escape(r["url"])}">{html.escape(r["title"])}</a></div>'
             f'<div class="m">{fmt(r["views"])} просмотров · {fmt(r["likes"])} лайков · {r["minutes"]} мин · {r["published"]}</div>'
             f'<div class="m"><a href="{html.escape(r["channel_url"])}">{html.escape(r["channel"])}</a> · '
@@ -130,6 +146,7 @@ def page(rows, cmd):
             "body{font-family:Arial;background:#111;color:#eee;margin:16px}a{color:#9cf}"
             ".g{display:grid;grid-template-columns:repeat(auto-fill,minmax(300px,1fr));gap:14px}"
             ".c{background:#1c1c1c;padding:8px;border-radius:8px}.c img{width:100%;border-radius:6px}"
+            ".h{display:flex;gap:10px;align-items:center;margin-bottom:8px}.av{width:48px;height:48px;border-radius:50%;width:48px}"
             ".t{font-weight:bold;margin:6px 0}.m{font-size:13px;color:#bbb}.q{font-size:12px;color:#777}</style>"
             f"<h2>Молодые каналы с сильными роликами ({len(rows)})</h2>"
             f"<p>Запросы: {html.escape(', '.join(cmd.get('queries') or []))}</p><div class='g'>"
@@ -138,6 +155,8 @@ def page(rows, cmd):
 
 def run(cfg, cmd, log=print):
     rows = find(cfg, cmd, log)
+    if cmd.get("mode") == "channels":
+        rows = by_channel(rows)
     repo, token = (cfg.get("report_repo") or "").strip(), (cfg.get("report_token") or "").strip()
     folder = f"reports/outliers_{time.strftime('%Y-%m-%d_%H%M')}"
     if repo and token:
