@@ -1036,7 +1036,11 @@ def step_build(cfg, niche, project, log=print, stop_flag=lambda: False, progress
         cap_ = min(cap_card, 3.6) if sh.get("prolog") else cap_card
         if nm_.startswith("map_") and nm_ in MAP_END:
             cap_ = min(10.0, max(5.0, MAP_END[nm_]))        # карта: после последней точки + 2,5 с
-        elif not nm_.startswith("info_"):
+        elif nm_.startswith("info_"):
+            pass
+        elif sh.get("kind") == "image" and not sh.get("person") and not sh.get("look"):
+            cap_ = float(cfg.get("photo_max_sec", 6.0))      # неподвижное фото — не дольше ~6 с, дальше видео
+        else:
             continue
         if (sh["e"] - sh["s"]) / SR <= cap_ + 1.2:
             continue
@@ -1054,7 +1058,7 @@ def step_build(cfg, niche, project, log=print, stop_flag=lambda: False, progress
         cut_n += 1
     shots = shots2
     if cut_n:
-        log(f"  Длинных инфо-карточек сокращено до {cap_card:.1f} с: {cut_n} (дальше на экране видео).")
+        log(f"  Длинных карточек, карт и неподвижных фото сокращено: {cut_n} (карточки до {cap_card:.1f} с, фото до {float(cfg.get('photo_max_sec', 6.0)):.1f} с, дальше на экране видео).")
     reused = sum(1 for v in use_count.values() if v > 1)
     log(f"  Кадров в монтаже: {len(shots)} (в среднем {total_sec / max(1, len(shots)):.1f} с), "
         f"повторно использовано роликов: {reused}.")
