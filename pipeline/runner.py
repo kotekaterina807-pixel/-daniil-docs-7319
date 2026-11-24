@@ -1034,7 +1034,11 @@ def step_build(cfg, niche, project, log=print, stop_flag=lambda: False, progress
         shots2.append(sh)
         nm_ = Path(str(sh.get("src", ""))).name
         cap_ = min(cap_card, 3.6) if sh.get("prolog") else cap_card
-        if not nm_.startswith("info_") or (sh["e"] - sh["s"]) / SR <= cap_ + 1.2:
+        if nm_.startswith("map_") and nm_ in MAP_END:
+            cap_ = min(10.0, max(5.0, MAP_END[nm_]))        # карта: после последней точки + 2,5 с
+        elif not nm_.startswith("info_"):
+            continue
+        if (sh["e"] - sh["s"]) / SR <= cap_ + 1.2:
             continue
         donor = next((x for x in shots[idx + 1:idx + 4] + shots[max(0, idx - 3):idx][::-1]
                       if _plain(x) and x.get("kind") == "video" and x.get("src")), None)
@@ -2514,6 +2518,9 @@ def _ask_focus(cfg, work, src, targets, ck):
     return out
 
 
+MAP_END = {}   # имя файла карты → через сколько секунд после начала кадра карту можно убирать
+
+
 def _map_item(spec, b, shots_dir, length, t0, log=print):
     """Карта маршрута: точка — в момент, когда диктор называет место (по распознанным словам)."""
     parts = [x.strip() for x in spec["map"].split("|") if x.strip()]
@@ -2557,6 +2564,7 @@ def _map_item(spec, b, shots_dir, length, t0, log=print):
         times = [a_ + (t_ - a_) * sc_ for t_ in times]
     clip_len = length + 1.5
     out = shots_dir / f"map_{_key(spec['map'], f'{clip_len:.2f}', str([round(t, 2) for t in times]), 'geo1')}.mp4"
+    MAP_END[out.name] = float(times[-1]) + 2.5          # после последней точки карта ещё 2,5 с, дальше — видео
     if not out.exists():
         from . import fx
         made = None
