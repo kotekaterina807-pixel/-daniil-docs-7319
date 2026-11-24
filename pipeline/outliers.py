@@ -59,6 +59,8 @@ def find(cfg, cmd, log=print):
     for q in cmd.get("queries") or []:
         params = {"part": "snippet", "q": q, "type": "video", "order": "viewCount", "maxResults": 50,
                   "publishedAfter": after}
+        if cmd.get("before_days"):
+            params["publishedBefore"] = (now - timedelta(days=int(cmd["before_days"]))).strftime("%Y-%m-%dT%H:%M:%SZ")
         if cmd.get("lang"):
             params["relevanceLanguage"] = cmd["lang"]
         if cmd.get("region"):
