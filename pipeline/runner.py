@@ -1030,12 +1030,28 @@ def step_build(cfg, niche, project, log=print, stop_flag=lambda: False, progress
     shots = [sh for sh in shots if sh["e"] > sh["s"]]
     # инфо-карточка висит не дольше ~4,5 с (в хуке 3,6 с): дальше на экране видео, а не неподвижная плашка
     cap_card, cut_n, shots2 = float(cfg.get("info_max_sec", 4.5)), 0, []
+    map_run = {}                                   # карта могла быть размазана на несколько подряд идущих кадров
     for idx, sh in enumerate(shots):
         shots2.append(sh)
         nm_ = Path(str(sh.get("src", ""))).name
         cap_ = min(cap_card, 3.6) if sh.get("prolog") else cap_card
         if nm_.startswith("map_") and nm_ in MAP_END:
-            cap_ = min(10.0, max(5.0, MAP_END[nm_]))        # карта: после последней точки + 2,5 с
+            if map_run.get(nm_ + "#last") != idx - 1 or nm_ not in map_run:
+                map_run[nm_] = sh["s"]                      # начало серии подряд идущих кадров с этой картой
+            map_run[nm_ + "#last"] = idx
+            # вся серия вместе — не дольше 12 с и не дольше «последняя точка + 2,5 с»
+            limit_s = map_run[nm_] / SR + min(12.0, max(6.0, MAP_END[nm_]))
+            cap_ = limit_s - sh["s"] / SR
+            if cap_ <= 0.5:                                  # карта уже показана — весь кадр заменяем видео
+                donor0 = next((x for x in shots[idx + 1:idx + 5] + shots[max(0, idx - 4):idx][::-1]
+                               if _plain(x) and x.get("kind") == "video" and x.get("src")), None)
+                if donor0:
+                    for k in ("kind", "src", "clip_dur", "speed", "mood", "src_url"):
+                        if k in donor0:
+                            sh[k] = donor0[k]
+                    sh.update({"offset_n": int(donor0.get("offset_n", 0)) + 3, "person": False})
+                    cut_n += 1
+                continue
         elif nm_.startswith("info_"):
             pass
         elif sh.get("kind") == "image" and not sh.get("person") and not sh.get("look"):
