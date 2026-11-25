@@ -1012,6 +1012,14 @@ def _remote_loop():
                             except Exception as e:
                                 remote.status(cfg, name, f"ошибка: {e}")
                             continue
+                        if cmd.get("samples"):               # разбор роликов-примеров из папки samples/
+                            try:
+                                from pipeline import samples
+                                res, folder = samples.run(cfg, cmd, JOB.add_log)
+                                remote.status(cfg, name, f"готово: {len(res)} роликов, {folder}")
+                            except Exception as e:
+                                remote.status(cfg, name, f"ошибка: {e}")
+                            continue
                         d = _find_project(cmd.get("project", ""))
                         if not d:
                             remote.status(cfg, name, f"ошибка: проект «{cmd.get('project')}» не найден")
