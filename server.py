@@ -1046,6 +1046,12 @@ def _remote_loop():
                                     over["qa_check"] = False
                                 if cmd.get("qa_retry") is False:  # одна проверка, без второго круга поиска замен
                                     over["qa_retry"] = False
+                                # пробник пересобирается тоже в 1080p; «"final": true» — чистовая версия в 2K
+                                if cmd.get("final"):
+                                    over["output_height"] = 1440
+                                    (d / "пробник.flag").unlink(missing_ok=True)
+                                elif (d / "пробник.flag").exists():
+                                    over["output_height"] = 1080
                                 res = _rebuild(d, mode="reselect" if cmd.get("reselect") else "fix",
                                                times=cmd.get("times") or [], src="по команде из чата", over=over)
                             except Exception as e:
@@ -1078,6 +1084,18 @@ def _remote_loop():
                             over = {"qa_retry": False, "qa_check": False}
                             if re.search(r"(?im)^#!\s*РЕЖИМ:\s*(полн|full)", text):
                                 over = {}
+                            # «#! РЕЖИМ: пробник» — быстрая проба: 1080p без перевода в 2K, без итоговой проверки
+                            # Claude. Чистовая версия потом: команда {"project": ..., "times": [], "final": true}
+                            if re.search(r"(?im)^#!\s*РЕЖИМ:\s*(проб|draft|probe)", text):
+                                over = {"qa_retry": False, "qa_check": False, "output_height": 1080}
+                                try:
+                                    (project / "пробник.flag").write_text("1", encoding="utf-8")
+                                except Exception:
+                                    pass
+                                JOB.add_log("Режим: пробник (1080p, без итоговой проверки Claude)")
+                            else:
+                                over.setdefault("output_height", 1440)
+                                JOB.add_log("Режим: основное видео (2K 60 кадров/с)")
                             res = _build(project, npath, src="по команде из чата", over=over)
                         except Exception as e:
                             remote.status(config.load_config(), name, f"ошибка: {e}")
