@@ -1757,7 +1757,8 @@ def _choose_in_chat(cfg, project, finder, seg_blocks, jobs, vis_cache, log, chec
                     role = (pl.get("roles") or {}).get(cand[0], "") or plan_roles.get(cand[0], "")
                     if role and not (cfg.get("language", "ru") != "ru" and re.search(r"[а-яё]", role, re.I)):
                         spec["auto_role"] = seg_blocks[bi]["specs"][si]["auto_role"] = role
-            if spec["visual"] != "person" and spec["n"] < 2 and spec.get("t1", 0) - spec.get("t0", 0) >= 4.6:
+            if spec["visual"] != "person" and spec["n"] < 2 and spec.get("t1", 0) - spec.get("t0", 0) >= 4.6 \
+                    and not cfg.get("long_shot_sec") and not str(spec.get("query", "")).startswith("http"):
                 spec["n"] = 2                     # минимум два разных кадра на обычную фразу
             spec["prolog"] = bool(seg_blocks[bi].get("prolog"))   # хук: без архивных фото темы впереди видео
             q = spec["query"] if spec["visual"] != "person" else \

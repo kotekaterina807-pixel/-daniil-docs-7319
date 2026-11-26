@@ -221,6 +221,22 @@ def dark_bg(g, out):
     img.save(out)
 
 
+def _fit_card(g, src):
+    """Страхи: размер рамки под пропорции картинки (вертикальная — узкая и высокая), без обрезки."""
+    try:
+        from .render import open_photo
+        im = open_photo(src)
+        ar = im.width / max(1, im.height)
+    except Exception:
+        return g
+    max_w, max_h = (1000, 640) if g["var"] == "red" else (1300, 800)
+    cw, ch = max_w, round(max_w / ar)
+    if ch > max_h:
+        ch, cw = max_h, round(max_h * ar)
+    cw, ch = max(320, cw // 2 * 2), max(240, ch // 2 * 2)
+    return dict(g, cw=cw, ch=ch, x=(W - cw) // 2, y=(H - ch) // 2 - 10)
+
+
 def _is_diagram(src):
     """Схема/рисунок на белом фоне (органы, клетки) — в «страхах» становится светлым контуром на чёрном."""
     try:
@@ -228,7 +244,10 @@ def _is_diagram(src):
         im = open_photo(src).convert("RGB").resize((96, 96))
         px = list(im.getdata())
         white = sum(1 for r, g, b in px if r > 225 and g > 225 and b > 225) / len(px)
-        return white > 0.55
+        ink = [(r, g, b) for r, g, b in px if not (r > 225 and g > 225 and b > 225)]
+        # только чёрно-белые рисунки и гравюры: цветная схема или фото в негативе выглядят плохо
+        sat = sum(max(c) - min(c) for c in ink) / max(1, len(ink))
+        return white > 0.55 and sat < 22
     except Exception:
         return False
 
@@ -264,6 +283,8 @@ def render_look_shot(s, total, out, workdir):
     """Кадр ниши: s — словарь кадра (kind, src, grade, look, side, caption, credit, ...)."""
     look, side = s["look"], bool(s.get("side"))
     g = geometry(look, str(s.get("src")) + str(s.get("s", "")), side)
+    if look == "dark" and not side and s["kind"] == "image":
+        g = _fit_card(g, s["src"])                    # рамка по пропорциям картинки — видна целиком
     wd = Path(workdir)
     wd.mkdir(parents=True, exist_ok=True)
     tag = f"{look}_{int(side)}_{abs(hash((str(s.get('src')), s.get('s'), s.get('caption'), s.get('credit')))) % 10**10}"
