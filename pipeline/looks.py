@@ -112,7 +112,7 @@ def geometry(look, seed, side=False):
     if look == "dark":
         if side:                                         # портрет в овале справа от центра, имя слева
             return {"cw": 480, "ch": 600, "x": 1000, "y": (H - 600) // 2 - 10, "var": "oval"}
-        var = "glow" if rnd.random() < 0.7 else "red"     # как в примерах: сиреневое свечение или красный экран
+        var = "glow" if rnd.random() < 0.8 else "red"     # как в примерах: сиреневое свечение, иногда красный экран
         cw, ch = (1000, 564) if var == "red" else (1240, 698)
         return {"cw": cw, "ch": ch, "x": (W - cw) // 2, "y": (H - ch) // 2 - 10, "var": var}
     # polaroid

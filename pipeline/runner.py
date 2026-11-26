@@ -570,7 +570,9 @@ def step_build(cfg, niche, project, log=print, stop_flag=lambda: False, progress
     vis_cache_path = project / "visuals.json"
     vis_cache = _load_json(vis_cache_path, {})
     finder = VisualFinder(cfg, niche, media_dir, log)
-    finder.images_only = bool(cfg.get("photos_first"))       # страхи: только изображения, без стоковых видео
+    finder.images_only = bool(cfg.get("photos_first"))       # страхи: изображения и только медицинские видео
+    finder.topic_re = re.compile(niche["topic_filter"], re.I) if niche.get("topic_filter") else None
+    finder.off_re = re.compile(niche["topic_block"], re.I) if niche.get("topic_block") else None
     _yrs = [int(y) for y in re.findall(r"\b(1[89]\d\d)\b", (script.get("era") or "") + " " + (script.get("title") or ""))]
     if _yrs:                                         # годы темы: хроника ищется среди фильмов этих лет (±20)
         finder.era_years = (min(_yrs) - 15, max(_yrs) + 20)
@@ -657,7 +659,7 @@ def step_build(cfg, niche, project, log=print, stop_flag=lambda: False, progress
             texts.append(txt)
         b["specs"] = []
         for i, ((vis, query), (t0, t1), txt) in enumerate(zip(specs, ranges, texts)):
-            if cfg.get("photos_first") and vis in ("stock", "newsreel", "photo"):
+            if cfg.get("photos_first") and vis in ("newsreel", "photo"):
                 vis = "archive"                        # ниша на изображениях (страхи): иллюстрации, схемы, снимки
             if vis == "stock" and nr_share > 0 and getattr(finder, "era_years", None):
                 nr_acc[0] += nr_share                  # часть видео-строк — сначала старая киносъёмка той эпохи

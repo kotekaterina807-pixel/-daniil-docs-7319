@@ -138,6 +138,7 @@ class VisualFinder:
         self.log = log
         self.used = set()
         self.banned = load_banned(niche)
+        self.topic_re = self.off_re = None            # узкая тема ниши (страхи — медицина), ставит runner
         self.credits = []
         self._cache = {}
         self._warned_pexels = False
@@ -989,10 +990,12 @@ class VisualFinder:
     def _candidates(self, visual, queries):
         """Сначала ВИДЕО по всем вариантам запроса, фото — только если видео не хватило.
         archive — реальное фото места/документа: Wikimedia, затем видео, затем фото Pixabay."""
-        if getattr(self, "images_only", False) and visual in ("archive", "photo", "stock"):
-            # ниша на изображениях (страхи): точный поиск картинок (схемы, иллюстрации), затем Wikimedia;
-            # стоки (природа, «атмосфера», постановочные люди) не берём совсем — ни видео, ни фото
+        if getattr(self, "images_only", False) and visual in ("archive", "photo"):
+            # ниша на изображениях (страхи): точный поиск картинок (схемы, иллюстрации), затем Wikimedia
             order = [self._web_images, self._wikimedia]
+        elif getattr(self, "images_only", False) and visual == "stock":
+            # страхи: видео — только медицинские (3D-анимации органов, клетки, кровь, снимки); фильтр темы ниже
+            order = [self._stock, self._web_images, self._wikimedia]
         elif visual == "archive":
             # музеи (Met, Чикаго) отдают много картин «примерно на тему» — они в конце;
             # точный поиск картинок по названию (как в браузере) — сразу после Wikimedia
@@ -1017,6 +1020,9 @@ class VisualFinder:
                         continue                      # старая эпоха — современные сток-кадры не берём
                     if c.get("url") in self.banned:
                         continue                      # забракован в прошлых роликах этой ниши
+                    _tre = getattr(self, "topic_re", None)
+                    if _tre is not None and (not _tre.search(_meta) or (self.off_re and self.off_re.search(_meta))):
+                        continue                      # ниша с узкой темой (страхи — медицина): чужое не берём
 
                     st = self.__dict__.setdefault("src_stats", {})
                     k = getattr(src, "__name__", "?")
