@@ -6,6 +6,9 @@
 еда («polaroid»): кадр — наклонный снимок в белой рамке поверх размытой тёмной копии самого себя,
     падает на место; люди — снимок слева, имя на жёлтой плашке справа;
     заставка главы — красная косая панель «#2», кремовая половина с названием, жёлто-чёрная лента.
+страхи («dark»): чёрный фон, небольшой кадр по центру в тонкой светящейся рамке (сиреневое свечение),
+    иногда — «красный экран» с виньеткой; белые схемы на белом фоне становятся светлым контуром на чёрном;
+    люди — портрет в овале, слева имя и годы шрифтом с засечками; заставка главы — белый текст со свечением.
 Подписи источника фото — мелко внизу справа (как у познавательных каналов)."""
 import random
 import subprocess
@@ -25,7 +28,10 @@ BOLD_FONTS = [r"C:\Windows\Fonts\arialbd.ttf", r"C:\Windows\Fonts\segoeuib.ttf",
               "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf"]
 TEXT_FONTS = [r"C:\Windows\Fonts\arial.ttf", r"C:\Windows\Fonts\segoeui.ttf",
               "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf"]
+SERIF_FONTS = [r"C:\Windows\Fonts\times.ttf", r"C:\Windows\Fonts\georgia.ttf",
+               "/usr/share/fonts/truetype/dejavu/DejaVuSerif.ttf"]
 YELLOW, CREAM, RED = (250, 204, 21), (244, 236, 220), (214, 40, 40)
+GLOW = (176, 168, 255)                       # сиреневое свечение рамки (страхи)
 _NO_WINDOW = 0x08000000 if __import__("os").name == "nt" else 0
 
 
@@ -99,6 +105,16 @@ def geometry(look, seed, side=False):
         dx = 1500 if rnd.random() < 0.5 else -1500
         return {"cw": cw, "ch": ch, "x": (W - cw) // 2 + off, "y": (H - ch) // 2 + 30, "dx": dx, "dy": 0,
                 "r": 30, "angle": 0.0}
+    if look == "dark":
+        if side:                                         # портрет в овале справа от центра, имя слева
+            return {"cw": 420, "ch": 520, "x": 1010, "y": (H - 520) // 2 - 10, "var": "oval"}
+        r = rnd.random()
+        var = "glow" if r < 0.6 else "red" if r < 0.85 else "bare"
+        if var == "red":
+            cw, ch = 640, 400
+        else:
+            cw, ch = 880, 496
+        return {"cw": cw, "ch": ch, "x": (W - cw) // 2, "y": (H - ch) // 2 - 20, "var": var}
     # polaroid
     ang = rnd.uniform(1.6, 4.2) * rnd.choice((-1, 1))
     if side:
@@ -126,6 +142,21 @@ def deco_png(look, out, caption="", credit="", side=False):
     d = ImageDraw.Draw(img)
     main, _, sub = (caption or "").partition("|")
     main, sub = main.strip(), sub.strip()
+    if side and main and look == "dark":                 # имя и годы слева от овала, шрифт с засечками
+        f = _fit(main, 820, (64, 56, 50, 44), SERIF_FONTS)
+        fs = _font(34, SERIF_FONTS)
+        tw = d.textlength(main, font=f)
+        x1 = 960
+        y = H // 2 - 50
+        glow = Image.new("RGBA", (W, H), (0, 0, 0, 0))
+        gd = ImageDraw.Draw(glow)
+        gd.text((x1 - tw, y), main, font=f, fill=GLOW + (255,))
+        img = Image.alpha_composite(img, glow.filter(ImageFilter.GaussianBlur(10)))
+        d = ImageDraw.Draw(img)
+        d.text((x1 - tw, y), main, font=f, fill=(244, 244, 250, 255))
+        if sub:
+            d.text((x1 - tw + 4, y + f.size + 8), sub, font=fs, fill=(180, 180, 196, 255))
+        main = ""
     if side and main:
         x0, max_w = 1020, 800
         if look == "studio":
@@ -152,6 +183,54 @@ def deco_png(look, out, caption="", credit="", side=False):
                 _pill(d, x0, y + 18, sub.upper(), YELLOW, (20, 20, 20), 34, left=True)
     _credit(d, credit, look)
     img.save(out)
+
+
+def dark_bg(g, out):
+    """Фон кадра «страхов»: чёрный, рамка со свечением (glow), красный экран (red), овал (oval) или ничего."""
+    img = Image.new("RGB", (W, H), (0, 0, 0))
+    x, y, cw, ch, var = g["x"], g["y"], g["cw"], g["ch"], g["var"]
+    if var == "red":                                 # красный «экран»: светящийся прямоугольник, к краям темнее
+        rw, rh = 1080, 720
+        rx, ry = (W - rw) // 2, (H - rh) // 2 - 20
+        lay = Image.new("L", (W, H), 0)
+        ImageDraw.Draw(lay).rounded_rectangle([rx, ry, rx + rw, ry + rh], 90, fill=255)
+        lay = lay.filter(ImageFilter.GaussianBlur(40))
+        core = Image.new("L", (W, H), 0)
+        cd = ImageDraw.Draw(core)
+        for k in range(30, 0, -1):                   # к центру ярче
+            cd.ellipse([W / 2 - rw * k / 50, H / 2 - 20 - rh * k / 50, W / 2 + rw * k / 50, H / 2 - 20 + rh * k / 50],
+                       fill=int(255 * (1 - k / 30) ** 0.6))
+        core = core.filter(ImageFilter.GaussianBlur(60))
+        red = Image.composite(Image.new("RGB", (W, H), (236, 40, 40)), Image.new("RGB", (W, H), (120, 0, 6)), core)
+        img = Image.composite(red, img, lay)
+    elif var in ("glow", "oval"):
+        lay = Image.new("RGB", (W, H), (0, 0, 0))
+        ld = ImageDraw.Draw(lay)
+        pad = 26
+        if var == "oval":
+            ld.ellipse([x - pad, y - pad, x + cw + pad, y + ch + pad], fill=tuple(int(c * 0.55) for c in GLOW))
+        else:
+            ld.rounded_rectangle([x - pad, y - pad, x + cw + pad, y + ch + pad], 30,
+                                 fill=tuple(int(c * 0.55) for c in GLOW))
+        img = lay.filter(ImageFilter.GaussianBlur(38))
+        d = ImageDraw.Draw(img)
+        if var == "oval":
+            d.ellipse([x - 5, y - 5, x + cw + 5, y + ch + 5], outline=(236, 234, 255), width=4)
+        else:
+            d.rounded_rectangle([x - 5, y - 5, x + cw + 5, y + ch + 5], 16, outline=(236, 234, 255), width=4)
+    img.save(out)
+
+
+def _is_diagram(src):
+    """Схема/рисунок на белом фоне (органы, клетки) — в «страхах» становится светлым контуром на чёрном."""
+    try:
+        from .render import open_photo
+        im = open_photo(src).convert("RGB").resize((96, 96))
+        px = list(im.getdata())
+        white = sum(1 for r, g, b in px if r > 225 and g > 225 and b > 225) / len(px)
+        return white > 0.55
+    except Exception:
+        return False
 
 
 def _pill(d, x, y, text, bg, fg, size=36, left=False):
@@ -200,7 +279,33 @@ def render_look_shot(s, total, out, workdir):
         pre = ""
     else:
         inp, pre = _video_input(s, total)
-    if look == "studio":
+    if look == "dark":
+        bgp = wd / f"dark_{g['var']}_{cw}x{ch}_{g['x']}_{g['y']}.png"
+        if not bgp.exists():
+            dark_bg(g, bgp)
+        inv = ",negate,hue=s=0,eq=contrast=1.15:brightness=-0.03" if is_img and _is_diagram(s["src"]) else ""
+        fit = ("scale={cw}:{ch}:force_original_aspect_ratio=increase:flags=lanczos,crop={cw}:{ch}"
+               .format(cw=cw, ch=ch))
+        if g["var"] == "oval":
+            mask = wd / f"oval_{cw}x{ch}.png"
+            if not mask.exists():
+                m = Image.new("L", (cw, ch), 0)
+                ImageDraw.Draw(m).ellipse([0, 0, cw - 1, ch - 1], fill=255)
+                m.save(mask)
+            chain = (f"[0:v]{pre}{fit},setsar=1,fps={FPS},{grade}{inv},format=rgba[m];[2:v]format=gray[mk];"
+                     f"[m][mk]alphamerge[c];[1:v]format=rgba[bg];[bg][c]overlay=x={g['x']}:y={g['y']}[b2];"
+                     f"[3:v]format=rgba[dc];[b2][dc]overlay=x=0:y=0,fade=t=in:st=0:d=0.35,format=yuv420p[v]")
+            extra = ["-loop", "1", "-framerate", str(FPS), "-i", str(bgp),
+                     "-loop", "1", "-framerate", str(FPS), "-i", str(mask),
+                     "-loop", "1", "-framerate", str(FPS), "-i", str(deco)]
+        else:
+            soft = ",vignette=PI/5" if g["var"] == "bare" else ""
+            chain = (f"[0:v]{pre}{fit},setsar=1,fps={FPS},{grade}{inv}{soft}[c];"
+                     f"[1:v][c]overlay=x={g['x']}:y={g['y']}[b2];"
+                     f"[2:v]format=rgba[dc];[b2][dc]overlay=x=0:y=0,fade=t=in:st=0:d=0.35,format=yuv420p[v]")
+            extra = ["-loop", "1", "-framerate", str(FPS), "-i", str(bgp),
+                     "-loop", "1", "-framerate", str(FPS), "-i", str(deco)]
+    elif look == "studio":
         bg = wd / "studio_bg.png"
         if not bg.exists():
             studio_bg().save(bg)
@@ -293,6 +398,8 @@ def make_chapter_clip(look, number, title, length, out, word="KAPITEL", accent=(
     total = max(1, int(round(length * FPS)))
     if look == "studio":
         frames = _studio_chapter(number, title, total, word, accent)
+    elif look == "dark":
+        frames = _dark_chapter(title, total)
     else:
         frames = _food_chapter(number, title, total)
     from . import render
@@ -352,6 +459,25 @@ def _studio_chapter(number, title, total, word, accent):
         yield img
 
 
+def _dark_chapter(title, total):
+    """Страхи: на чёрном проявляется название (белый шрифт с засечками, мягкое свечение) и гаснет."""
+    f = _fit(title or "", 1500, (96, 84, 72, 62, 54), SERIF_FONTS)
+    lines = _wrap(title or "", f, 1500, 2)
+    lh = int(f.size * 1.2)
+    base = Image.new("RGB", (W, H), (0, 0, 0))
+    d = ImageDraw.Draw(base)
+    y = H // 2 - len(lines) * lh // 2 - 10
+    for ln in lines:
+        d.text(((W - d.textlength(ln, font=f)) / 2, y), ln, font=f, fill=(244, 244, 250))
+        y += lh
+    from PIL import ImageChops
+    lit = ImageChops.screen(base, base.filter(ImageFilter.GaussianBlur(16)))
+    for k in range(total):
+        t, rest = k / FPS, (total - k) / FPS
+        a = min(1.0, t / 0.6, rest / 0.4)
+        yield Image.blend(base.point(lambda v: 0), lit, max(0.0, a))
+
+
 def _hazard(w, h, off):
     band = Image.new("RGB", (w, h), (20, 20, 20))
     d = ImageDraw.Draw(band)
@@ -366,6 +492,11 @@ def _food_chapter(number, title, total):
     split = 760                                          # ширина красной панели (по верхнему краю)
     num = f"#{number}"
     fn = _fit(num, 560, (300, 260, 220, 190), HEAD_FONTS)
+    import re as _re
+    ym = _re.search(r"\s*\(([^()]{2,24})\)\s*$", title or "")    # «Название (2003)» — год плашкой под названием
+    year = ym.group(1) if ym else ""
+    if ym:
+        title = title[:ym.start()]
     words = (title or "").upper().split()
     half = max(1, (len(words) + 1) // 2)
     l1, l2 = " ".join(words[:half]), " ".join(words[half:])
@@ -393,6 +524,12 @@ def _food_chapter(number, title, total):
             d.rectangle([x, y + f1.size + 14, x + 220, y + f1.size + 22], fill=YELLOW + (int(255 * et),))
             if l2:
                 d.text((x, y + f1.size + 40), l2, font=f2, fill=RED + (int(255 * et),))
+            if year:
+                fy = _font(40, BOLD_FONTS)
+                yy = y + f1.size + 40 + (f2.size + 30 if l2 else 0)
+                tw = d.textlength(year, font=fy)
+                d.rounded_rectangle([x, yy, x + tw + 44, yy + 62], 31, fill=(18, 18, 18, int(255 * et)))
+                d.text((x + 22, yy + 9), year, font=fy, fill=(255, 255, 255, int(255 * et)))
         img.paste(_hazard(W + 10, 54, t * 90), (0, H - 54))   # жёлто-чёрная лента внизу медленно едет
         yield img
 
@@ -419,6 +556,18 @@ def make_label(style, text, out_path, accent=(34, 110, 90)):
         d.text((x + 46, y + 16), main.upper(), font=f, fill=(22, 24, 28, 255))
         if sub:
             d.text((x + 48, y + 22 + f.size), sub, font=fs, fill=(92, 98, 106, 255))
+    elif style == "dark":                                # страхи: белый текст с засечками и свечением снизу по центру
+        f = _fit(main, 1400, (46, 42, 38, 34), SERIF_FONTS)
+        tw = d.textlength(main, font=f)
+        y = H - 190 if sub else H - 150
+        glow = Image.new("RGBA", (W, H), (0, 0, 0, 0))
+        ImageDraw.Draw(glow).text((W / 2 - tw / 2, y), main, font=f, fill=GLOW + (255,))
+        img = Image.alpha_composite(img, glow.filter(ImageFilter.GaussianBlur(9)))
+        d = ImageDraw.Draw(img)
+        d.text((W / 2 - tw / 2, y), main, font=f, fill=(246, 246, 252, 255))
+        if sub:
+            fs = _font(30, SERIF_FONTS)
+            d.text((W / 2 - d.textlength(sub, font=fs) / 2, y + f.size + 12), sub, font=fs, fill=(170, 170, 186, 255))
     else:                                                # еда: жёлтая плашка по центру снизу, ниже белая
         f = _fit(main.upper(), 1300, (46, 42, 38, 34), BOLD_FONTS)
         tw = d.textlength(main.upper(), font=f)
@@ -428,3 +577,21 @@ def make_label(style, text, out_path, accent=(34, 110, 90)):
         if sub:
             _pill(d, W / 2, y + f.size + 40, sub.upper(), (250, 250, 248), (18, 18, 18), 30)
     img.save(out_path)
+
+
+def warning_png(text, out):
+    """Страхи: предупреждение в начале — светящийся голубовато-белый текст и красная строка сверху."""
+    lines = [x.strip() for x in (text or "").split("|") if x.strip()]
+    img = Image.new("RGBA", (W, H), (0, 0, 0, 0))
+    lay = Image.new("RGBA", (W, H), (0, 0, 0, 0))
+    d = ImageDraw.Draw(lay)
+    y = 110
+    for i, ln in enumerate(lines):
+        red = i == len(lines) - 1 and len(lines) > 1
+        f = _fit(ln.upper(), 1500, (40, 36, 32, 28), BOLD_FONTS)
+        col = (255, 60, 60, 255) if red else (215, 230, 255, 255)
+        d.text(((W - d.textlength(ln.upper(), font=f)) / 2, y), ln.upper(), font=f, fill=col)
+        y += f.size + 18
+    img = Image.alpha_composite(img, lay.filter(ImageFilter.GaussianBlur(8)))
+    img = Image.alpha_composite(img, lay)
+    img.save(out)

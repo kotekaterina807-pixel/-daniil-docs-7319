@@ -398,8 +398,8 @@ def step_build(cfg, niche, project, log=print, stop_flag=lambda: False, progress
         cfg.update(ns)
         log(f"Ниша «{niche.get('name', '')}»: свои настройки монтажа ({', '.join(sorted(ns))}).")
     cfg["language"] = code
-    _look = {"bau": "studio", "food": "polaroid"}.get(str(cfg.get("edit_style", "")))   # вид кадров ниши
-    extras.LABEL_STYLE = {"studio": "studio", "polaroid": "food"}.get(_look)          # подписи в стиле ниши
+    _look = {"bau": "studio", "food": "polaroid", "fears": "dark"}.get(str(cfg.get("edit_style", "")))   # вид кадров ниши
+    extras.LABEL_STYLE = {"studio": "studio", "polaroid": "food", "dark": "dark"}.get(_look)     # подписи в стиле ниши
     from .config import voice_for_lang, voice_lang
     v_ = voice_for_lang(cfg, code)                    # голос диктора — на языке видео
     if v_ and v_.get("id") != cfg.get("elevenlabs_voice_id"):
@@ -657,7 +657,10 @@ def step_build(cfg, niche, project, log=print, stop_flag=lambda: False, progress
             n = min(n, max(1, int(length / min_shot)))
             if cfg.get("visual_check") == "claude_code":
                 n = 3 if length >= 8.0 else 2 if length >= 4.6 else 1   # фраза ≈ кадр; от 4 с — два, от 7 с — три
-            if b.get("prolog"):                       # пролог: короткие кадры, быстрый монтаж
+            long_sh = float(cfg.get("long_shot_sec", 0) or 0)
+            if long_sh:                               # ниша с длинными кадрами (страхи): кадр от long_shot_sec секунд
+                n = max(1, min(n, int(length / long_sh)))
+            elif b.get("prolog"):                     # пролог: короткие кадры, быстрый монтаж
                 n = max(1, min(5, round(length / PROLOG_SHOT)))
             spec = {"visual": vis, "query": query, "t0": t0, "t1": t1, "n": n, "text": txt}
             if vis in ("archive", "photo") and query in focus_q:
@@ -837,6 +840,13 @@ def step_build(cfg, niche, project, log=print, stop_flag=lambda: False, progress
             add_overlay(lp, seg_start + 0.3, min(LABEL_SEC, span - 0.4), "label")
             last_label = seg_start
             busy_until[0] = seg_start + 0.3 + min(LABEL_SEC, span - 0.4)
+        for k_, st_ in enumerate(s.get("stamps") or []):        # штампы (еда): красная печать поверх кадра
+            from . import captions as _cap
+            sp_ = shots_dir / f"stamp_{_key(st_, str(k_))}.png"
+            if not sp_.exists():
+                _cap.stamp_png(st_, sp_, seed=k_)
+            at_ = seg_start + min(span * 0.45, 1.2 + k_ * 2.8)
+            add_overlay(sp_, at_, min(2.6, max(1.0, span - (at_ - seg_start) - 0.2)), "pop")
         # хук: крупный вопрос ролика на экране, когда он звучит в прологе (не позже ~35 с)
         if b.get("prolog") and not hook_state["done"]:
             hook_state["segs"].append(seg_start)
@@ -888,7 +898,7 @@ def step_build(cfg, niche, project, log=print, stop_flag=lambda: False, progress
         for spec in specs_:                        # инфо-карточки (цифра, дата, цитата…) — заранее, свои кадры
             if spec["visual"] == "info" and not spec.get("items"):
                 try:
-                    spec["items"] = [_info_item(spec, shots_dir, max(1.6, spec["t1"] - spec["t0"]), niche, accent)]
+                    spec["items"] = [_info_item(spec, shots_dir, max(1.6, spec["t1"] - spec["t0"]), niche, accent, b)]
                 except Exception as e:
                     log(f"  Инфо-карточка не получилась ({str(e)[:120]}) — будет обычный кадр.")
         for spec in specs_:                        # листы с текстом — заранее, у них свои кадры
@@ -1364,20 +1374,20 @@ def step_build(cfg, niche, project, log=print, stop_flag=lambda: False, progress
                 k_in = 0
             nm = Path(str(sh.get("src", ""))).name
             ok = (sh["kind"] in ("image", "video") and sh.get("src") and not sh.get("role") and not sh.get("focus")
-                  and not nm.startswith(("person_", "doc_", "map_", "radio_", "board_", "info_", "look_"))
+                  and not nm.startswith(("person_", "doc_", "map_", "radio_", "board_", "info_", "look_", "host_"))
                   and (sh["e"] - sh["s"]) / SR >= 1.3)
             if ok:
                 if sh["kind"] == "image":
                     sh["look"] = _look
                     if sh.get("person") and sh.get("who"):
                         sh["side"], sh["caption"] = True, sh["who"]      # фото слева, имя крупно справа
-                elif (k_in % 2 == 1) if _look == "studio" else (k_in % 3 == 2):
-                    sh["look"] = _look
+                elif _look == "dark" or ((k_in % 2 == 1) if _look == "studio" else (k_in % 3 == 2)):
+                    sh["look"] = _look                   # страхи: каждый кадр — в рамке на чёрном
                 if sh.get("look"):
                     n_look += 1
             k_in += 1
         log(f"  Вид ниши «{_look}»: {n_look} из {len(shots)} кадров — карточками "
-            f"({'серебристая студия' if _look == 'studio' else 'снимок на размытом фоне'}).")
+            f"({'серебристая студия' if _look == 'studio' else 'кадр в рамке на чёрном' if _look == 'dark' else 'снимок на размытом фоне'}).")
 
     shots = _fit_docs(shots)
     # карта и лист с печатью, разрезанные на несколько кадров, идут непрерывно (а не с начала в каждом куске)
@@ -1426,6 +1436,15 @@ def step_build(cfg, niche, project, log=print, stop_flag=lambda: False, progress
             fr = 0                                    # фото со вспышкой появляется сразу — вспышка звучит ровно на нём
         sh["trans"], sh["tail"] = "fade", fr
         es = cfg.get("edit_style", "mysteries")
+        if es == "fears":
+            # страхи: внутри абзаца — жёсткая склейка, новый абзац и глава — через чёрное
+            if sh.get("role") == "curtain" or nxt.get("role") == "curtain":
+                pass
+            elif nxt.get("first_of_seg") or sh.get("role") == "card" or nxt.get("role") == "card":
+                sh["trans"], sh["tail"] = "fadeblack", min(14, fr) if fr else 0
+            else:
+                sh["trans"], sh["tail"] = "fade", 0
+            continue
         if es in ("bau", "food"):
             # своя манера монтажа у каждой ниши: короткие жёсткие склейки внутри абзаца, свои переходы на смене смысла
             hard = nxt.get("first_of_seg") or sh.get("role") == "card" or nxt.get("role") == "card" or sh.get("role") == "curtain" or nxt.get("role") == "curtain"
@@ -1478,6 +1497,21 @@ def step_build(cfg, niche, project, log=print, stop_flag=lambda: False, progress
              "who": sh.get("who", ""), "person": bool(sh.get("person"))} for sh in shots])
     except Exception:
         pass
+    try:
+        _word_captions(script, cfg, niche, seg_blocks, shots, overlays, shots_dir, log)
+    except Exception as e:
+        log(f"  Пословные подписи не сделаны: {e}")
+    warn_ = niche.get("intro_warning") or ""
+    if warn_ and cfg.get("show_labels", True):          # страхи: предупреждение в первые секунды
+        try:
+            from . import looks as _lk
+            wp_ = shots_dir / f"warning_{_key(warn_)}.png"
+            if not wp_.exists():
+                _lk.warning_png(warn_, wp_)
+            overlays.append({"png": str(wp_), "start": int(0.2 * render.FPS), "frames": int(4.6 * render.FPS),
+                             "anim": "fade"})
+        except Exception as e:
+            log(f"  Предупреждение в начале не сделано: {e}")
     _free_disk(project, shots_dir, shots, log)
     workers = max(2, min(6, (os.cpu_count() or 4) // 2))
     log(f"Монтаж: {len(shots)} кадров (потоков: {workers}). Кодирование: "
@@ -2685,10 +2719,60 @@ def _board_item(spec, b, shots_dir, length, t0, state, script, finder, log):
     return {"path": str(out), "kind": "video", "url": "board:" + out.stem, "duration": clip_len + 0.5}
 
 
-def _info_item(spec, shots_dir, length, niche, accent):
-    """Инфо-карточка: большая цифра, дата, цитата, сравнение, заголовок, таймлайн, новость (pipeline/cards.py)."""
+def _word_captions(script, cfg, niche, seg_blocks, shots, overlays, shots_dir, log):
+    """Крупные пословные подписи под голос (еда): «all» — весь ролик, «host» — только когда в кадре ведущий.
+    Режим: строка сценария «#! ПОДПИСИ:» или настройка ниши word_captions. Не ставятся поверх других надписей."""
+    from . import captions
+    mode = script.get("word_captions") or cfg.get("word_captions") or "off"
+    if mode not in ("all", "host"):
+        return
+    fps = render.FPS
+    host_r = [(sh["s"] / SR, sh["e"] / SR) for sh in shots if Path(str(sh.get("src") or "")).name.startswith("host_")]
+    if mode == "host" and not host_r:
+        return
+    busy = [(o["start"] / fps, (o["start"] + o["frames"]) / fps) for o in overlays
+            if o.get("anim") in ("label", "title", "fade")]
+    n = 0
+    for b in seg_blocks:
+        seg = b["seg"]
+        if seg.get("radio"):
+            continue
+        st = b["start"] / SR
+        span = (b["end"] - b["start"]) / SR
+        words = captions.timed_words(seg.get("text", ""), b.get("words"), span)
+        groups = captions.chunks(words)
+        for i, (a, e, txt) in enumerate(groups):
+            a_, e_ = st + a, st + (groups[i + 1][0] if i + 1 < len(groups) else min(span, e + 0.3))
+            e_ = min(e_, st + e + 0.6)
+            if e_ - a_ < 0.12:
+                continue
+            if mode == "host" and not any(x <= (a_ + e_) / 2 <= y for x, y in host_r):
+                continue
+            if any(a_ < y and e_ > x for x, y in busy):
+                continue
+            cp = shots_dir / f"wcap_{_key(txt, 'c2')}.png"
+            if not cp.exists():
+                captions.caption_png(txt, cp)
+            overlays.append({"png": str(cp), "start": int(round(a_ * fps)), "frames": max(2, int(round((e_ - a_) * fps))),
+                             "anim": "pop"})
+            n += 1
+    log(f"  Пословные подписи ({'весь ролик' if mode == 'all' else 'на ведущем'}): {n}.")
+
+
+def _info_item(spec, shots_dir, length, niche, accent, b=None):
+    """Инфо-карточка: большая цифра, дата, цитата, сравнение, заголовок, таймлайн, новость (pipeline/cards.py).
+    [ведущий] — нарисованный ведущий говорит эту фразу (рот по громкости озвучки абзаца)."""
     from . import cards
     kind, _, text = str(spec["info"]).partition("::")
+    if kind == "ведущий" and b is not None and b.get("seg", {}).get("audio"):
+        from . import host
+        wav, t0 = b["seg"]["audio"], float(spec.get("t0", 0.0))
+        hd = Path(host.ROOT) / "host"
+        own = "own" if (hd / "closed.png").exists() else "drawn"
+        out = shots_dir / f"host_{_key(str(wav), f'{t0:.2f}', f'{length:.2f}', own, 'h1')}.mp4"
+        if not out.exists():
+            host.make_host_clip(wav, t0, length, out, seed=int(t0 * 10) % 7)
+        return {"path": str(out), "kind": "video", "url": "card:host", "duration": length + 0.3}
     theme = niche.get("card_theme", "night")
     acc = tuple(niche.get("card_accent") or accent)
     out = shots_dir / f"info_{_key(kind, text, f'{length:.2f}', theme, str(acc), 'c1')}.mp4"

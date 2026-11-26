@@ -9,17 +9,29 @@
   [заголовок] Was ist das?
   [таймлайн] 1935 Forschung beginnt ; 1937 Testhaus ; 2007 im Baurecht
   [новость] Reuters | 3.000 Kinder betroffen | Jan 2023
+  [далее] Сладость, которая убивала неделями   — тизер «Далее ?» перед следующим пунктом (еда)
+  [список] Гибель плода ; Развитие вне матки ; Защитный механизм — пункты появляются по очереди (страхи)
+Тема «void» (страхи): чёрный фон, белый текст с засечками и мягким свечением.
 """
 import math
 import os
 import re
 import subprocess
 import tempfile
+import threading
 from pathlib import Path
 
-from PIL import Image, ImageDraw, ImageFilter
+from PIL import Image, ImageChops, ImageDraw, ImageFilter
 
-from .extras import _font, FONT_CANDIDATES
+from .extras import _font as _xfont, FONT_CANDIDATES
+
+SERIF_FONTS = [r"C:\Windows\Fonts\times.ttf", r"C:\Windows\Fonts\georgia.ttf",
+               "/usr/share/fonts/truetype/dejavu/DejaVuSerif.ttf"]
+_TL = threading.local()                 # тема «void»: все шрифты карточки — с засечками
+
+
+def _font(size, candidates=FONT_CANDIDATES):
+    return _xfont(size, SERIF_FONTS if getattr(_TL, "serif", False) else candidates)
 
 W, H = 1920, 1080
 BODY_FONTS = [r"C:\Windows\Fonts\segoeuib.ttf", r"C:\Windows\Fonts\arialbd.ttf",
@@ -27,7 +39,7 @@ BODY_FONTS = [r"C:\Windows\Fonts\segoeuib.ttf", r"C:\Windows\Fonts\arialbd.ttf",
 TEXT_FONTS = [r"C:\Windows\Fonts\segoeui.ttf", r"C:\Windows\Fonts\arial.ttf",
               "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf"]
 KINDS = {"цифра": "number", "число": "number", "дата": "date", "цитата": "quote", "сравнение": "versus",
-         "заголовок": "title", "таймлайн": "timeline", "новость": "news"}
+         "заголовок": "title", "таймлайн": "timeline", "новость": "news", "далее": "next", "список": "list"}
 ANIM = 1.1                      # секунды анимации появления; дальше карточка стоит с лёгким приближением
 
 THEMES = {
@@ -40,7 +52,11 @@ THEMES = {
     # тайны: тёмно-синий, приглушённый
     "night": {"bg1": (30, 36, 48), "bg2": (8, 10, 14), "text": (236, 232, 222), "muted": (160, 160, 150),
               "card": (240, 236, 226), "shadow": 150, "pill_text": (255, 255, 255)},
+    # страхи: чистый чёрный, белый текст с засечками и свечением
+    "void": {"bg1": (6, 6, 8), "bg2": (0, 0, 0), "text": (242, 242, 248), "muted": (150, 150, 165),
+             "card": (20, 20, 24), "shadow": 0, "pill_text": (255, 255, 255)},
 }
+YELLOW = (250, 204, 21)
 
 
 def _ease(x):
@@ -53,6 +69,8 @@ def _bg(theme, seed=""):
     if theme == "light":                                  # стройка: та же серебристая студия, что под карточками кадров
         from .looks import studio_bg
         return studio_bg().copy()
+    if theme == "void":                                   # страхи: просто чёрный
+        return Image.new("RGB", (W, H), (0, 0, 0))
     img = Image.new("RGB", (W, H), th["bg2"])
     glow = Image.new("L", (W, H), 0)
     gd = ImageDraw.Draw(glow)
@@ -237,6 +255,45 @@ def _frame(kind, parts, t, theme, accent, base):
             fr = _fit(rest, 900, (54, 48, 42, 36), BODY_FONTS, d)
             d.text((x_line + 70 + d.textlength(yr, font=fy) + int((1 - b) * 40), y - 32), rest, font=fr,
                    fill=th["text"] + (int(255 * b),))
+    elif kind == "next":                                  # еда: тизер «Далее ?» — лента, знак вопроса, намёк
+        from .looks import _hazard
+        e = _ease(t / 0.35)
+        band = _hazard(W + 300, 64, t * 120).rotate(4, expand=True, resample=Image.BICUBIC)
+        im.paste(band, (int(-150 - (1 - e) * W), 120))
+        d = ImageDraw.Draw(im, "RGBA")
+        fl = _font(58, FONT_CANDIDATES)
+        lab = (parts[1] if len(parts) > 1 and parts[1] else "ДАЛЕЕ").upper()
+        if e > 0.6:
+            tw = d.textlength(lab, font=fl)
+            d.rectangle([W / 2 - tw / 2 - 24, 132, W / 2 + tw / 2 + 24, 212], fill=(14, 12, 14, 255))
+            d.text((W / 2 - tw / 2, 140), lab, font=fl, fill=YELLOW + (255,))
+        q = _ease((t - 0.25) / 0.35)
+        if q > 0:
+            r = int(150 * (0.7 + 0.3 * q))
+            cy = 560
+            d.rounded_rectangle([W / 2 - r, cy - r * 1.05, W / 2 + r, cy + r * 1.05], 40,
+                                fill=(60, 18, 24, int(220 * q)))
+            fq = _font(int(300 * (0.7 + 0.3 * q)), FONT_CANDIDATES)
+            bb = d.textbbox((0, 0), "?", font=fq)
+            d.text((W / 2 - (bb[0] + bb[2]) / 2, cy - (bb[1] + bb[3]) / 2), "?", font=fq,
+                   fill=tuple(accent) + (int(255 * q),))
+        b = _ease((t - 0.55) / 0.4)
+        if b > 0 and parts[0]:
+            ft = _fit(parts[0].upper(), W - 300, (70, 62, 54, 46, 40), FONT_CANDIDATES, d)
+            ln = parts[0].upper()
+            d.text(((W - d.textlength(ln, font=ft)) / 2 + 3, 860 + 4 + int((1 - b) * 30)), ln, font=ft, fill=(0, 0, 0, int(200 * b)))
+            d.text(((W - d.textlength(ln, font=ft)) / 2, 860 + int((1 - b) * 30)), ln, font=ft, fill=(246, 244, 240, int(255 * b)))
+    elif kind == "list":                                  # страхи: нумерованный список, пункты появляются по очереди
+        items = [x.strip() for x in parts[0].split(";") if x.strip()][:5]
+        f = _font(64, FONT_CANDIDATES)
+        lh = 96
+        y0 = H / 2 - len(items) * lh / 2
+        x0 = 560
+        for i, it in enumerate(items):
+            b = _ease((t - 0.2 - i * 0.55) / 0.45)
+            d.text((x0, y0 + i * lh), f"{i + 1}:", font=f, fill=th["text"] + (255,))
+            if b > 0:
+                d.text((x0 + 90, y0 + i * lh), it, font=f, fill=th["text"] + (int(255 * b),))
     elif kind == "news":
         p = parts + [""] * (3 - len(parts))
         b = _ease(t / 0.7)
@@ -260,6 +317,8 @@ def _frame(kind, parts, t, theme, accent, base):
         im.paste((0, 0, 0), (x0, y0 + 20), sh)
         card.putalpha(card.split()[3].point(lambda v: int(v * b)))
         im.paste(card, (x0, y0), card)
+    if theme == "void":                                   # мягкое свечение текста, как на тёмных каналах
+        im = ImageChops.screen(im, im.filter(ImageFilter.GaussianBlur(14)).point(lambda v: int(v * 0.8)))
     return im
 
 
@@ -268,10 +327,19 @@ def make_info_clip(kind_ru, text, length, out_mp4, theme="dark", accent=(200, 30
     from .config import ffmpeg_exe
     kind = KINDS.get(str(kind_ru).lower(), "title")
     parts = [x.strip() for x in str(text).split("|")]
+    _TL.serif = theme == "void"
+    try:
+        return _make_info_clip(kind, parts, text, length, out_mp4, theme, accent, fps)
+    finally:
+        _TL.serif = False
+
+
+def _make_info_clip(kind, parts, text, length, out_mp4, theme, accent, fps):
+    from .config import ffmpeg_exe
     base = _bg(theme, text)
     tmp = Path(tempfile.mkdtemp())
     length = max(1.6, float(length))
-    anim = min(ANIM if kind not in ("timeline", "versus") else 1.6, length - 0.3)
+    anim = min({"timeline": 1.6, "versus": 1.6, "list": 3.2, "next": 1.3}.get(kind, ANIM), length - 0.3)
     step = 1 / 30                                         # 30 опорных кадров в секунду анимации, дальше — один кадр
     times = [i * step for i in range(int(anim / step) + 1)]
     if kind == "title":                                   # мигающий курсор — несколько кадров до конца

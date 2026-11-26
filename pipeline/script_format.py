@@ -48,6 +48,11 @@ HEADER = """# СЦЕНАРИЙ. Можно править в Блокноте и
 #   [заголовок] Was ist das?           — крупный заголовок с курсором
 #   [таймлайн] 1935 событие ; 1937 событие ; 2007 событие — линия времени (до 5 пунктов)
 #   [новость] Издание | заголовок | дата — карточка новости
+#   [далее] Сладость, которая убивала неделями — тизер «Далее ?» перед следующим пунктом (еда)
+#   [список] пункт ; пункт ; пункт     — нумерованный список, пункты появляются по очереди (страхи)
+#   [ведущий]                          — в кадре нарисованный ведущий говорит эту фразу (еда; свой — папка host/)
+#   [штамп] Прожёг дыру               — красный штамп поверх кадра справа сверху (еда), | — перенос строки
+#   #! ПОДПИСИ: все / ведущий / нет    — крупные пословные подписи: на всём ролике, только на ведущем, нет
 #   [переход] обычный / спокойный / эффектный — переход к этому абзацу
 #            спокойный — для страшных и тревожных моментов, эффектный — для поворотов и разгадок
 #   Абзацы разделяются пустой строкой. Строки с # в начале игнорируются.
@@ -72,6 +77,8 @@ def to_text(script: dict) -> str:
         lines.append(f"#! ДОСКА: {script['board'].get('title', '')} | {script['board'].get('sub', '')}")
     if script.get("title_card") is False:
         lines.append("#! ЗАСТАВКА: нет")
+    if script.get("word_captions"):
+        lines.append("#! ПОДПИСИ: " + {"all": "все", "host": "ведущий"}.get(script["word_captions"], "нет"))
     for ch in script["chapters"]:
         lines.append("== ПРОЛОГ ==" if ch.get("prolog") else f"== ГЛАВА: {ch['title']} ==")
         lines.append("")
@@ -98,6 +105,8 @@ def to_text(script: dict) -> str:
                              else f"[доска] {q}" if v == "board" else f"[{v}] {q}")
             if s.get("label"):
                 lines.append(f"[надпись] {s['label']}")
+            for st_ in s.get("stamps") or []:
+                lines.append(f"[штамп] {st_}")
             if s.get("person") and not any(v == "person" for v, _ in shots):
                 lines.append(f"[человек] {s['person']}")
             if s.get("music"):
@@ -121,15 +130,21 @@ def apply_text(script: dict, text: str) -> dict:
         if not block:
             return
         txt, label, person, mood, music = [], "", "", "normal", ""
-        shots, radio_lines, focus, sounds = [], [], {}, []
+        shots, radio_lines, focus, sounds, stamps = [], [], {}, [], []
         for ln in block:
             m = re.match(r"^\[(archive|stock|photo|newsreel|фото|видео|архив|хроника)\]\s*(.*)$", ln.strip(), re.I)
             tag = re.match(r"^\[(надпись|человек|переход|документ|музыка|карта|радио|фокус|доска|звук)\]\s*(.*)$",
                            ln.strip(), re.I)
-            info = re.match(r"^\[(цифра|число|дата|цитата|сравнение|заголовок|таймлайн|новость)\]\s*(.*)$", ln.strip(), re.I)
+            info = re.match(r"^\[(цифра|число|дата|цитата|сравнение|заголовок|таймлайн|новость|далее|список|ведущий)\]\s*(.*)$",
+                            ln.strip(), re.I)
             if info:                                  # информационная карточка — рисуется сама, без поиска кадров
-                if info.group(2).strip():
-                    shots.append(("info", info.group(1).lower() + "::" + info.group(2).strip()))
+                if info.group(2).strip() or info.group(1).lower() == "ведущий":
+                    shots.append(("info", info.group(1).lower() + "::" + (info.group(2).strip() or "-")))
+                continue
+            st_ = re.match(r"^\[штамп\]\s*(.*)$", ln.strip(), re.I)
+            if st_:                                   # штамп поверх кадра (еда)
+                if st_.group(1).strip():
+                    stamps.append(st_.group(1).strip())
                 continue
             if m:
                 kind = {"фото": "photo", "видео": "stock", "архив": "archive", "хроника": "newsreel"}.get(m.group(1).lower(),
@@ -186,6 +201,8 @@ def apply_text(script: dict, text: str) -> dict:
                 seg["focus"] = focus
             if sounds:
                 seg["sfx"] = sounds
+            if stamps:
+                seg["stamps"] = stamps
             current["segments"].append(seg)
         if radio_lines:                               # переговоры — свой блок (после текста абзаца, если он есть)
             current["segments"].append({"text": " ".join(r["de"] or r["en"] for r in radio_lines),
@@ -204,7 +221,7 @@ def apply_text(script: dict, text: str) -> dict:
             script["thumbnail_text"] = line.split(":", 1)[1].strip()
             continue
         meta = re.match(r"^#!\s*(ЯЗЫК|ТЕГИ|ОПИСАНИЕ|ФАКТ|ТЕМА|АРХИВ|ЭПОХА|ФОТО|ВАРИАНТ НАЗВАНИЯ|ПРОИЗНОШЕНИЕ|СТИЛЬ|"
-                        r"ДОСКА|ЗАСТАВКА|МЕСТО):\s?(.*)$", line)
+                        r"ДОСКА|ЗАСТАВКА|МЕСТО|ПОДПИСИ):\s?(.*)$", line)
         if meta:
             key, val = meta.group(1), meta.group(2).strip()
             if key == "ЯЗЫК" and val:
@@ -240,6 +257,10 @@ def apply_text(script: dict, text: str) -> dict:
                 script["board"] = {"title": t_.strip(), "sub": s_.strip()}
             elif key == "ЗАСТАВКА":
                 script["title_card"] = val.strip().lower() not in ("нет", "no", "off", "0", "false")
+            elif key == "ПОДПИСИ" and val:              # пословные подписи: все / ведущий / нет
+                v_ = val.strip().lower()
+                script["word_captions"] = "all" if v_.startswith(("все", "all")) else \
+                    "host" if v_.startswith(("вед", "host")) else "off"
             continue
         if line.startswith("#"):
             continue

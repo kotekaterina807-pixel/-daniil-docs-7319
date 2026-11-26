@@ -25,7 +25,7 @@ def check(text, wpm=None, photo_cap=0.40, min_minutes=None, min_queries=100):
         if m:
             kinds[m.group(1).lower()].append(m.group(2).strip())
             continue
-        if re.match(r"^\[(цифра|число|дата|цитата|сравнение|заголовок|таймлайн|новость)\]", ln, re.I):
+        if re.match(r"^\[(цифра|число|дата|цитата|сравнение|заголовок|таймлайн|новость|далее|список|ведущий)\]", ln, re.I):
             kinds["карточка"].append(ln)
             continue
         if ln.startswith("=="):

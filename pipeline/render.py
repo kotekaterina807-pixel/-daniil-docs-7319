@@ -628,6 +628,8 @@ class _Overlay:
             if out < 24:
                 k *= max(0.0, out / 24.0)
             return k, -70.0 * (1 - ease), 0.0
+        if self.anim == "pop":                            # пословные подписи и штампы: появляются сразу
+            return min(1.0, i / 2.0, max(0.0, (n - i) / 3.0)), 0.0, 0.0
         if self.anim == "title":                          # проявление с лёгким подъёмом
             p = min(1.0, i / 50.0)
             ease = 1 - (1 - p) ** 3
