@@ -1009,7 +1009,7 @@ def step_build(cfg, niche, project, log=print, stop_flag=lambda: False, progress
             lim = max_shot * 1.5
             long_lim = max_shot * 2.2                   # один ролик может идти дольше, лишь бы не повторяться
             n = spec["n"]
-            if items and b.get("prolog"):              # хук — из видео: одобренные ролики вперёд фото
+            if items and b.get("prolog") and not cfg.get("long_shot_sec"):   # хук — из видео: ролики вперёд фото
                 if not any(x.get("kind") == "video" for x in items):
                     vid = next((x for x in reserve if x.get("kind") == "video" and not use_count.get(x["path"])), None)
                     if vid:
@@ -1184,8 +1184,8 @@ def step_build(cfg, niche, project, log=print, stop_flag=lambda: False, progress
         log(f"  Повторы одного человека подряд заменены: {n_rep}.")
     # фото/карточка человека — 3–5 секунд: успеть увидеть лицо и прочитать имя, но не висеть 15 секунд
     for i, sh in enumerate(shots):
-        if not sh.get("person") or (sh["e"] - sh["s"]) / SR <= 5.0:
-            continue
+        if not sh.get("person") or (sh["e"] - sh["s"]) / SR <= 5.0 or cfg.get("long_shot_sec"):
+            continue                                         # (страхи: карточка «?» стоит всю фразу, без добивки повтором)
         cut = sh["s"] + int(4.5 * SR)
         nxt = shots[i + 1] if i + 1 < len(shots) else None
         if nxt is not None and not nxt.get("person") and (nxt["e"] - cut) / SR <= 9.0:
