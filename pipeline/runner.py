@@ -1342,9 +1342,19 @@ def step_build(cfg, niche, project, log=print, stop_flag=lambda: False, progress
                 sh["stack"] = None
                 n_dup += 1
                 continue
+            pv_ = shots[i - 1] if i > 0 else None       # видео нет (ниша на изображениях) — дольше идёт предыдущий кадр
+            if pv_ is not None and not pv_.get("_drop") and pv_.get("kind") in ("image", "video") \
+                    and not pv_.get("role") and abs(pv_["e"] - sh["s"]) <= SR // 10 \
+                    and (sh["e"] - pv_["s"]) / SR <= float(cfg.get("photo_max_sec", 6.0)) + 3:
+                pv_["e"] = sh["e"]
+                sh["_drop"] = True
+                n_dup += 1
+                continue
         seen_h.append((t_, h_))
+    if any(x.get("_drop") for x in shots):
+        shots[:] = [x for x in shots if not x.get("_drop")]
     if n_dup:
-        log(f"  Одинаковые картинки рядом по времени заменены видеокадрами: {n_dup}.")
+        log(f"  Одинаковые картинки рядом по времени заменены (видеокадром или продлением соседнего кадра): {n_dup}.")
     merged_ = []                                         # одно и то же фото подряд — один кадр, без склейки «в себя»
     for sh in shots:
         pv = merged_[-1] if merged_ else None
