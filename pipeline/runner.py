@@ -548,9 +548,10 @@ def step_build(cfg, niche, project, log=print, stop_flag=lambda: False, progress
                 pos += n + pause
     total_sec = pos / SR
     log(f"Длительность видео: {total_sec / 60:.1f} мин.")
-    if total_sec < 25 * 60:
-        log(f"  ВНИМАНИЕ: ролик {total_sec / 60:.1f} мин — короче цели 25–30 минут. Сборка продолжается; "
-            f"в следующий сценарий нужно ≈{int((25 * 60 - total_sec) / 60 * L['wpm'])} слов больше.")
+    lo_min = float((niche.get("target_minutes") or [25])[0])
+    if total_sec < lo_min * 60 and not cfg.get("probe_mode"):
+        log(f"  ВНИМАНИЕ: ролик {total_sec / 60:.1f} мин — короче цели {lo_min:.0f} мин. Сборка продолжается; "
+            f"в следующий сценарий нужно ≈{int((lo_min * 60 - total_sec) / 60 * L['wpm'])} слов больше.")
     try:
         _pron_check(project, [b for b in blocks if b["type"] == "seg"], cfg.get("say") or {}, log)
     except Exception as e:
@@ -621,6 +622,8 @@ def step_build(cfg, niche, project, log=print, stop_flag=lambda: False, progress
             # кадры строго под речь: единица — фраза (длинное предложение делится по запятым),
             # смена кадра — в паузе перед словами, строки кадров сценария — подсказки для этих фраз
             units = _speech_units(sents, b["pauses"], span, b.get("words"))
+            if float(cfg.get("long_shot_sec", 0) or 0) and units:
+                units = _merge_units(units, float(cfg["long_shot_sec"]))   # ниша с длинными кадрами (страхи)
             if len(specs) == 1 and specs[0][1] in focus_q and units:
                 # абзац только с [фокус] — одно фото на весь абзац: наезд, переходы между лицами, отъезд
                 specs, ranges, texts = list(specs), [(units[0][0], units[-1][1])], [" ".join(u[2] for u in units)]
@@ -2171,6 +2174,23 @@ def _speech_units(sents, pauses, span, rec=None):
             cut = max(units[i - 1][0] + 1.5, units[i][0] - 0.25)
             units[i - 1][1] = units[i][0] = cut
     return units
+
+
+def _merge_units(units, min_len):
+    """Соседние фразы — в один кадр, пока он короче min_len секунд (ниши с медленным монтажом).
+    Цитата («…») остаётся отдельной фразой; хвост короче половины min_len прилипает к предыдущему кадру."""
+    out = []
+    for u in units:
+        quote = u[2].startswith("«")
+        if out and not quote and not out[-1][2].startswith("«") and out[-1][1] - out[-1][0] < min_len:
+            out[-1] = [out[-1][0], u[1], out[-1][2] + " " + u[2]]
+        else:
+            out.append(list(u))
+    if len(out) > 1 and out[-1][1] - out[-1][0] < min_len / 2 and not out[-1][2].startswith("«") \
+            and not out[-2][2].startswith("«"):
+        out[-2] = [out[-2][0], out[-1][1], out[-2][2] + " " + out[-1][2]]
+        out.pop()
+    return out
 
 
 def _assign_specs(script_specs, units):

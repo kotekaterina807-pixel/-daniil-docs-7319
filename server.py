@@ -1095,7 +1095,7 @@ def _remote_loop():
                             # «#! РЕЖИМ: пробник» — быстрая проба: 1080p без перевода в 2K, без итоговой проверки
                             # Claude. Чистовая версия потом: команда {"project": ..., "times": [], "final": true}
                             if re.search(r"(?im)^#!\s*РЕЖИМ:\s*(проб|draft|probe)", text):
-                                over = {"qa_retry": False, "qa_check": False, "output_height": 1080}
+                                over = {"qa_retry": False, "qa_check": False, "output_height": 1080, "probe_mode": True}
                                 try:
                                     (project / "пробник.flag").write_text("1", encoding="utf-8")
                                 except Exception:
