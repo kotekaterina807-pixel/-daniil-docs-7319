@@ -566,6 +566,7 @@ def step_build(cfg, niche, project, log=print, stop_flag=lambda: False, progress
     vis_cache_path = project / "visuals.json"
     vis_cache = _load_json(vis_cache_path, {})
     finder = VisualFinder(cfg, niche, media_dir, log)
+    finder.images_only = bool(cfg.get("photos_first"))       # страхи: только изображения, без стоковых видео
     _yrs = [int(y) for y in re.findall(r"\b(1[89]\d\d)\b", (script.get("era") or "") + " " + (script.get("title") or ""))]
     if _yrs:                                         # годы темы: хроника ищется среди фильмов этих лет (±20)
         finder.era_years = (min(_yrs) - 15, max(_yrs) + 20)

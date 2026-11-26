@@ -989,7 +989,11 @@ class VisualFinder:
     def _candidates(self, visual, queries):
         """Сначала ВИДЕО по всем вариантам запроса, фото — только если видео не хватило.
         archive — реальное фото места/документа: Wikimedia, затем видео, затем фото Pixabay."""
-        if visual == "archive":
+        if visual == "archive" and getattr(self, "images_only", False):
+            # ниша на изображениях (страхи): точный поиск картинок (схемы, иллюстрации), затем Wikimedia;
+            # видео со стоков (природа, «атмосфера») не берём совсем
+            order = [self._web_images, self._wikimedia, self._pixabay_photos]
+        elif visual == "archive":
             # музеи (Met, Чикаго) отдают много картин «примерно на тему» — они в конце;
             # точный поиск картинок по названию (как в браузере) — сразу после Wikimedia
             order = [self._wikimedia, self._web_images, self._ia_video,
