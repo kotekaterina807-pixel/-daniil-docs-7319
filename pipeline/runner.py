@@ -1331,10 +1331,23 @@ def step_build(cfg, niche, project, log=print, stop_flag=lambda: False, progress
         o.pop("person", None)
     # то же изображение (даже из другого источника/файла) снова в течение 90 секунд — зритель видит повтор,
     # в стопке фото одна и та же картинка лежит дважды. Повтор заменяем видеокадром сцены.
-    seen_h = []
+    seen_h, seen_v = [], []
     n_dup = 0
     for i, sh in enumerate(shots):
         nm_ = Path(str(sh.get("src", ""))).name
+        if cfg.get("long_shot_sec") and sh.get("kind") == "video" and sh.get("src") and not sh.get("role") \
+                and not nm_.startswith(("info_", "look_", "host_")):
+            # страхи: тот же ролик снова в пределах минуты — дольше идёт предыдущий кадр, без повтора
+            t_v = sh["s"] / SR
+            if any(x[0] == sh["src"] and t_v - x[1] < 60 for x in seen_v):
+                pv_ = shots[i - 1] if i > 0 else None
+                if pv_ is not None and not pv_.get("_drop") and abs(pv_["e"] - sh["s"]) <= SR // 10:
+                    pv_["e"] = sh["e"]
+                    sh["_drop"] = True
+                    n_dup += 1
+                    continue
+            seen_v.append((sh["src"], t_v))
+            continue
         if sh.get("kind") != "image" or not sh.get("src") or sh.get("role") or sh.get("person") \
                 or nm_.startswith(("doc_", "map_", "person_", "card_", "board_")):
             continue
