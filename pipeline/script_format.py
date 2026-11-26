@@ -52,6 +52,7 @@ HEADER = """# СЦЕНАРИЙ. Можно править в Блокноте и
 #   [список] пункт ; пункт ; пункт     — нумерованный список, пункты появляются по очереди (страхи)
 #   [ведущий]                          — в кадре нарисованный ведущий говорит эту фразу (еда; свой — папка host/)
 #   [штамп] Прожёг дыру               — красный штамп поверх кадра справа сверху (еда), | — перенос строки
+#   #! ПОДЗАГОЛОВОК: текст           — строка под названием на заставке в начале (страхи)
 #   #! ПОДПИСИ: все / ведущий / нет    — крупные пословные подписи: на всём ролике, только на ведущем, нет
 #   [переход] обычный / спокойный / эффектный — переход к этому абзацу
 #            спокойный — для страшных и тревожных моментов, эффектный — для поворотов и разгадок
@@ -77,6 +78,8 @@ def to_text(script: dict) -> str:
         lines.append(f"#! ДОСКА: {script['board'].get('title', '')} | {script['board'].get('sub', '')}")
     if script.get("title_card") is False:
         lines.append("#! ЗАСТАВКА: нет")
+    if script.get("subtitle"):
+        lines.append("#! ПОДЗАГОЛОВОК: " + script["subtitle"])
     if script.get("word_captions"):
         lines.append("#! ПОДПИСИ: " + {"all": "все", "host": "ведущий"}.get(script["word_captions"], "нет"))
     for ch in script["chapters"]:
@@ -221,7 +224,7 @@ def apply_text(script: dict, text: str) -> dict:
             script["thumbnail_text"] = line.split(":", 1)[1].strip()
             continue
         meta = re.match(r"^#!\s*(ЯЗЫК|ТЕГИ|ОПИСАНИЕ|ФАКТ|ТЕМА|АРХИВ|ЭПОХА|ФОТО|ВАРИАНТ НАЗВАНИЯ|ПРОИЗНОШЕНИЕ|СТИЛЬ|"
-                        r"ДОСКА|ЗАСТАВКА|МЕСТО|ПОДПИСИ):\s?(.*)$", line)
+                        r"ДОСКА|ЗАСТАВКА|МЕСТО|ПОДПИСИ|ПОДЗАГОЛОВОК):\s?(.*)$", line)
         if meta:
             key, val = meta.group(1), meta.group(2).strip()
             if key == "ЯЗЫК" and val:
@@ -257,6 +260,8 @@ def apply_text(script: dict, text: str) -> dict:
                 script["board"] = {"title": t_.strip(), "sub": s_.strip()}
             elif key == "ЗАСТАВКА":
                 script["title_card"] = val.strip().lower() not in ("нет", "no", "off", "0", "false")
+            elif key == "ПОДЗАГОЛОВОК" and val:        # строка под названием на заставке (страхи)
+                script["subtitle"] = val
             elif key == "ПОДПИСИ" and val:              # пословные подписи: все / ведущий / нет
                 v_ = val.strip().lower()
                 script["word_captions"] = "all" if v_.startswith(("все", "all")) else \

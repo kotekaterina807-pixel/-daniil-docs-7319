@@ -179,12 +179,17 @@ def _pipe(frames_iter, total, out, chain, extra_inputs):
 
 
 # ---------------- типы кадров ----------------
+STILL = False                                         # True — фото стоят (страхи): без проездов камеры
+
+
 def render_image_shot(src, total, out, grade, zoom_in=True, label=None):
     base = prepare_base(src)
     extra, lf = _overlay_label(label, total / FPS, 1)
     chain = f"[0:v]{grade or 'null'},format=yuv420p[v0];{lf}"
     amp = ZOOM * min(1.0, max(0.4, total / FPS / 5.0))   # короткий кадр — движение медленнее и мягче
     pan = (-1, 0, 1)[sum(map(ord, str(src))) % 3] if total / FPS >= 3.0 else 0   # каждое третье фото — без проезда
+    if STILL:                                         # ниша со спокойным монтажом: без проездов, едва заметный наезд
+        amp, pan = 0.015, 0
     _pipe(_kb_frames(base, total, zoom_in, amp, pan), total, out, chain, extra)
 
 

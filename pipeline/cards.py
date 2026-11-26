@@ -358,7 +358,7 @@ def _make_info_clip(kind, parts, text, length, out_mp4, theme, accent, fps):
     zf = max(1, int(length * fps))
     subprocess.run([ffmpeg_exe(), "-y", "-hide_banner", "-loglevel", "error", "-f", "concat", "-safe", "0",
                     "-i", str(lst), "-vf", f"fps={fps},scale=3840:2160:flags=lanczos,"
-                    f"zoompan=z='1+0.035*on/{zf}':x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':d=1:s=1920x1080:fps={fps},"
+                    f"zoompan=z='1+{0.012 if theme == 'void' else 0.035}*on/{zf}':x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':d=1:s=1920x1080:fps={fps},"
                     "format=yuv420p", "-t", f"{length:.3f}", "-c:v", "libx264", "-preset", "veryfast", "-crf", "18",
                     str(out_mp4)], check=True, timeout=900, creationflags=0x08000000 if os.name == "nt" else 0)
     try:

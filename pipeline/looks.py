@@ -32,6 +32,10 @@ SERIF_FONTS = [r"C:\Windows\Fonts\times.ttf", r"C:\Windows\Fonts\georgia.ttf",
                "/usr/share/fonts/truetype/dejavu/DejaVuSerif.ttf"]
 YELLOW, CREAM, RED = (250, 204, 21), (244, 236, 220), (214, 40, 40)
 GLOW = (176, 168, 255)                       # сиреневое свечение рамки (страхи)
+# страхи: лёгкое медленное мерцание яркости (как у старого экрана, без резких вспышек) и мягкая виньетка.
+# Выключается настройкой ниши dark_fx: false (runner ставит DARK_FX = "").
+DARK_FX = (",eq=brightness='0.018*sin(2*PI*t*0.9)+0.008*sin(2*PI*t*3.7)':eval=frame"
+           ",vignette=angle=PI/5")
 _NO_WINDOW = 0x08000000 if __import__("os").name == "nt" else 0
 
 
@@ -290,7 +294,7 @@ def render_look_shot(s, total, out, workdir):
                 m.save(mask)
             chain = (f"[0:v]{pre}{fit},setsar=1,fps={FPS},{grade}{inv},format=rgba[m];[2:v]format=gray[mk];"
                      f"[m][mk]alphamerge[c];[1:v]format=rgba[bg];[bg][c]overlay=x={g['x']}:y={g['y']}[b2];"
-                     f"[3:v]format=rgba[dc];[b2][dc]overlay=x=0:y=0,fade=t=in:st=0:d=0.35,format=yuv420p[v]")
+                     f"[3:v]format=rgba[dc];[b2][dc]overlay=x=0:y=0{DARK_FX},format=yuv420p[v]")
             extra = ["-loop", "1", "-framerate", str(FPS), "-i", str(bgp),
                      "-loop", "1", "-framerate", str(FPS), "-i", str(mask),
                      "-loop", "1", "-framerate", str(FPS), "-i", str(deco)]
@@ -298,7 +302,7 @@ def render_look_shot(s, total, out, workdir):
             soft = ""
             chain = (f"[0:v]{pre}{fit},setsar=1,fps={FPS},{grade}{inv}{soft}[c];"
                      f"[1:v][c]overlay=x={g['x']}:y={g['y']}[b2];"
-                     f"[2:v]format=rgba[dc];[b2][dc]overlay=x=0:y=0,fade=t=in:st=0:d=0.35,format=yuv420p[v]")
+                     f"[2:v]format=rgba[dc];[b2][dc]overlay=x=0:y=0{DARK_FX},format=yuv420p[v]")
             extra = ["-loop", "1", "-framerate", str(FPS), "-i", str(bgp),
                      "-loop", "1", "-framerate", str(FPS), "-i", str(deco)]
     elif look == "studio":
@@ -352,7 +356,8 @@ def render_look_shot(s, total, out, workdir):
     cmd = [ffmpeg_exe(), "-y", "-hide_banner", "-loglevel", "error", *inp, *extra, "-filter_complex", chain,
            "-map", "[v]", "-frames:v", str(total), *render.enc(), str(out)]
     if is_img:
-        frames = _kb_card(s["src"], total, cw, ch, s.get("zoom_in", True), 0.06 * min(1.0, max(0.4, total / FPS / 5)))
+        amp_ = 0.015 if look == "dark" else 0.06 * min(1.0, max(0.4, total / FPS / 5))   # страхи: кадр почти стоит
+        frames = _kb_card(s["src"], total, cw, ch, s.get("zoom_in", True), amp_)
         p = subprocess.Popen(cmd, stdin=subprocess.PIPE, stderr=subprocess.PIPE, creationflags=_NO_WINDOW)
         try:
             for buf in frames:
@@ -593,27 +598,36 @@ def warning_png(text, out):
     img.save(out)
 
 
-def intro_png(title, warning, out):
-    """Страхи: заставка в начале — на чёрном предупреждение сверху (голубое и красное свечение)
-    и крупное название посередине белым шрифтом с засечками и мягким сиреневым свечением."""
-    warning_png(warning, out)
-    img = Image.open(out).convert("RGBA")
-    f = _fit(title or "", 1500, (120, 104, 92, 80, 68), SERIF_FONTS)
-    lines = _wrap(title or "", f, 1500, 2)
-    lh = int(f.size * 1.15)
+def intro_png(title, warning, out, sub=""):
+    """Страхи: заставка в начале — на чёрном предупреждение сверху (голубое и красное свечение, 2–3 строки),
+    крупное название посередине (белый шрифт с засечками, сиреневое свечение) и подзаголовок под ним."""
+    img = Image.new("RGBA", (W, H), (0, 0, 0, 0))
     lay = Image.new("RGBA", (W, H), (0, 0, 0, 0))
     d = ImageDraw.Draw(lay)
-    y = H // 2 - len(lines) * lh // 2
-    for ln in lines:
-        d.text(((W - d.textlength(ln, font=f)) / 2, y), ln, font=f, fill=(246, 246, 252, 255))
-        y += lh
-    glow = Image.new("RGBA", (W, H), (0, 0, 0, 0))
-    gd = ImageDraw.Draw(glow)
-    y = H // 2 - len(lines) * lh // 2
-    for ln in lines:
-        gd.text(((W - gd.textlength(ln, font=f)) / 2, y), ln, font=f, fill=GLOW + (255,))
-        y += lh
-    img = Image.alpha_composite(img, glow.filter(ImageFilter.GaussianBlur(16)))
+    lines = [x.strip() for x in (warning or "").split("|") if x.strip()]
+    y = 120
+    for i, ln in enumerate(lines):
+        red = i == len(lines) - 1 and len(lines) > 1
+        f = _fit(ln.upper(), 1600, (46, 42, 38, 34), BOLD_FONTS)
+        d.text(((W - d.textlength(ln.upper(), font=f)) / 2, y), ln.upper(), font=f,
+               fill=(255, 64, 64, 255) if red else (214, 228, 255, 255))
+        y += f.size + 20
+    f = _fit(title or "", 1600, (150, 132, 116, 100, 86), SERIF_FONTS)
+    tl = _wrap(title or "", f, 1600, 2)
+    lh = int(f.size * 1.12)
+    ty = H // 2 - len(tl) * lh // 2 + 40
+    for ln in tl:
+        d.text(((W - d.textlength(ln, font=f)) / 2, ty), ln, font=f, fill=(246, 246, 252, 255))
+        ty += lh
+    if sub:
+        fs = _fit(sub, 1500, (52, 46, 40, 36), SERIF_FONTS)
+        d.text(((W - d.textlength(sub, font=fs)) / 2, ty + 24), sub, font=fs, fill=(196, 194, 214, 255))
+    glow = lay.copy()
+    gpx = glow.split()[3]
+    tint = Image.new("RGBA", (W, H), GLOW + (255,))
+    tint.putalpha(gpx)
+    img = Image.alpha_composite(img, tint.filter(ImageFilter.GaussianBlur(18)))
+    img = Image.alpha_composite(img, lay.filter(ImageFilter.GaussianBlur(6)))
     img = Image.alpha_composite(img, lay)
     img.save(out)
 

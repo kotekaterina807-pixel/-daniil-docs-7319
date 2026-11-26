@@ -402,6 +402,10 @@ def step_build(cfg, niche, project, log=print, stop_flag=lambda: False, progress
     cfg["language"] = code
     _look = {"bau": "studio", "food": "polaroid", "fears": "dark"}.get(str(cfg.get("edit_style", "")))   # вид кадров ниши
     extras.LABEL_STYLE = {"studio": "studio", "polaroid": "food", "dark": "dark"}.get(_look)     # подписи в стиле ниши
+    render.STILL = bool(cfg.get("still_images"))      # страхи: фото стоят, без проездов камеры
+    from . import looks as _looks_fx
+    if not cfg.get("dark_fx", True):
+        _looks_fx.DARK_FX = ""                         # без мерцания и виньетки
     from .config import voice_for_lang, voice_lang
     v_ = voice_for_lang(cfg, code)                    # голос диктора — на языке видео
     if v_ and v_.get("id") != cfg.get("elevenlabs_voice_id"):
@@ -805,10 +809,10 @@ def step_build(cfg, niche, project, log=print, stop_flag=lambda: False, progress
             continue
         if b["type"] == "title" and _look == "dark":
             # страхи: в начале только текст на чёрном — предупреждение и название, без картинок
-            ip_ = shots_dir / f"intro_{_key(script.get('title', ''), niche.get('intro_warning', ''))}.png"
+            ip_ = shots_dir / f"intro2_{_key(script.get('title', ''), niche.get('intro_warning', ''), script.get('subtitle', ''))}.png"
             if not ip_.exists():
                 from . import looks as _lk
-                _lk.intro_png(script.get("title", ""), niche.get("intro_warning", ""), ip_)
+                _lk.intro_png(script.get("title", ""), niche.get("intro_warning", ""), ip_, script.get("subtitle", ""))
             shots.append({"kind": "black", "src": "", "s": b["start"], "e": b["end"], "mood": "normal", "role": "title"})
             add_overlay(ip_, 0.3, max(1.0, (b["end"] - b["start"]) / SR - 0.7), "title")
             continue
@@ -1468,13 +1472,10 @@ def step_build(cfg, niche, project, log=print, stop_flag=lambda: False, progress
         sh["trans"], sh["tail"] = "fade", fr
         es = cfg.get("edit_style", "mysteries")
         if es == "fears":
-            # страхи: внутри абзаца — жёсткая склейка, новый абзац и глава — через чёрное
-            if sh.get("role") == "curtain" or nxt.get("role") == "curtain":
-                pass
-            elif nxt.get("first_of_seg") or sh.get("role") == "card" or nxt.get("role") == "card":
-                sh["trans"], sh["tail"] = "fadeblack", min(14, fr) if fr else 0
-            else:
-                sh["trans"], sh["tail"] = "fade", 0
+            # страхи: мягкий наплыв ~0,35 с между всеми кадрами — спокойно и приятно глазу, без рывков
+            k_ = int(round(0.35 * render.FPS))
+            k_ = min(k_, int(sh["frames"] * 0.3), int(nxt["frames"] * 0.3))
+            sh["trans"], sh["tail"] = "fade", (k_ if k_ >= 6 else 0)
             continue
         if es in ("bau", "food"):
             # своя манера монтажа у каждой ниши: короткие жёсткие склейки внутри абзаца, свои переходы на смене смысла
