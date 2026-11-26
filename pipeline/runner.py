@@ -944,7 +944,7 @@ def step_build(cfg, niche, project, log=print, stop_flag=lambda: False, progress
             items = list(spec.get("items") or [])
             t0, t1 = spec["t0"], spec["t1"]
             length = t1 - t0
-            ms = PROLOG_SHOT if b.get("prolog") else min_shot      # в прологе кадры короче
+            ms = PROLOG_SHOT if b.get("prolog") and not cfg.get("long_shot_sec") else min_shot   # в прологе кадры короче
             if spec.get("auto_person") and any(it.get("person") for it in items) and cfg.get("show_labels", True) \
                     and length >= 1.8 and seg_start + t0 + 0.1 >= busy_until[0]:
                 nm = spec["auto_person"][1]               # фото названного во фразе человека — подпись с именем
@@ -955,7 +955,10 @@ def step_build(cfg, niche, project, log=print, stop_flag=lambda: False, progress
                 busy_until[0] = seg_start + t0 + 0.1 + dur
             if spec["visual"] == "person":
                 has_photo = any(it.get("person") for it in items)
-                if not has_photo:                       # последняя попытка: поиск по имени + теме ролика
+                if extras.LABEL_STYLE == "dark" and spec.get("query") not in (script.get("photos") or {}):
+                    # страхи: без проверенной ссылки «#! ФОТО:» лицо не ищем наугад — только рамка с «?» на всю фразу
+                    items, has_photo = [], False
+                elif not has_photo:                     # последняя попытка: поиск по имени + теме ролика
                     ph = _late_person_photo(finder, spec, late_photos)
                     if ph:
                         items.insert(0, ph)
