@@ -369,7 +369,7 @@ class VisualFinder:
         return got
 
     # ---------- Поиск картинок в интернете (DuckDuckGo, без ключа) ----------
-    STOCK_SITES = re.compile(r"getty|shutterstock|alamy|istock|dreamstime|depositphotos|123rf|pond5|stock\.adobe|"
+    STOCK_SITES = re.compile(r"getty|shutterstock|freepik|vecteezy|alamy|istock|dreamstime|depositphotos|123rf|pond5|stock\.adobe|"
                              r"bigstock|agefotostock|superstock|granger|bridgemanimages|pinterest|facebook|"
                              r"instagram|tiktok|youtube|ytimg|vk\.com|userapi|aliexpress|amazon|ebay|etsy|"
                              r"redbubble|teepublic|zazzle|fineartamerica|pixels\.com|mediastorehouse|"
@@ -989,10 +989,10 @@ class VisualFinder:
     def _candidates(self, visual, queries):
         """Сначала ВИДЕО по всем вариантам запроса, фото — только если видео не хватило.
         archive — реальное фото места/документа: Wikimedia, затем видео, затем фото Pixabay."""
-        if visual == "archive" and getattr(self, "images_only", False):
+        if getattr(self, "images_only", False) and visual in ("archive", "photo", "stock"):
             # ниша на изображениях (страхи): точный поиск картинок (схемы, иллюстрации), затем Wikimedia;
-            # видео со стоков (природа, «атмосфера») не берём совсем
-            order = [self._web_images, self._wikimedia, self._pixabay_photos]
+            # стоки (природа, «атмосфера», постановочные люди) не берём совсем — ни видео, ни фото
+            order = [self._web_images, self._wikimedia]
         elif visual == "archive":
             # музеи (Met, Чикаго) отдают много картин «примерно на тему» — они в конце;
             # точный поиск картинок по названию (как в браузере) — сразу после Wikimedia

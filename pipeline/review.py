@@ -55,7 +55,10 @@ def collect(finder, spec, taken):
                      r"scientist|prosecutor|officer|soldier|teacher|doctor|captain|pilot|aviator|airman|sailor|"
                      r"marine|crew|navy|army|cadet|instructor", fq, re.I):
             fq = ""                                # чужое лицо рядом с именем героя зритель примет за героя
-        query, visual = fq or "dark storm clouds over the sea", "stock"
+        if getattr(finder, "images_only", False):   # страхи: запасной кадр — изображение по теме, не сток
+            query, visual = fq or "medical illustration", "archive"
+        else:
+            query, visual = fq or "dark storm clouds over the sea", "stock"
     else:
         query, visual = spec["query"], spec["visual"]
     pool, seen_pool = [], set()
