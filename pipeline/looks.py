@@ -107,14 +107,10 @@ def geometry(look, seed, side=False):
                 "r": 30, "angle": 0.0}
     if look == "dark":
         if side:                                         # портрет в овале справа от центра, имя слева
-            return {"cw": 420, "ch": 520, "x": 1010, "y": (H - 520) // 2 - 10, "var": "oval"}
-        r = rnd.random()
-        var = "glow" if r < 0.6 else "red" if r < 0.85 else "bare"
-        if var == "red":
-            cw, ch = 640, 400
-        else:
-            cw, ch = 880, 496
-        return {"cw": cw, "ch": ch, "x": (W - cw) // 2, "y": (H - ch) // 2 - 20, "var": var}
+            return {"cw": 480, "ch": 600, "x": 1000, "y": (H - 600) // 2 - 10, "var": "oval"}
+        var = "glow" if rnd.random() < 0.7 else "red"     # как в примерах: сиреневое свечение или красный экран
+        cw, ch = (1000, 564) if var == "red" else (1240, 698)
+        return {"cw": cw, "ch": ch, "x": (W - cw) // 2, "y": (H - ch) // 2 - 10, "var": var}
     # polaroid
     ang = rnd.uniform(1.6, 4.2) * rnd.choice((-1, 1))
     if side:
@@ -190,7 +186,7 @@ def dark_bg(g, out):
     img = Image.new("RGB", (W, H), (0, 0, 0))
     x, y, cw, ch, var = g["x"], g["y"], g["cw"], g["ch"], g["var"]
     if var == "red":                                 # красный «экран»: светящийся прямоугольник, к краям темнее
-        rw, rh = 1080, 720
+        rw, rh = 1420, 880
         rx, ry = (W - rw) // 2, (H - rh) // 2 - 20
         lay = Image.new("L", (W, H), 0)
         ImageDraw.Draw(lay).rounded_rectangle([rx, ry, rx + rw, ry + rh], 90, fill=255)
@@ -299,7 +295,7 @@ def render_look_shot(s, total, out, workdir):
                      "-loop", "1", "-framerate", str(FPS), "-i", str(mask),
                      "-loop", "1", "-framerate", str(FPS), "-i", str(deco)]
         else:
-            soft = ",vignette=PI/5" if g["var"] == "bare" else ""
+            soft = ""
             chain = (f"[0:v]{pre}{fit},setsar=1,fps={FPS},{grade}{inv}{soft}[c];"
                      f"[1:v][c]overlay=x={g['x']}:y={g['y']}[b2];"
                      f"[2:v]format=rgba[dc];[b2][dc]overlay=x=0:y=0,fade=t=in:st=0:d=0.35,format=yuv420p[v]")
@@ -595,3 +591,51 @@ def warning_png(text, out):
     img = Image.alpha_composite(img, lay.filter(ImageFilter.GaussianBlur(8)))
     img = Image.alpha_composite(img, lay)
     img.save(out)
+
+
+def intro_png(title, warning, out):
+    """Страхи: заставка в начале — на чёрном предупреждение сверху (голубое и красное свечение)
+    и крупное название посередине белым шрифтом с засечками и мягким сиреневым свечением."""
+    warning_png(warning, out)
+    img = Image.open(out).convert("RGBA")
+    f = _fit(title or "", 1500, (120, 104, 92, 80, 68), SERIF_FONTS)
+    lines = _wrap(title or "", f, 1500, 2)
+    lh = int(f.size * 1.15)
+    lay = Image.new("RGBA", (W, H), (0, 0, 0, 0))
+    d = ImageDraw.Draw(lay)
+    y = H // 2 - len(lines) * lh // 2
+    for ln in lines:
+        d.text(((W - d.textlength(ln, font=f)) / 2, y), ln, font=f, fill=(246, 246, 252, 255))
+        y += lh
+    glow = Image.new("RGBA", (W, H), (0, 0, 0, 0))
+    gd = ImageDraw.Draw(glow)
+    y = H // 2 - len(lines) * lh // 2
+    for ln in lines:
+        gd.text(((W - gd.textlength(ln, font=f)) / 2, y), ln, font=f, fill=GLOW + (255,))
+        y += lh
+    img = Image.alpha_composite(img, glow.filter(ImageFilter.GaussianBlur(16)))
+    img = Image.alpha_composite(img, lay)
+    img.save(out)
+
+
+def unknown_person(name, role, out):
+    """Страхи: человек без свободного фото — рамка со знаком «?» и имя под ней (как в примерах). JPG 1920x1080."""
+    img = Image.new("RGB", (W, H), (0, 0, 0))
+    lay = Image.new("RGB", (W, H), (0, 0, 0))
+    d = ImageDraw.Draw(lay)
+    bw = 300
+    x0, y0 = (W - bw) // 2, H // 2 - bw // 2 - 70
+    d.rounded_rectangle([x0, y0, x0 + bw, y0 + bw], 36, outline=(236, 234, 255), width=7)
+    fq = _font(230, SERIF_FONTS)
+    bb = d.textbbox((0, 0), "?", font=fq)
+    d.text((W / 2 - (bb[0] + bb[2]) / 2, y0 + bw / 2 - (bb[1] + bb[3]) / 2), "?", font=fq, fill=(244, 244, 250))
+    f = _fit(name or "", 1400, (64, 56, 48), SERIF_FONTS)
+    d.text(((W - d.textlength(name, font=f)) / 2, y0 + bw + 30), name, font=f, fill=(244, 244, 250))
+    if role:
+        fr = _font(34, SERIF_FONTS)
+        d.text(((W - d.textlength(role, font=fr)) / 2, y0 + bw + 40 + f.size), role, font=fr, fill=(170, 170, 186))
+    from PIL import ImageChops
+    glow = lay.filter(ImageFilter.GaussianBlur(14)).point(lambda v: int(v * 0.9))
+    img = ImageChops.screen(lay, Image.composite(Image.new("RGB", (W, H), GLOW), Image.new("RGB", (W, H), (0, 0, 0)),
+                                                glow.convert("L")))
+    img.save(out, quality=94)

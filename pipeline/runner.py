@@ -348,6 +348,8 @@ LIGHT_LOOK = "noise=alls=4:allf=t"                   # карты, доска, �
 
 
 def _grade(niche, mood, old_look=False):
+    if (niche.get("settings") or {}).get("plain_grade"):      # без цветовых эффектов: кадр как есть
+        return niche.get("grade") or "null"
     parts = [g for g in (niche.get("grade", ""), MOOD_GRADE.get(mood, "")) if g]
     if old_look:
         parts.append(OLD_LOOK)
@@ -425,7 +427,7 @@ def step_build(cfg, niche, project, log=print, stop_flag=lambda: False, progress
     if cfg["say"]:
         log(f"  Словарь произношения: {len(cfg['say'])} слов.")
     use_title = script.get("title_card", niche.get("title_card", True)) is not False
-    title_sec = TITLE_SEC if use_title else 0.0
+    title_sec = float(cfg.get("intro_sec", TITLE_SEC)) if use_title else 0.0
     accent = tuple(niche.get("accent", [200, 30, 30]))
 
     audio_dir, media_dir, shots_dir = project / "audio", project / "media", project / "shots"
@@ -499,12 +501,12 @@ def step_build(cfg, niche, project, log=print, stop_flag=lambda: False, progress
         pos = title_len
         for ci, ch in enumerate(script["chapters"]):
             chapter_starts.append((ch["title"] or ("Prolog" if ch.get("prolog") else ""), 0.0 if ci == 0 else pos / SR))
-            if ci > 0 and script["chapters"][ci - 1].get("prolog"):     # занавес после пролога
+            if ci > 0 and script["chapters"][ci - 1].get("prolog") and cfg.get("curtain", True):   # занавес после пролога
                 cur = int(CURTAIN_SEC * SR)
                 out.writeframes(b"\x00\x00" * cur)
                 blocks.append({"type": "curtain", "start": pos, "end": pos + cur})
                 pos += cur
-            if ci > 0 and not ch.get("prolog"):
+            if ci > 0 and not ch.get("prolog") and cfg.get("chapter_cards", True):
                 card = int(CARD_SEC * SR)
                 out.writeframes(b"\x00\x00" * card)
                 blocks.append({"type": "card", "chapter": ci, "start": pos, "end": pos + card})
@@ -650,6 +652,8 @@ def step_build(cfg, niche, project, log=print, stop_flag=lambda: False, progress
             texts.append(txt)
         b["specs"] = []
         for i, ((vis, query), (t0, t1), txt) in enumerate(zip(specs, ranges, texts)):
+            if cfg.get("photos_first") and vis in ("stock", "newsreel", "photo"):
+                vis = "archive"                        # ниша на изображениях (страхи): иллюстрации, схемы, снимки
             if vis == "stock" and nr_share > 0 and getattr(finder, "era_years", None):
                 nr_acc[0] += nr_share                  # часть видео-строк — сначала старая киносъёмка той эпохи
                 if nr_acc[0] >= 1.0:
@@ -798,6 +802,15 @@ def step_build(cfg, niche, project, log=print, stop_flag=lambda: False, progress
             shots.append({"kind": "black", "src": "", "s": b["start"], "e": b["end"], "mood": "normal",
                           "role": "curtain"})
             continue
+        if b["type"] == "title" and _look == "dark":
+            # страхи: в начале только текст на чёрном — предупреждение и название, без картинок
+            ip_ = shots_dir / f"intro_{_key(script.get('title', ''), niche.get('intro_warning', ''))}.png"
+            if not ip_.exists():
+                from . import looks as _lk
+                _lk.intro_png(script.get("title", ""), niche.get("intro_warning", ""), ip_)
+            shots.append({"kind": "black", "src": "", "s": b["start"], "e": b["end"], "mood": "normal", "role": "title"})
+            add_overlay(ip_, 0.3, max(1.0, (b["end"] - b["start"]) / SR - 0.7), "title")
+            continue
         if b["type"] == "title":
             first = next((first_video(x["items"]) for x in seg_blocks if x["items"]), None)
             title_png = shots_dir / f"title2_{_key(script.get('title', ''), str(accent))}.png"
@@ -851,7 +864,7 @@ def step_build(cfg, niche, project, log=print, stop_flag=lambda: False, progress
             at_ = seg_start + min(span * 0.45, 1.2 + k_ * 2.8)
             add_overlay(sp_, at_, min(2.6, max(1.0, span - (at_ - seg_start) - 0.2)), "pop")
         # хук: крупный вопрос ролика на экране, когда он звучит в прологе (не позже ~35 с)
-        if b.get("prolog") and not hook_state["done"]:
+        if b.get("prolog") and not hook_state["done"] and cfg.get("hook_question", True):
             hook_state["segs"].append(seg_start)
             txt_ = s.get("text", "") or ""
             qm = re.search(r"[^.!?]*\?", txt_)
@@ -951,7 +964,11 @@ def step_build(cfg, niche, project, log=print, stop_flag=lambda: False, progress
                     var = person_cards[spec["shown"]] = person_cards.get(spec["shown"], -1) + 1
                     cp = shots_dir / f"person_{_key(spec['shown'], spec.get('role', ''), str(accent), str(var))}.jpg"
                     if not cp.exists():
-                        extras.make_person_card(spec["shown"], cp, accent, spec.get("role", ""), var)
+                        if extras.LABEL_STYLE == "dark":     # страхи: рамка с «?» и имя
+                            from . import looks as _lk
+                            _lk.unknown_person(spec["shown"], spec.get("role", ""), cp)
+                        else:
+                            extras.make_person_card(spec["shown"], cp, accent, spec.get("role", ""), var)
                     items.insert(0, {"path": str(cp), "kind": "image", "url": "card:" + spec["shown"],
                                      "duration": 0, "person": True})
                 elif cfg.get("show_labels", True) and length >= 1.8:
@@ -1505,7 +1522,7 @@ def step_build(cfg, niche, project, log=print, stop_flag=lambda: False, progress
     except Exception as e:
         log(f"  Пословные подписи не сделаны: {e}")
     warn_ = niche.get("intro_warning") or ""
-    if warn_ and cfg.get("show_labels", True):          # страхи: предупреждение в первые секунды
+    if warn_ and cfg.get("show_labels", True) and not any(b_["type"] == "title" for b_ in blocks):          # страхи: предупреждение в первые секунды
         try:
             from . import looks as _lk
             wp_ = shots_dir / f"warning_{_key(warn_)}.png"
@@ -1537,7 +1554,7 @@ def step_build(cfg, niche, project, log=print, stop_flag=lambda: False, progress
         music, mdesc = _pick_music(niche), ""
     log(f"Свожу звук{' с музыкой: ' + (mdesc or music.name) if music else (f' (музыки нет: положите треки в папку music/{niche.get("id")})' if niche.get("id") in ("bau", "food") else ' (музыки нет: положите mp3 в папку music)')}...")
     final = project / f"{_slug(script.get('title', 'video'))}.mp4"
-    sfx = _sfx_events(shots)
+    sfx = _sfx_events(shots) if cfg.get("sfx", True) else []
     if hook_state.get("at"):                          # вопрос ролика на экране — мягкий низкий удар, без резкости
         hf = _sfx_file("hit")
         if hf:

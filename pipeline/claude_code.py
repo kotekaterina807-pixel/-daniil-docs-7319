@@ -344,7 +344,12 @@ def plan(cfg, lines, topic, workdir, log=print, progress=None):
         try:
             from .config import lang as get_lang
             lang = get_lang(cfg.get("language", "ru"))["name"]
-            ans = run_text_cached(cfg, PLAN_PROMPT.format(topic=topic or "документальное видео", lines=text, lang=lang),
+            prompt = PLAN_PROMPT.format(topic=topic or "документальное видео", lines=text, lang=lang)
+            if cfg.get("plan_rules"):                 # своя манера ниши: что показывать (страхи — иллюстрации, не природа)
+                a_, b_ = prompt.find("ИСТОЧНИК:"), prompt.find("ЛЮДИ:")
+                if a_ >= 0 and b_ > a_:
+                    prompt = prompt[:a_] + "ИСТОЧНИК: " + cfg["plan_rules"].strip() + "\n\n" + prompt[b_:]
+            ans = run_text_cached(cfg, prompt,
                                   workdir, timeout=600, check=lambda a: bool(re.search(r"(?m)^\s*\d+\s*\|", a or "")))
         except ClaudeCodeError as e:
             log(f"  План кадров не получен ({e}) — ищу по запросам из сценария.")
